@@ -2,9 +2,9 @@
 
 OpenAI-compatible audio service (STT + expressive Gemini TTS) fronting the IU unified audio
 endpoint. The **single source of truth** for audio in the personal stack — deployed as a single
-Docker container on the VPS (consumed by Argo over localhost, Hermes over the tailnet). Local
-development runs on the Mac via `bun run dev` (`:7714`). Replaces the original `audio-proxy` and
-Argo's duplicated native pipeline.
+Docker container on the VPS (consumed by Argo in-cluster on the shared `proxy` network, Hermes
+over the tailnet). Local development runs on the Mac via `bun run dev` (`:7714`). Replaced the
+original `audio-proxy` and Argo's previously-duplicated native pipeline (both retired 2026-06-17).
 
 ## Stack
 - Bun + TypeScript (strict). **No runtime npm dependencies** — Bun built-ins only
@@ -32,7 +32,8 @@ Argo's duplicated native pipeline.
 
 ## Reference
 `docs/reference/audio-proxy-spec.md` is the behavioral contract, extracted from the original
-`audio-proxy` service. The original lives at `../audio-proxy` (archived once this is verified).
+`audio-proxy` service. That service is RETIRED (2026-06-17): its macOS LaunchAgent was removed and
+its GitHub repo archived; the local checkout at `../audio-proxy` is kept read-only for reference.
 `PRD.md` is the build spec and records the decisions that diverge from a straight port.
 
 ## Git
