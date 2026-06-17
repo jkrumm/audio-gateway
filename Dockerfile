@@ -1,8 +1,18 @@
-# Debian-slim base: ships the full ffmpeg build with libmp3lame + libopus,
-# and provides both ffmpeg AND ffprobe. curl is for the HEALTHCHECK.
+# ffmpeg + ffprobe as fully-static binaries (built with libmp3lame + libopus, no
+# shared-lib deps), copied from a pinned builder image. We deliberately avoid
+# Debian's `apt install ffmpeg`: that produced a single 484MB layer which the
+# registry rejected with HTTP 413 (Cloudflare's 100MB per-blob upload limit) — and
+# would break the GitHub Actions deploy too, not just the bootstrap. Copied as two
+# separate layers so neither approaches that limit.
+FROM mwader/static-ffmpeg:7.1@sha256:a8090df5f5608daef387e1b2e93b98aaacb4d92153ad904e7d715c725724fca4 AS ffmpeg
+
 FROM oven/bun:1
 
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg curl && rm -rf /var/lib/apt/lists/*
+# curl is the only reason apt is touched here — it backs the HEALTHCHECK.
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ffmpeg /ffmpeg /usr/local/bin/ffmpeg
+COPY --from=ffmpeg /ffprobe /usr/local/bin/ffprobe
 
 WORKDIR /app
 
