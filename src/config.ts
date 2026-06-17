@@ -46,8 +46,15 @@ export const config = {
   sttPrompt: process.env["STT_PROMPT"] ?? "",
   /** Gemini TTS prep model (OpenAI dialect) that rewrites text into Hermes-styled chunks. */
   ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "DeepSeek-V4-Pro",
-  /** MP3 bitrate (kbps) for the transcoded Gemini TTS output. */
-  ttsBitrateKbps: num("TTS_MP3_BITRATE", 64),
+  /**
+   * Output bitrates (kbps) for the transcoded Gemini TTS audio, tuned for SPEECH
+   * rather than music: the source is mono 24 kHz expressive narration, so these
+   * low bitrates stay transparent for voice while keeping Hermes/Slack
+   * attachments small. MP3 is the default (reliable inline playback); Opus is far
+   * more efficient for voice but less universally previewable.
+   */
+  ttsBitrateKbps: num("TTS_MP3_BITRATE", 48),
+  ttsOpusBitrateKbps: num("TTS_OPUS_BITRATE", 32),
   /** Below this input length the prep step short-circuits to a single chunk (~45 s of speech). */
   ttsChunkCharThreshold: num("TTS_CHUNK_THRESHOLD", 700),
   /**

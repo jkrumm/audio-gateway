@@ -239,10 +239,14 @@ interface Encoded {
   contentType: string;
 }
 
-/** Transcode raw s16le PCM to compressed MP3 (default) or Opus/OGG via ffmpeg. */
+/**
+ * Transcode raw s16le mono PCM to a compressed, speech-tuned MP3 (default) or
+ * Opus/OGG via ffmpeg. Bitrates are intentionally low — this is TTS narration,
+ * not music — and Opus uses libopus's `voip` mode, optimized for voice.
+ */
 async function transcode(pcm: Uint8Array, sampleRate: number, opus: boolean): Promise<Encoded> {
   const codec = opus
-    ? ["-c:a", "libopus", "-b:a", "32k", "-f", "ogg"]
+    ? ["-c:a", "libopus", "-b:a", `${config.ttsOpusBitrateKbps}k`, "-application", "voip", "-f", "ogg"]
     : ["-c:a", "libmp3lame", "-b:a", `${config.ttsBitrateKbps}k`, "-f", "mp3"];
   const proc = Bun.spawn(
     ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", "pipe:0", ...codec, "pipe:1"],
