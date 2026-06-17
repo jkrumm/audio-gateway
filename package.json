@@ -1,0 +1,20 @@
+{
+  "name": "audio-gateway",
+  "version": "0.1.0",
+  "description": "OpenAI-compatible audio gateway (STT + expressive Gemini TTS) in front of the IU unified audio endpoint.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "npx kill-port 7714 && op run --account tkrumm --env-file=.env.tpl -- bun --watch src/index.ts",
+    "start": "op run --account tkrumm --env-file=.env.tpl -- bun src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:e2e": "op run --account tkrumm --env-file=.env.tpl -- env RUN_E2E=1 bun test src/e2e.smoke.test.ts",
+    "test:roundtrip": "op run --account tkrumm --env-file=.env.tpl -- bun src/roundtrip.ts",
+    "test:roundtrip:prod": "RT_BASE_URL=https://audio-gateway.jkrumm.com bun src/roundtrip.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

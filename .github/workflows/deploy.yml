@@ -1,0 +1,34 @@
+name: Deploy
+
+# Continuous deployment of audio-gateway to the VPS via RollHook.
+#
+# Auth: GitHub OIDC → RollHook exchanges for short-lived registry creds.
+# No secrets in CI. RollHook authorizes by reading the rollhook.allowed_repos
+# label off the running container (see vps/apps/audio-gateway/compose.yml).
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audio-gateway:
+    name: Deploy audio-gateway
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jkrumm/rollhook-action@v1
+        with:
+          url: https://rollhook.jkrumm.com
+          image_name: audio-gateway
+          dockerfile: Dockerfile
+          context: .
