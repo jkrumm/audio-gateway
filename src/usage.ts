@@ -9,7 +9,7 @@ import { config } from "./config";
 
 export interface UsageRow {
   /** Drop the dead 'models' member (Decision 2 / §10 bug fix). */
-  endpoint: "transcriptions" | "speech" | "speech-prep";
+  endpoint: "transcriptions" | "speech" | "speech-prep" | "speech-summary";
   model: string;
   status: number;
   latencyMs: number;
@@ -49,7 +49,7 @@ function buildSqliteSink(dbPath: string): UsageSink {
     CREATE TABLE IF NOT EXISTS usage_record (
       id              INTEGER PRIMARY KEY AUTOINCREMENT,
       ts              TEXT    NOT NULL,
-      endpoint        TEXT    NOT NULL,          -- 'transcriptions' | 'speech' | 'speech-prep'
+      endpoint        TEXT    NOT NULL,          -- 'transcriptions' | 'speech' | 'speech-prep' | 'speech-summary'
       model           TEXT    NOT NULL,
       status          INTEGER NOT NULL,          -- upstream HTTP status
       latency_ms      INTEGER NOT NULL,

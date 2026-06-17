@@ -22,6 +22,7 @@ export async function handleSpeech(req: Request): Promise<Response> {
   let input: string;
   let voice: string;
   let responseFormat: string;
+  let summarize: boolean;
 
   try {
     const json = JSON.parse(body) as Record<string, unknown>;
@@ -30,6 +31,7 @@ export async function handleSpeech(req: Request): Promise<Response> {
     inputChars = input.length;
     voice = typeof json["voice"] === "string" ? json["voice"] : "";
     responseFormat = typeof json["response_format"] === "string" ? json["response_format"] : "";
+    summarize = json["summarize"] === true;
   } catch {
     // Bug fix: non-JSON body → 400 JSON, no blank-model usage row.
     return Response.json(
@@ -39,7 +41,7 @@ export async function handleSpeech(req: Request): Promise<Response> {
   }
 
   if (GEMINI_TTS.test(model)) {
-    return handleGeminiSpeech({ model, input, voice, responseFormat });
+    return handleGeminiSpeech({ model, input, voice, responseFormat, summarize });
   }
 
   const start = Date.now();

@@ -36,7 +36,19 @@ export interface GeminiSpeechRequest {
   input: string;
   voice: string;
   responseFormat: string;
+  summarize: boolean;
 }
+
+const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into ONE short spoken confirmation, in the persona of Hermes — a calm, warm, concise "sharp older friend". The user is in a hands-free voice conversation and only wants the gist spoken aloud, not the full reply.
+
+Your job, in order:
+1. Detect the language of the input: "de" (German) or "en" (English).
+2. Write a short title (3–6 words) IN that language: plain words, no quotes, no trailing punctuation, no emoji.
+3. Condense the reply into a SINGLE spoken confirmation of at most ~30 words, IN the same language, capturing only the key outcome or answer. Speak numbers, times, dates and units in spoken form (German: "achtzehn Uhr dreißig", "neunzig Kilo"; English: "half past six", "ninety kilos"). No greetings, no filler, no markdown, no lists. If the reply confirms an action, state plainly what was done (e.g. "Todo 'Staubsaugen' für morgen in Persönlich erstellt"). If the reply is a question or needs a real answer, give the answer in one sentence.
+4. Write one short "style" directive IN that language describing the warm, calm Hermes delivery.
+
+Return STRICT JSON only, no markdown, no commentary:
+{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"<directive>","text":"<one short sentence>"}]}`;
 
 const PREP_SYSTEM_PROMPT = `You prepare text for Gemini text-to-speech in the persona of Hermes — a calm, warm, concise "sharp older friend". No greetings, no filler, substance first.
 
@@ -96,14 +108,24 @@ interface OpenAiUsage {
 }
 
 /**
- * Run the prep LLM (OpenAI dialect) and record a `speech-prep` usage row.
+ * Run the prep LLM (OpenAI dialect) and record a usage row.
  * Decision 2 / §10 bug fix: record a usage row (error status + latency) BEFORE
  * throwing on non-2xx, so failures are visible in telemetry.
+ *
+ * When `summarize` is true, the `config.ttsPrep` gating is bypassed (summary
+ * always calls the LLM) and the SUMMARY_SYSTEM_PROMPT is used instead. Usage is
+ * recorded under `"speech-summary"` so summary calls are separable in telemetry.
  */
-async function runPrep(input: string): Promise<PrepResult> {
-  const isLong = input.length >= config.ttsChunkCharThreshold;
-  if (config.ttsPrep === "off") return defaultPrep(input);
-  if (config.ttsPrep === "long" && !isLong) return defaultPrep(input);
+async function runPrep(input: string, summarize: boolean): Promise<PrepResult> {
+  const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
+
+  if (!summarize) {
+    const isLong = input.length >= config.ttsChunkCharThreshold;
+    if (config.ttsPrep === "off") return defaultPrep(input);
+    if (config.ttsPrep === "long" && !isLong) return defaultPrep(input);
+  }
+
+  const systemPrompt = summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT;
 
   const start = Date.now();
   const res = await rawFetch(iuUrl("/chat/completions"), {
@@ -112,7 +134,7 @@ async function runPrep(input: string): Promise<PrepResult> {
     body: JSON.stringify({
       model: config.ttsPrepModel,
       messages: [
-        { role: "system", content: PREP_SYSTEM_PROMPT },
+        { role: "system", content: systemPrompt },
         { role: "user", content: input },
       ],
       // Reasoning-capable OpenAI models reject `max_tokens`; the modern field works.
@@ -124,7 +146,7 @@ async function runPrep(input: string): Promise<PrepResult> {
   if (res.status < 200 || res.status >= 300) {
     // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
     recordUsage({
-      endpoint: "speech-prep",
+      endpoint: usageEndpoint,
       model: config.ttsPrepModel,
       status: res.status,
       latencyMs,
@@ -138,7 +160,7 @@ async function runPrep(input: string): Promise<PrepResult> {
     usage?: OpenAiUsage;
   };
   recordUsage({
-    endpoint: "speech-prep",
+    endpoint: usageEndpoint,
     model: config.ttsPrepModel,
     status: res.status,
     latencyMs,
@@ -316,7 +338,7 @@ export async function synthChunksConcurrent(
 }
 
 export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<Response> {
-  const { model, input, voice, responseFormat } = reqBody;
+  const { model, input, voice, responseFormat, summarize } = reqBody;
   if (!config.iuGeminiBaseUrl) {
     throw new Error("IU_GEMINI_BASE_URL is not configured — required for Gemini TTS");
   }
@@ -325,7 +347,7 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   }
 
   const voiceName = VOICES.has(voice) ? voice : DEFAULT_VOICE;
-  const prep = await runPrep(input);
+  const prep = await runPrep(input, summarize);
   // Enforce the per-chunk ceiling regardless of how the prep LLM split things —
   // long chunks are the cause of mid-audio voice drift. Re-splits at natural
   // boundaries; short inputs and well-behaved chunks pass through untouched.

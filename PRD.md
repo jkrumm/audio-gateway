@@ -137,6 +137,8 @@ Port exactly as documented in `docs/reference/audio-proxy-spec.md` §5–§7:
    to `503`, stop accepting new requests, drain in-flight requests up to a bounded timeout, then exit
    cleanly. The original LaunchAgent service never needed this; the container does.
 
+7. **`summarize` — ported from Argo (deliberate divergence).** A `summarize: true` field on `/audio/speech` requests condenses the input into ONE short spoken confirmation (~30 words) via a dedicated `SUMMARY_SYSTEM_PROMPT`, bypassing the `config.ttsPrep` gating (always calls the LLM). Designed for hands-free voice-mode replies where only the gist should be spoken aloud. Usage recorded under `"speech-summary"` to keep it separable from normal `"speech-prep"` rows. This is an intentional divergence from the straight `audio-proxy` port — added here because the gateway is now the single source of truth for audio.
+
 6. **Port — `7714` (changed from `7716`).** The old Mac audio-proxy keeps `:7716` and keeps serving
    Hermes untouched during the bake. The gateway uses `7714` everywhere (config default, dev kill-port,
    `audio-gateway.test` Caddy entry, Dockerfile `EXPOSE`, compose Traefik `server.port`, healthcheck).
