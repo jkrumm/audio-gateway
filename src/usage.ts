@@ -21,6 +21,8 @@ export interface UsageRow {
   inputChars?: number | null;
   bytesOut?: number | null;
   usageJson?: unknown;
+  /** Truncated upstream error body for non-2xx responses (max 500 chars). */
+  errorText?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,15 +67,23 @@ function buildSqliteSink(dbPath: string): UsageSink {
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_record (ts);");
 
+  // Idempotent column migration: the prod DB was created without error_text.
+  // If we reference $errorText in the prepared INSERT without adding the column
+  // first, db.prepare() throws at boot time on the old schema.
+  const cols = db.query("PRAGMA table_info(usage_record)").all() as Array<{ name: string }>;
+  if (!cols.some((c) => c.name === "error_text")) {
+    db.exec("ALTER TABLE usage_record ADD COLUMN error_text TEXT");
+  }
+
   const insert = db.prepare(`
     INSERT INTO usage_record
       (ts, endpoint, model, status, latency_ms, response_format,
        input_tokens, output_tokens, audio_tokens, audio_seconds,
-       input_chars, bytes_out, usage_json)
+       input_chars, bytes_out, usage_json, error_text)
     VALUES
       ($ts, $endpoint, $model, $status, $latencyMs, $responseFormat,
        $inputTokens, $outputTokens, $audioTokens, $audioSeconds,
-       $inputChars, $bytesOut, $usageJson)
+       $inputChars, $bytesOut, $usageJson, $errorText)
   `);
 
   /** Extract OpenAI/Voxtral token counts from an upstream usage object. */
@@ -106,6 +116,7 @@ function buildSqliteSink(dbPath: string): UsageSink {
         $inputChars: row.inputChars ?? null,
         $bytesOut: row.bytesOut ?? null,
         $usageJson: row.usageJson ? JSON.stringify(row.usageJson) : null,
+        $errorText: row.errorText ?? null,
       });
     },
   };

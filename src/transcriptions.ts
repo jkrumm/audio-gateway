@@ -1,6 +1,8 @@
 import { unlink } from "node:fs/promises";
 import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
+import { log } from "./log";
+import { resolveSttModel } from "./model-resolution";
 import { recordUsage } from "./usage";
 
 /**
@@ -70,11 +72,20 @@ export const vtt = (text: string, duration: number): string =>
   `WEBVTT\n\n${srtTime(0).replace(",", ".")} --> ${srtTime(duration).replace(",", ".")}\n${text}\n`;
 
 export async function handleTranscriptions(req: Request): Promise<Response> {
+  const caller = req.headers.get("x-audio-source") ?? "unknown";
   const form = await req.formData();
-  // Default the model when the caller omits it (the Argo dashboard sends the
-  // recording only). An empty model forwarded to IU 400s with "Missing model
-  // name". The default matches /transcribe/i, so DE/EN prompt steering applies.
-  const model = String(form.get("model") ?? "") || config.sttModel;
+  // Central model resolution: a wrong or absent model never reaches the upstream.
+  // The default matches /transcribe/i so DE/EN prompt steering applies.
+  const resolved = resolveSttModel(String(form.get("model") ?? ""));
+  const model = resolved.model;
+  if (resolved.overridden) {
+    log.warn("stt model overridden", {
+      endpoint: "transcriptions",
+      requested: resolved.requested,
+      used: model,
+      caller,
+    });
+  }
   const clientFormat = String(form.get("response_format") ?? "json");
   const language = form.get("language") ? String(form.get("language")) : null;
   const file = form.get("file");
@@ -108,7 +119,16 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
   const body = await res.text();
 
   if (!res.ok) {
-    recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat });
+    const errorText = body.slice(0, 500);
+    log.error("stt upstream error", {
+      endpoint: "transcriptions",
+      model,
+      status: res.status,
+      latencyMs,
+      caller,
+      error: errorText,
+    });
+    recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat, errorText });
     return new Response(body, { status: res.status, headers: { "content-type": contentType } });
   }
 

@@ -2,6 +2,7 @@ import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { enforceChunkLimits, parsePrepResponse, SAMPLE_RATE_DEFAULT } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
+import { log } from "./log";
 import { recordUsage } from "./usage";
 
 // Gemini TTS pipeline. The OpenAI-compatible `/audio/speech` route 404s for
@@ -145,12 +146,21 @@ async function runPrep(input: string, summarize: boolean): Promise<PrepResult> {
 
   if (res.status < 200 || res.status >= 300) {
     // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
+    const errorText = res.body.slice(0, 500);
+    log.error("tts prep error", {
+      endpoint: usageEndpoint,
+      model: config.ttsPrepModel,
+      status: res.status,
+      latencyMs,
+      error: errorText,
+    });
     recordUsage({
       endpoint: usageEndpoint,
       model: config.ttsPrepModel,
       status: res.status,
       latencyMs,
       inputChars: input.length,
+      errorText,
     });
     throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
   }
@@ -185,8 +195,8 @@ interface ChunkAudio {
 }
 
 /** Record a best-effort error usage row for a failed Gemini synth (bug fix §10.1). */
-function recordSpeechError(model: string, status: number, latencyMs: number): void {
-  recordUsage({ endpoint: "speech", model, status, latencyMs });
+function recordSpeechError(model: string, status: number, latencyMs: number, errorText?: string | null): void {
+  recordUsage({ endpoint: "speech", model, status, latencyMs, errorText: errorText ?? null });
 }
 
 /**
@@ -212,7 +222,9 @@ async function synthChunk(model: string, voiceName: string, chunk: PrepChunk): P
 
   if (res.status < 200 || res.status >= 300) {
     // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-    recordSpeechError(model, res.status, latencyMs);
+    const errorText = res.body.slice(0, 500);
+    log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+    recordSpeechError(model, res.status, latencyMs, errorText);
     throw new Error(`Gemini TTS failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
   }
 
@@ -220,7 +232,9 @@ async function synthChunk(model: string, voiceName: string, chunk: PrepChunk): P
   const inline = parsed.candidates?.[0]?.content?.parts?.[0]?.inlineData;
   if (!inline?.data) {
     // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-    recordSpeechError(model, res.status, latencyMs);
+    const errorText = `no audio in response: ${res.body.slice(0, 400)}`;
+    log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+    recordSpeechError(model, res.status, latencyMs, errorText);
     throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
   }
   const pcm = Uint8Array.from(Buffer.from(inline.data, "base64"));

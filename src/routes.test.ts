@@ -373,3 +373,80 @@ describe("404 for unknown routes", () => {
     expect(res.status).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 9. TTS model override: non-TTS model remapped to config.ttsModel (Gemini pipeline)
+// ---------------------------------------------------------------------------
+
+describe("TTS model override: non-TTS model routes to Gemini pipeline", () => {
+  test("model 'gemini-3.1-flash' is remapped to gemini-3.1-flash-tts-preview", async () => {
+    let calledUrl = "";
+    stubFetch(async (url) => {
+      calledUrl = String(url);
+      // Return 500 to keep the test short (we only care about routing, not audio).
+      return new Response("upstream error", { status: 500 });
+    });
+
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      // Non-TTS Gemini model — the incident model that triggered this change.
+      body: JSON.stringify({ input: "Hi", model: "gemini-3.1-flash" }),
+      headers: { "content-type": "application/json" },
+    }));
+    await handleRequest(req);
+
+    // Must have been remapped to the TTS model and routed to :generateContent,
+    // NOT the IU /audio/speech passthrough.
+    expect(calledUrl).toContain("gemini-3.1-flash-tts-preview");
+    expect(calledUrl).toContain(":generateContent");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. error_text: non-2xx upstream response body stored in usage row
+// ---------------------------------------------------------------------------
+
+describe("error_text: upstream error body captured in usage row", () => {
+  test("TTS synth 500 → error_text stored in speech usage row", async () => {
+    // TTS_PREP=off (set at top) → only one fetch: Gemini synth.
+    // Return a body containing a recognizable token to assert on.
+    stubFetch(async () => new Response("upstream boom", { status: 500 }));
+
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ input: "Hello", model: "gemini-3.1-flash-tts-preview" }),
+      headers: { "content-type": "application/json" },
+    }));
+    const res = await handleRequest(req);
+    expect(res.status).toBe(500);
+
+    const rows = getUsageRows();
+    const speechRow = rows.find((r) => r["endpoint"] === "speech");
+    expect(speechRow).toBeDefined();
+    expect(String(speechRow?.["error_text"] ?? "")).toContain("boom");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11. STT model override: unrecognized model remapped to config.sttModel
+// ---------------------------------------------------------------------------
+
+describe("STT model override: unrecognized model replaced with config.sttModel", () => {
+  test("model 'some-random-model' is replaced with gpt-4o-transcribe in upstream form", async () => {
+    let sentModel = "";
+    stubFetch(async (_url, init) => {
+      sentModel = String((init?.body as FormData).get("model") ?? "");
+      return Response.json({ text: "hello" });
+    });
+
+    const form = new FormData();
+    form.append("model", "some-random-model");
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const req = authed(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form }));
+    const res = await handleRequest(req);
+
+    expect(res.status).toBe(200);
+    expect(sentModel).toBe("gpt-4o-transcribe");
+  });
+});
