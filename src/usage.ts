@@ -256,7 +256,12 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.argoApiSecret}` },
         body: JSON.stringify({ records: [record] }),
-      }).then(() => undefined);
+      }).then((res) => {
+        // A non-2xx response does NOT reject the fetch promise, so surface it
+        // explicitly — otherwise an auth/schema rejection from Argo drops usage
+        // silently. Network errors still bubble to safeRecord's .catch.
+        if (!res.ok) console.error(`[usage] argo push rejected: ${res.status} ${res.statusText}`);
+      });
     },
   };
 }
