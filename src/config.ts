@@ -40,6 +40,15 @@ export const config = {
   usageDb: process.env["USAGE_DB"] ?? "./data/usage.db",
   /** When set, callers must send `Authorization: Bearer <proxyApiKey>`. */
   proxyApiKey: process.env["PROXY_API_KEY"] ?? "",
+  /**
+   * Default TTS output model injected when a `/audio/speech` request omits `model`.
+   * A model matching /gemini.*tts/i routes to the native expressive pipeline;
+   * anything else proxies IU `/audio/speech`. Must stay a Gemini TTS model — the
+   * non-Gemini fallback forwards the raw (model-less) body to IU, which 400s.
+   * Gateway owns this default so callers (Argo dashboard, Hermes) need not know
+   * model names. Requires IU_GEMINI_BASE_URL to be set for synthesis to succeed.
+   */
+  ttsModel: process.env["TTS_MODEL"] ?? "gemini-3.1-flash-tts-preview",
   /** Default STT `language` (ISO-639-1, e.g. `de`) injected when the client sends none. */
   sttLanguage: process.env["STT_LANGUAGE"] ?? "",
   /** Default STT `prompt` injected when the client sends none — steers expected language. */

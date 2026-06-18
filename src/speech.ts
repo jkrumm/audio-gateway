@@ -1,3 +1,4 @@
+import { config } from "./config";
 import { handleGeminiSpeech } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { recordUsage } from "./usage";
@@ -26,7 +27,12 @@ export async function handleSpeech(req: Request): Promise<Response> {
 
   try {
     const json = JSON.parse(body) as Record<string, unknown>;
-    model = typeof json["model"] === "string" ? json["model"] : "";
+    // Default the output model when the caller omits it (the Argo dashboard sends
+    // text only). Empty model would otherwise fall through to the IU passthrough,
+    // which 400s with "Missing model name". The default is a Gemini TTS model →
+    // native expressive pipeline (uses the parsed fields, not the raw body).
+    model =
+      typeof json["model"] === "string" && json["model"] ? json["model"] : config.ttsModel;
     input = typeof json["input"] === "string" ? json["input"] : "";
     inputChars = input.length;
     voice = typeof json["voice"] === "string" ? json["voice"] : "";

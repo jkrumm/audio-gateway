@@ -159,6 +159,36 @@ describe("Bug fix: non-JSON speech body → 400, no usage row", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2b. Default TTS model: a speech body that omits `model` must route to the
+// native Gemini pipeline via config.ttsModel — NOT fall through to the IU
+// /audio/speech passthrough, which 400s with "Missing model name". This is the
+// regression from the Argo thin-proxy refactor (dashboard sends text only).
+// ---------------------------------------------------------------------------
+
+describe("Default TTS model when `model` omitted", () => {
+  test("routes to the Gemini generateContent pipeline with the default model", async () => {
+    let calledUrl = "";
+    stubFetch(async (url) => {
+      calledUrl = String(url);
+      return new Response("upstream error", { status: 500 });
+    });
+
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      // No `model` — mirrors the Argo dashboard, which sends text only.
+      body: JSON.stringify({ input: "Hello", voice: "Charon", response_format: "mp3" }),
+      headers: { "content-type": "application/json" },
+    }));
+    await handleRequest(req);
+
+    // Defaulted to the Gemini TTS model → native :generateContent route, not the
+    // IU /audio/speech passthrough that would reject the missing model.
+    expect(calledUrl).toContain("gemini-3.1-flash-tts-preview");
+    expect(calledUrl).toContain(":generateContent");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. Bug fix: /models writes no usage row (Decision 2 / §10 bug 2)
 // ---------------------------------------------------------------------------
 
