@@ -39,6 +39,95 @@ export interface UsageSink {
 }
 
 // ---------------------------------------------------------------------------
+// Shared token-extraction helper
+// ---------------------------------------------------------------------------
+
+/** Extract OpenAI/Voxtral token counts from an upstream usage object. */
+function tokens(usage: unknown): {
+  input: number | null;
+  output: number | null;
+  audioTokens: number | null;
+  audioSeconds: number | null;
+} {
+  const u = (usage ?? {}) as Record<string, unknown>;
+  const details = (u["input_token_details"] ?? {}) as Record<string, unknown>;
+  const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  return {
+    input: num(u["input_tokens"]) ?? num(u["prompt_tokens"]),
+    output: num(u["output_tokens"]) ?? num(u["completion_tokens"]),
+    audioTokens: num(details["audio_tokens"]),
+    audioSeconds: num(u["prompt_audio_seconds"]),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Model normalisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Lowercase, keep the segment after the last `/`, strip a trailing `-eu`,
+ * strip a trailing `-YYYYMMDD` date suffix.
+ */
+function normalizeModel(raw: string): string {
+  let m = raw.toLowerCase().trim();
+  if (m.includes("/")) m = m.split("/").pop() ?? m;
+  return m.replace(/-eu$/, "").replace(/-\d{8}$/, "");
+}
+
+// ---------------------------------------------------------------------------
+// Rate table + cost function
+// ---------------------------------------------------------------------------
+
+interface Rate {
+  input?: number; // text input, USD per 1M tokens
+  audioInput?: number; // audio input tokens, USD per 1M (STT split)
+  output?: number; // output tokens, USD per 1M
+  perMinute?: number; // whisper-style, USD per minute of audio
+}
+
+// USD list prices used as ESTIMATES — IU's actual EU per-token rates may differ
+// (same caveat as usage-tracker/src/pricing.ts). cost_source is stamped 'estimated'.
+const RATES: Record<string, Rate> = {
+  "gpt-4o-transcribe": { input: 2.5, audioInput: 6, output: 10 },
+  "whisper": { perMinute: 0.006 },
+  "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
+  "deepseek-v4-pro": { input: 0.435, output: 0.87 },
+};
+
+interface CostInputs {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  audioTokens: number | null;
+  audioSeconds: number | null;
+}
+
+function computeCost(
+  modelNorm: string,
+  c: CostInputs,
+): { costUsd: number | null; costSource: string } {
+  const rate = RATES[modelNorm];
+  if (!rate) return { costUsd: null, costSource: "none" };
+
+  // Per-minute models (whisper): need audio duration.
+  if (rate.perMinute != null) {
+    if (c.audioSeconds == null) return { costUsd: null, costSource: "none" };
+    return { costUsd: (c.audioSeconds / 60) * rate.perMinute, costSource: "estimated" };
+  }
+
+  const input = c.inputTokens ?? 0;
+  const output = c.outputTokens ?? 0;
+  // STT split: when a model has a distinct audio-input rate, charge audio_tokens at
+  // it and the remainder at the text rate. If the split is missing, bill all input as
+  // audio (conservative — STT input is audio-dominated).
+  const audioIn = rate.audioInput != null ? (c.audioTokens ?? input) : 0;
+  const textIn = rate.audioInput != null ? input - audioIn : input;
+  const cost =
+    (textIn * (rate.input ?? 0) + audioIn * (rate.audioInput ?? 0) + output * (rate.output ?? 0)) /
+    1_000_000;
+  return { costUsd: cost, costSource: "estimated" };
+}
+
+// ---------------------------------------------------------------------------
 // SQLite adapter (default)
 // ---------------------------------------------------------------------------
 
@@ -86,19 +175,6 @@ function buildSqliteSink(dbPath: string): UsageSink {
        $inputChars, $bytesOut, $usageJson, $errorText)
   `);
 
-  /** Extract OpenAI/Voxtral token counts from an upstream usage object. */
-  const tokens = (usage: unknown) => {
-    const u = (usage ?? {}) as Record<string, unknown>;
-    const details = (u["input_token_details"] ?? {}) as Record<string, unknown>;
-    const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
-    return {
-      input: num(u["input_tokens"]) ?? num(u["prompt_tokens"]),
-      output: num(u["output_tokens"]) ?? num(u["completion_tokens"]),
-      audioTokens: num(details["audio_tokens"]),
-      audioSeconds: num(u["prompt_audio_seconds"]),
-    };
-  };
-
   return {
     record(row: UsageRow): void {
       const t = tokens(row.usageJson);
@@ -123,15 +199,64 @@ function buildSqliteSink(dbPath: string): UsageSink {
 }
 
 // ---------------------------------------------------------------------------
-// HTTP adapter — Phase-3 seam (Decision 3)
+// HTTP adapter — Phase-3 (Decision 3)
 // ---------------------------------------------------------------------------
 
-function buildHttpSink(_url: string, _sourceLabel: string): UsageSink {
+function buildHttpSink(url: string, sourceLabel: string): UsageSink {
+  // No-op guard: HTTP sink is optional; both URL and auth secret must be set.
+  if (!url || !config.argoApiSecret) {
+    return { record(_row: UsageRow): void {} };
+  }
+
   return {
-    record(_row: UsageRow): void {
-      // TODO(phase-3): POST to Argo /usage/records
-      // Body shape TBD once Argo's /usage endpoint is defined.
-      // Fields: endpoint, model, status, latencyMs, ..., source: _sourceLabel
+    record(row: UsageRow): Promise<void> {
+      const t = tokens(row.usageJson);
+      const inputTokens = row.inputTokens ?? t.input;
+      const outputTokens = row.outputTokens ?? t.output;
+      const audioTokens = row.audioTokens ?? t.audioTokens;
+      const audioSeconds = row.audioSeconds ?? t.audioSeconds;
+
+      const modelNorm = normalizeModel(row.model);
+      const cost = computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds });
+      const now = new Date().toISOString();
+
+      const record = {
+        source: sourceLabel,
+        source_id: crypto.randomUUID(),
+        grain: "request",
+        ts: now,
+        ingested_at: now,
+        model: row.model,
+        model_norm: modelNorm,
+        project: "audio-gateway",
+        workspace: "private",
+        sub_tool: row.endpoint,
+        machine: config.machine,
+        billing: "iu",
+        outcome: row.status < 400 ? "ok" : "error",
+        input_tokens: inputTokens ?? 0,
+        output_tokens: outputTokens ?? 0,
+        cache_read_tokens: 0,
+        cache_write_tokens: 0,
+        reasoning_tokens: 0,
+        duration_ms: row.latencyMs,
+        cost_usd: cost.costUsd,
+        cost_source: cost.costSource,
+        raw: {
+          audio_tokens: audioTokens,
+          audio_seconds: audioSeconds,
+          input_chars: row.inputChars ?? null,
+          bytes_out: row.bytesOut ?? null,
+          response_format: row.responseFormat ?? null,
+          error_text: row.errorText ?? null,
+        },
+      };
+
+      return fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${config.argoApiSecret}` },
+        body: JSON.stringify({ records: [record] }),
+      }).then(() => undefined);
     },
   };
 }

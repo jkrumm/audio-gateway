@@ -1,3 +1,5 @@
+import { hostname } from "node:os";
+
 const required = (name: string): string => {
   const value = process.env[name];
   if (!value) throw new Error(`Missing required env var: ${name}`);
@@ -103,6 +105,15 @@ export const config = {
   usageHttpUrl: process.env["USAGE_HTTP_URL"] ?? "",
   /** Label stamped on usage rows by the HTTP sink to identify this instance. */
   usageSourceLabel: process.env["USAGE_SOURCE_LABEL"] ?? "audio-gateway",
+  /** Bearer secret for the Argo usage endpoint (HTTP sink). Unset → HTTP sink is a no-op. */
+  argoApiSecret: process.env["ARGO_API_SECRET"] ?? "",
+  /**
+   * Host label stamped on Argo usage rows (part of Argo's idempotency triple and a
+   * dashboard breakdown dimension). This service runs both on the VPS (prod) and
+   * locally (serving MacWhisper), so it must NOT be hardcoded — defaults to the OS
+   * hostname; prod overrides with `MACHINE=vps`.
+   */
+  machine: process.env["MACHINE"] ?? hostname(),
   /** Graceful-shutdown drain budget in milliseconds (Decision 5). */
   shutdownDrainMs: num("SHUTDOWN_DRAIN_MS", 10000),
 } as const;
