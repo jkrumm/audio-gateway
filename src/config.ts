@@ -49,6 +49,14 @@ export const config = {
    * model names. Requires IU_GEMINI_BASE_URL to be set for synthesis to succeed.
    */
   ttsModel: process.env["TTS_MODEL"] ?? "gemini-3.1-flash-tts-preview",
+  /**
+   * Default STT model injected when a `/audio/transcriptions` request omits
+   * `model`. Empty model would otherwise be forwarded to IU, which 400s with
+   * "Missing model name". Gateway owns this default so callers (Argo dashboard,
+   * Hermes) need not know model names. `gpt-4o-transcribe` is the project's STT
+   * model (matches /transcribe/i → DE/EN prompt steering applies).
+   */
+  sttModel: process.env["STT_MODEL"] ?? "gpt-4o-transcribe",
   /** Default STT `language` (ISO-639-1, e.g. `de`) injected when the client sends none. */
   sttLanguage: process.env["STT_LANGUAGE"] ?? "",
   /** Default STT `prompt` injected when the client sends none — steers expected language. */

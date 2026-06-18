@@ -71,19 +71,25 @@ export const vtt = (text: string, duration: number): string =>
 
 export async function handleTranscriptions(req: Request): Promise<Response> {
   const form = await req.formData();
-  const model = String(form.get("model") ?? "");
+  // Default the model when the caller omits it (the Argo dashboard sends the
+  // recording only). An empty model forwarded to IU 400s with "Missing model
+  // name". The default matches /transcribe/i, so DE/EN prompt steering applies.
+  const model = String(form.get("model") ?? "") || config.sttModel;
   const clientFormat = String(form.get("response_format") ?? "json");
   const language = form.get("language") ? String(form.get("language")) : null;
   const file = form.get("file");
 
   const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
 
-  // Rebuild the upstream form, downgrading the format for synth models.
+  // Rebuild the upstream form, downgrading the format for synth models. `model`
+  // and `response_format` are re-appended from the resolved values below, so
+  // skip the originals here (the original model may be empty).
   const upstream = new FormData();
   for (const [key, value] of form.entries()) {
-    if (key === "response_format" || key === "timestamp_granularities[]") continue;
+    if (key === "model" || key === "response_format" || key === "timestamp_granularities[]") continue;
     upstream.append(key, value);
   }
+  upstream.append("model", model);
   upstream.append("response_format", synth ? "json" : clientFormat);
 
   // Inject language steering when the client provided none. `language` is a hard

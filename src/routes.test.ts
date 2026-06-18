@@ -189,6 +189,32 @@ describe("Default TTS model when `model` omitted", () => {
 });
 
 // ---------------------------------------------------------------------------
+// 2c. Default STT model: a transcription form that omits `model` must have
+// config.sttModel injected into the upstream form — NOT forwarded model-less to
+// IU, which 400s with "Missing model name". Same Argo thin-proxy regression.
+// ---------------------------------------------------------------------------
+
+describe("Default STT model when `model` omitted", () => {
+  test("injects config.sttModel into the upstream transcription form", async () => {
+    let sentModel = "";
+    stubFetch(async (_url, init) => {
+      sentModel = String((init?.body as FormData).get("model") ?? "");
+      return Response.json({ text: "hello" });
+    });
+
+    const form = new FormData();
+    // No `model` — mirrors the Argo dashboard, which uploads the recording only.
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const req = authed(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form }));
+    const res = await handleRequest(req);
+
+    expect(res.status).toBe(200);
+    expect(sentModel).toBe("gpt-4o-transcribe");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 3. Bug fix: /models writes no usage row (Decision 2 / §10 bug 2)
 // ---------------------------------------------------------------------------
 
