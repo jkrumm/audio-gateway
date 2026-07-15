@@ -18,7 +18,7 @@ VPS at `audio-gateway.jkrumm.com`, reachable only over the tailnet; consumed by 
 ## Develop
 ```bash
 bun install
-bun run dev        # op run injects IU creds from .env.tpl
+bun run dev        # secrets-run injects IU creds from .env.tpl (drop-in op shim)
 bun run typecheck
 bun test
 ```

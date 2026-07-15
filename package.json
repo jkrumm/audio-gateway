@@ -5,12 +5,12 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "npx kill-port 7714 && op run --account tkrumm --env-file=.env.tpl -- bun --watch src/index.ts",
-    "start": "op run --account tkrumm --env-file=.env.tpl -- bun src/index.ts",
+    "dev": "npx kill-port 7714 && secrets-run run --env-file=.env.tpl -- bun --watch src/index.ts",
+    "start": "secrets-run run --env-file=.env.tpl -- bun src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "test:e2e": "op run --account tkrumm --env-file=.env.tpl -- env RUN_E2E=1 bun test src/e2e.smoke.test.ts",
-    "test:roundtrip": "op run --account tkrumm --env-file=.env.tpl -- bun src/roundtrip.ts",
+    "test:e2e": "secrets-run run --env-file=.env.tpl -- env RUN_E2E=1 bun test src/e2e.smoke.test.ts",
+    "test:roundtrip": "secrets-run run --env-file=.env.tpl -- bun src/roundtrip.ts",
     "test:roundtrip:prod": "RT_BASE_URL=https://audio-gateway.jkrumm.com bun src/roundtrip.ts"
   },
   "devDependencies": {

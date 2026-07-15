@@ -27,7 +27,7 @@ original `audio-proxy` and Argo's previously-duplicated native pipeline (both re
 - Follow the global rules in `~/.claude/rules` (code-style, typescript, security, dependency-hygiene).
 
 ## Run
-- Dev: `bun run dev` (op run injects secrets from `.env.tpl`; listens on `:7714`).
+- Dev: `bun run dev` (`secrets-run` injects secrets from `.env.tpl` — drop-in op shim: live `op` on the MacBook, encrypted cache on the mini; listens on `:7714`).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime.
 
 ## Reference

@@ -16,7 +16,7 @@ Repo root:
 - `package.json` — manifest; scripts, devDeps only (no runtime deps).
 - `tsconfig.json` — strict ESNext/bundler TS config, `noEmit`.
 - `bun.lock` — lockfile (only devDeps: @types/bun, typescript).
-- `.env.tpl` — committed dev secrets template of `op://` references; resolved at runtime by `op run`.
+- `.env.tpl` — committed dev secrets template of `op://` references; resolved at runtime by `secrets-run` (drop-in op shim: live `op` on the MacBook, encrypted cache on the mini).
 - `.gitignore` — ignores `node_modules/`, `.env`, `data/`, `*.log`, `.DS_Store`, `bun.lockb`.
 - `README.md` — behavioral doc (routes, STT/TTS behavior, config table, setup).
 - `LICENSE` — MIT, "Copyright (c) 2026 Johannes Krumm".
@@ -43,8 +43,8 @@ Repo root:
 - `name`: `"audio-proxy"` → rename to `"audio-gateway"`.
 - `version`: `"0.1.0"`; `type`: `"module"`; `license`: `"MIT"`.
 - `scripts`:
-  - `dev`: `npx kill-port 7716 && op run --account tkrumm --env-file=.env.tpl -- bun --watch src/index.ts`
-  - `start`: `op run --account tkrumm --env-file=.env.tpl -- bun src/index.ts`
+  - `dev`: `npx kill-port 7716 && secrets-run run --env-file=.env.tpl -- bun --watch src/index.ts`
+  - `start`: `secrets-run run --env-file=.env.tpl -- bun src/index.ts`
   - `install-agent`: `bash launchd/install-agent.sh`
   - `typecheck`: `tsc --noEmit`
   - `test`: `bun test`
@@ -258,7 +258,7 @@ Used by `runPrep` and `synthChunk`. Plain passthrough STT/TTS do NOT retry (sing
 - `cd "$REPO"`; `exec /opt/homebrew/bin/bun "$REPO/src/index.ts"` (foreground exec so launchd keeps the PID).
 
 **Secrets injection**:
-- Dev: `op run --account tkrumm --env-file=.env.tpl` resolves `op://common/anthropic/{OPENAI_BASE_URL,API_KEY,GEMINI_BASE_URL}`.
+- Dev: `secrets-run run --env-file=.env.tpl` resolves `op://common/anthropic/{OPENAI_BASE_URL,API_KEY,GEMINI_BASE_URL}`.
 - Mac prod (launchd): Keychain entries `claude-sdk-api-key` + `claude-sdk-base-url`.
 - VPS prod (NEW, Phase 2): env injected by compose; no Keychain.
 

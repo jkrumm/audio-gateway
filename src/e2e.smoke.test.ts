@@ -7,7 +7,7 @@
  *   bun run test:e2e
  *
  * which is defined in package.json as:
- *   RUN_E2E=1 op run --account tkrumm --env-file=.env.tpl -- bun test src/e2e.smoke.test.ts
+ *   RUN_E2E=1 secrets-run run --env-file=.env.tpl -- bun test src/e2e.smoke.test.ts
  *
  * Do NOT add these tests to the default `bun test` suite.
  */

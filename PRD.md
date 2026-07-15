@@ -209,7 +209,7 @@ Layered; `bun test` stays hermetic and credential-free, live e2e is opt-in:
   pure-transform tests can't: the 3 bug fixes (usage-row-on-error, 400-on-bad-JSON, dropped enum), suffix
   routing, the auth gate, and graceful-shutdown `/health` → 503. These error paths cannot be triggered
   deterministically against the live endpoint, so they MUST be covered here.
-- **Live-IU e2e smoke** (`bun run test:e2e`, opt-in, needs `op run`) — happy-path STT + Gemini TTS
+- **Live-IU e2e smoke** (`bun run test:e2e`, opt-in, needs `secrets-run`) — happy-path STT + Gemini TTS
   round-trips against the real IU endpoint. NOT part of `bun test`.
 
 ## Acceptance criteria
