@@ -347,18 +347,73 @@ describe("Graceful shutdown", () => {
 // ---------------------------------------------------------------------------
 
 describe("STT: upstream error records usage row", () => {
-  test("non-2xx upstream → records usage row with error status", async () => {
-    stubFetch(async () =>
-      new Response("upstream 503", { status: 503, headers: { "content-type": "text/plain" } }),
-    );
+  test("both primary and whisper fallback fail → 503, records both attempts", async () => {
+    // sttRequest sends gpt-4o-transcribe; a 5xx is retryable, so the handler
+    // retries on whisper. Stub fails both → final 503, one row per attempt.
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      sentModels.push(String((init?.body as FormData).get("model") ?? ""));
+      return new Response("upstream 503", { status: 503, headers: { "content-type": "text/plain" } });
+    });
 
     const res = await handleRequest(sttRequest());
     expect(res.status).toBe(503);
+    expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
+
+    const rows = getUsageRows();
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
+    expect(rows[0]?.["status"]).toBe(503);
+    expect(rows[1]?.["model"]).toBe("whisper");
+    expect(rows[1]?.["status"]).toBe(503);
+  });
+
+  test("primary 404 → whisper fallback succeeds → 200 with fallback text", async () => {
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      const model = String((init?.body as FormData).get("model") ?? "");
+      sentModels.push(model);
+      // First attempt (the requested model) hits the transient IU "no backend" 404.
+      if (model !== "whisper") {
+        return new Response("No suitable backend server found for model 'gpt-4o-transcribe'.", {
+          status: 404,
+          headers: { "content-type": "text/plain" },
+        });
+      }
+      return Response.json({ text: "from whisper" });
+    });
+
+    const res = await handleRequest(sttRequest());
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json["text"]).toBe("from whisper");
+    expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
+
+    // Failed primary + successful fallback are both recorded.
+    const rows = getUsageRows();
+    expect(rows.length).toBe(2);
+    expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
+    expect(rows[0]?.["status"]).toBe(404);
+    expect(rows[1]?.["model"]).toBe("whisper");
+    expect(rows[1]?.["status"]).toBe(200);
+  });
+
+  test("client-error status (400) does not trigger the fallback", async () => {
+    // A 400 is a malformed request, not an unavailable model — it would fail
+    // identically on whisper, so the handler must not retry.
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      sentModels.push(String((init?.body as FormData).get("model") ?? ""));
+      return new Response("bad request", { status: 400, headers: { "content-type": "text/plain" } });
+    });
+
+    const res = await handleRequest(sttRequest());
+    expect(res.status).toBe(400);
+    expect(sentModels).toEqual(["gpt-4o-transcribe"]);
 
     const rows = getUsageRows();
     expect(rows.length).toBe(1);
-    expect(rows[0]?.["endpoint"]).toBe("transcriptions");
-    expect(rows[0]?.["status"]).toBe(503);
+    expect(rows[0]?.["status"]).toBe(400);
   });
 });
 

@@ -71,18 +71,28 @@ export const srt = (text: string, duration: number): string =>
 export const vtt = (text: string, duration: number): string =>
   `WEBVTT\n\n${srtTime(0).replace(",", ".")} --> ${srtTime(duration).replace(",", ".")}\n${text}\n`;
 
+/** The rock-solid IU STT model we fall back to when the requested model fails. */
+const FALLBACK_MODEL = "whisper";
+
+/**
+ * Upstream failure statuses worth retrying with the fallback model. These signal
+ * the *model/backend* is unavailable (a transient IU 404 "No suitable backend
+ * server found", or a 5xx), not that the client's request is malformed — a 4xx
+ * like 400/413/415 would fail identically on the fallback, so those pass through.
+ */
+const isModelUnavailable = (status: number): boolean => status === 404 || status >= 500;
+
 export async function handleTranscriptions(req: Request): Promise<Response> {
   const caller = req.headers.get("x-audio-source") ?? "unknown";
   const form = await req.formData();
   // Central model resolution: a wrong or absent model never reaches the upstream.
   // The default matches /transcribe/i so DE/EN prompt steering applies.
   const resolved = resolveSttModel(String(form.get("model") ?? ""));
-  const model = resolved.model;
   if (resolved.overridden) {
     log.warn("stt model overridden", {
       endpoint: "transcriptions",
       requested: resolved.requested,
-      used: model,
+      used: resolved.model,
       caller,
     });
   }
@@ -90,33 +100,55 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
   const language = form.get("language") ? String(form.get("language")) : null;
   const file = form.get("file");
 
-  const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
+  // Build a fresh upstream form for a given model. Called once per attempt so the
+  // fallback never reuses an already-consumed multipart body, and so `synth`
+  // (format downgrade) is decided per the model actually being sent.
+  const buildUpstream = (model: string): FormData => {
+    const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
+    const upstream = new FormData();
+    for (const [key, value] of form.entries()) {
+      if (key === "model" || key === "response_format" || key === "timestamp_granularities[]") continue;
+      upstream.append(key, value);
+    }
+    upstream.append("model", model);
+    upstream.append("response_format", synth ? "json" : clientFormat);
+    // Inject language steering when the client provided none. `language` is a hard
+    // single-language lock; `prompt` is a softer bias (use it for "de or en").
+    if (!form.has("language") && config.sttLanguage) upstream.append("language", config.sttLanguage);
+    if (!form.has("prompt") && config.sttPrompt) upstream.append("prompt", config.sttPrompt);
+    return upstream;
+  };
 
-  // Rebuild the upstream form, downgrading the format for synth models. `model`
-  // and `response_format` are re-appended from the resolved values below, so
-  // skip the originals here (the original model may be empty).
-  const upstream = new FormData();
-  for (const [key, value] of form.entries()) {
-    if (key === "model" || key === "response_format" || key === "timestamp_granularities[]") continue;
-    upstream.append(key, value);
+  const attempt = async (model: string) => {
+    const start = Date.now();
+    const res = await fetch(iuUrl("/audio/transcriptions"), {
+      method: "POST",
+      headers: iuHeaders(),
+      body: buildUpstream(model),
+    });
+    const latencyMs = Date.now() - start;
+    return { res, latencyMs, body: await res.text(), contentType: res.headers.get("content-type") ?? "" };
+  };
+
+  let model = resolved.model;
+  let { res, latencyMs, body, contentType } = await attempt(model);
+
+  // Fallback: a transient upstream outage of the requested model (e.g. IU 404
+  // "no backend") would otherwise surface as an unparseable error to the client.
+  // Retry once on whisper, which is the most reliably-served IU STT model.
+  if (!res.ok && isModelUnavailable(res.status) && model !== FALLBACK_MODEL) {
+    log.warn("stt upstream unavailable; retrying on fallback", {
+      endpoint: "transcriptions",
+      model,
+      fallback: FALLBACK_MODEL,
+      status: res.status,
+      caller,
+    });
+    // Record the failed primary attempt so the requested model's outage is visible.
+    recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat, errorText: body.slice(0, 500) });
+    model = FALLBACK_MODEL;
+    ({ res, latencyMs, body, contentType } = await attempt(model));
   }
-  upstream.append("model", model);
-  upstream.append("response_format", synth ? "json" : clientFormat);
-
-  // Inject language steering when the client provided none. `language` is a hard
-  // single-language lock; `prompt` is a softer bias (use it for "de or en").
-  if (!form.has("language") && config.sttLanguage) upstream.append("language", config.sttLanguage);
-  if (!form.has("prompt") && config.sttPrompt) upstream.append("prompt", config.sttPrompt);
-
-  const start = Date.now();
-  const res = await fetch(iuUrl("/audio/transcriptions"), {
-    method: "POST",
-    headers: iuHeaders(),
-    body: upstream,
-  });
-  const latencyMs = Date.now() - start;
-  const contentType = res.headers.get("content-type") ?? "";
-  const body = await res.text();
 
   if (!res.ok) {
     const errorText = body.slice(0, 500);
@@ -151,6 +183,9 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
     usageJson: usage,
   });
 
+  // Recompute for the model that actually served the response: a whisper
+  // fallback returns rich formats natively, so it takes the passthrough branch.
+  const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
   if (synth && file instanceof File) {
     const duration = await audioDuration(file);
     if (clientFormat === "verbose_json") return Response.json(verboseJson(text, duration, detectedLang));
