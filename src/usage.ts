@@ -89,6 +89,20 @@ interface Rate {
 // (same caveat as usage-tracker/src/pricing.ts). cost_source is stamped 'estimated'.
 const RATES: Record<string, Rate> = {
   "gpt-4o-transcribe": { input: 2.5, audioInput: 6, output: 10 },
+  // Published rates (platform.openai.com/docs/pricing, verified 2026-07-24): a
+  // single $1.25/1M input rate covering BOTH audio and text — no split — and
+  // $5/1M output. Both input fields carry the same number so the split logic
+  // below lands on $1.25 either way.
+  "gpt-4o-mini-transcribe": { input: 1.25, audioInput: 1.25, output: 5 },
+  // INFERRED, not published: OpenAI lists no separate line item for the diarize
+  // variant, so it inherits gpt-4o-transcribe's rates on the assumption that a
+  // feature flag doesn't change billing. Re-check if diarization spend matters.
+  "gpt-4o-transcribe-diarize": { input: 2.5, audioInput: 6, output: 10 },
+  // Deliberately absent: `voxtral-mini-transcribe-realtime-2602`. Mistral
+  // publishes no per-token or per-minute rate for it anywhere (checked
+  // 2026-07-24 — pricing pages, La Plateforme, docs); it is listed as an open
+  // model. Unpriced reports as `cost_source: 'none'`, which is the honest
+  // answer. Don't invent a number to make the row look complete.
   "whisper": { perMinute: 0.006 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
