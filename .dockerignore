@@ -1,0 +1,39 @@
+# Build context is the repo root — .github/workflows/deploy.yml passes
+# `context: .` and `dockerfile: Dockerfile` to rollhook-action. Every pattern
+# below was checked against the full set of COPY sources in the Dockerfile:
+#   package.json  bun.lock  src/  tsconfig.json
+# None of them is excluded here.
+
+# Dependencies. The image runs its own `bun install --frozen-lockfile --production`;
+# a host tree is macOS-resolved and has no business in a linux image.
+node_modules
+**/node_modules
+
+# VCS, CI, editor and OS noise. No build step reads git metadata.
+.git
+.github
+.idea
+.DS_Store
+**/.DS_Store
+
+# Local runtime artifacts, both gitignored: usage SQLite (data/) and the
+# roundtrip validator's MP3s (out/).
+data
+out
+
+# Local env. `.env.tpl` is only op:// references and is not COPYed today; it is
+# re-included so adding a `COPY .env.tpl` later cannot silently break.
+.env
+.env.*
+!.env.tpl
+
+# Agent metadata
+.claude
+**/.claude
+
+# Logs, coverage, caches
+*.log
+**/*.log
+coverage
+**/coverage
+.turbo

@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+
 # ffmpeg + ffprobe as fully-static binaries (built with libmp3lame + libopus, no
 # shared-lib deps), copied from a pinned builder image. We deliberately avoid
 # Debian's `apt install ffmpeg`: that produced a single 484MB layer which the
@@ -18,7 +20,8 @@ WORKDIR /app
 
 COPY package.json bun.lock ./
 # No runtime deps — this validates the lockfile and skips devDeps, keeping the image lean.
-RUN bun install --frozen-lockfile --production
+RUN --mount=type=cache,target=/root/.bun/install/cache \
+  bun install --frozen-lockfile --production
 
 COPY src/ ./src/
 COPY tsconfig.json ./
