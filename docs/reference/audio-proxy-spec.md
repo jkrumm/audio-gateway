@@ -72,7 +72,7 @@ Trailing slashes are stripped from both base URLs via `.replace(/\/+$/, "")`.
 | `PROXY_API_KEY` | no | `""` | string | If set, callers must send `Authorization: Bearer <it>`; empty = accept any (localhost posture). |
 | `STT_LANGUAGE` | no | `""` | string | Hard ISO-639-1 lock injected into upstream STT only if client sent no `language`. |
 | `STT_PROMPT` | no | `""` (code) | string | Soft language bias injected only if client sent no `prompt`. `.env.tpl`/launchd supply `"Die Aufnahme ist auf Deutsch oder Englisch."` |
-| `TTS_PREP_MODEL` | no | `"DeepSeek-V4-Pro"` | string | OpenAI-dialect model that rewrites text into chunks. |
+| `TTS_PREP_MODEL` | no | `"gpt-5.6-luna"` (was `DeepSeek-V4-Pro` in audio-proxy) | string | OpenAI-dialect model that rewrites text into chunks. |
 | `TTS_MP3_BITRATE` | no | `64` | `Number()` | MP3 output bitrate (kbps). |
 | `TTS_CHUNK_THRESHOLD` | no | `700` | `Number()` | Input length below which prep short-circuits to default in `long` mode. |
 | `TTS_CHUNK_TARGET_WORDS` | no | `110` | `Number()` | Preferred words/chunk when regrouping. |

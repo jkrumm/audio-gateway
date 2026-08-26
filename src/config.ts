@@ -63,8 +63,13 @@ export const config = {
   sttLanguage: process.env["STT_LANGUAGE"] ?? "",
   /** Default STT `prompt` injected when the client sends none — steers expected language. */
   sttPrompt: process.env["STT_PROMPT"] ?? "",
-  /** Gemini TTS prep model (OpenAI dialect) that rewrites text into Hermes-styled chunks. */
-  ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "DeepSeek-V4-Pro",
+  /**
+   * Gemini TTS prep model (OpenAI dialect) that rewrites text into Hermes-styled chunks.
+   * This call dominates end-to-end TTS latency (measured 2026-08: ~9.5 s on
+   * DeepSeek-V4-Pro vs ~2 s on gpt-5.6-luna for the same prompt), so the default is
+   * the fastest EU-resident model that still follows the chunking contract.
+   */
+  ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "gpt-5.6-luna",
   /**
    * Output bitrates (kbps) for the transcoded Gemini TTS audio, tuned for SPEECH
    * rather than music: the source is mono 24 kHz expressive narration, so these
