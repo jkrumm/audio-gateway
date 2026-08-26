@@ -30,10 +30,10 @@ const LANGUAGE_CODE = /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/;
 const CREATE_DEADLINE_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
 
-/** Hard per-chunk ceilings applied to the prep output before synthesis (see config). */
+/** Per-chunk ceilings for this lane — smaller than Gemini's, purely for parallelism (see config). */
 const CHUNK_LIMITS: ChunkLimits = {
-  targetWords: config.ttsChunkTargetWords,
-  maxWords: config.ttsChunkMaxWords,
+  targetWords: config.ttsReplicateChunkTargetWords,
+  maxWords: config.ttsReplicateChunkMaxWords,
   maxBytes: config.ttsChunkMaxBytes,
 };
 
@@ -67,7 +67,7 @@ Your job, in order:
 1. Detect the language of the input: "de" (German) or "en" (English).
 2. Write a short title (3–6 words) summarizing the content, IN the transcript's language, suitable as a filename/label: plain words, no quotes, no trailing punctuation, no emoji.
 3. Rewrite numbers, times, dates, units and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language.
-4. Split the text into short chunks of about 110 words each (never more than 150). Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
+4. Split the text into short chunks of about ${config.ttsReplicateChunkTargetWords} words each (never more than ${config.ttsReplicateChunkMaxWords}). Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
 5. For each chunk, write a short "style" field (one sentence, IN the transcript's language) describing the intended delivery — it is not spoken and mainly documents intent. Embed AT MOST ONE of these English audio tags per chunk, placed at the start of the sentence it colours, and only where it genuinely fits: ${V3_TAGS.join(" ")}. Most chunks should have NO tag at all — be sparse. Never translate a tag, never invent a new one.
 
 Return STRICT JSON only, no markdown, no commentary:

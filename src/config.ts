@@ -135,6 +135,16 @@ export const config = {
    * `summarize: true` still forces prep regardless of this list.
    */
   ttsReplicatePrepModels: process.env["TTS_REPLICATE_PREP_MODELS"] ?? "elevenlabs/v3",
+  /**
+   * Chunk sizing for the Replicate lane's prep path. ElevenLabs has no
+   * long-generation drift, so the only reason to chunk is wall-clock: v3
+   * predict time scales with audio length, and chunks synthesize
+   * `TTS_CONCURRENCY`-wide. Measured on a 110-word briefing: one 110-word
+   * chunk 6.3 s, two 60-word chunks 4.2 s in parallel (end-to-end 10.9 → 8.1 s).
+   * `previous_text`/`next_text` carry prosody across the seam.
+   */
+  ttsReplicateChunkTargetWords: num("TTS_REPLICATE_CHUNK_TARGET_WORDS", 60),
+  ttsReplicateChunkMaxWords: num("TTS_REPLICATE_CHUNK_MAX_WORDS", 80),
   /** Usage sink selection: which adapter records audio usage rows. */
   usageSink: oneOf("USAGE_SINK", ["sqlite", "http", "both"] as const, "sqlite"),
   /** Base URL for the HTTP usage sink (Phase-3 seam; unused while sink is `sqlite`). */

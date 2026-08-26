@@ -18,6 +18,8 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 # TTS_ELEVENLABS_STYLE=0
 # TTS_ELEVENLABS_SIMILARITY=0.75
 # TTS_REPLICATE_PREP_MODELS=elevenlabs/v3
+# TTS_REPLICATE_CHUNK_TARGET_WORDS=60
+# TTS_REPLICATE_CHUNK_MAX_WORDS=80
 
 # Optional STT language steering (client-supplied values always win)
 STT_PROMPT=Die Aufnahme ist auf Deutsch oder Englisch.
