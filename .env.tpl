@@ -35,3 +35,8 @@ ARGO_API_SECRET=op://common/api/SECRET
 # usage:tail CLI. Personal data — persisted to the VPS SQLite file and pushed
 # to Argo's raw column. Set to 'false' to disable.
 # USAGE_KEEP_TEXT=true
+
+# OpenTelemetry traces + logs (OTLP/HTTP JSON, e.g. a ClickStack/HyperDX
+# collector). Unset (default) disables the exporter entirely — see otel.ts.
+# OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4319
+# OTEL_SERVICE_NAME=audio-gateway

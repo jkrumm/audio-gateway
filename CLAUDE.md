@@ -40,6 +40,14 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 - `src/audio.ts` — the ffmpeg/ffprobe process boundary: PCM/WAV framing, chunk concatenation,
   `transcode` (between raw PCM / auto-detected containers and mp3/opus/wav/pcm output), and
   `audioDuration`. Shared by both TTS lanes and STT duration probing.
+- `src/otel.ts` — hand-rolled OpenTelemetry exporter (no SDK, `fetch` only) to an OTLP/HTTP JSON
+  collector. One root span per request (`audio.speech`/`audio.transcription`, kind SERVER) with
+  child spans per pipeline stage (`audio.prep`, `audio.synth.chunk`, `audio.decode`,
+  `audio.transcode`, `audio.stt.upstream`, …); the trace id is DERIVED from the request id
+  (`usage.ts`'s `requestId`, dashes stripped), so a trace and its `usage_record`/Argo rows join on
+  the same value with no extra correlation column. `src/log.ts` mirrors every `log.*` call into an
+  OTLP log record via `emitLog`, stamped with the active span's ids. Disabled (a true no-op on the
+  network path) unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
 
 ## Conventions
 - Deep modules, **ports & adapters** (the usage sink is the canonical example), early returns, no `any`.

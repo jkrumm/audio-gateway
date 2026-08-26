@@ -5,6 +5,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
+import { withSpan } from "./otel";
 import { recordUsage, setRequestMeta } from "./usage";
 
 // Gemini TTS pipeline. The OpenAI-compatible `/audio/speech` route 404s for
@@ -45,7 +46,7 @@ export const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into ONE short
 Your job, in order:
 1. Detect the language of the input: "de" (German) or "en" (English).
 2. Write a short title (3–6 words) IN that language: plain words, no quotes, no trailing punctuation, no emoji.
-3. Condense the reply into a SINGLE spoken confirmation of at most ~30 words, IN the same language, capturing only the key outcome or answer. Speak numbers, times, dates and units in spoken form (German: "achtzehn Uhr dreißig", "neunzig Kilo"; English: "half past six", "ninety kilos"). No greetings, no filler, no markdown, no lists. If the reply confirms an action, state plainly what was done (e.g. "Todo 'Staubsaugen' für morgen in Persönlich erstellt"). If the reply is a question or needs a real answer, give the answer in one sentence.
+3. Condense the reply into a SINGLE spoken confirmation of at most ~18 words, IN the same language, capturing only the key outcome or answer — an action confirmation is one short clause ("Todo Serverrechnung für morgen angelegt"), never a recap of details the user can read. Speak numbers, times, dates and units in spoken form (German: "achtzehn Uhr dreißig", "neunzig Kilo"; English: "half past six", "ninety kilos"). No greetings, no filler, no markdown, no lists. If the reply confirms an action, state plainly what was done (e.g. "Todo 'Staubsaugen' für morgen in Persönlich erstellt"). If the reply is a question or needs a real answer, give the answer in one sentence.
 4. Write one short "style" directive IN that language describing the warm, calm Hermes delivery.
 
 Return STRICT JSON only, no markdown, no commentary:
@@ -125,58 +126,67 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
 
   const systemPrompt = summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT;
 
-  const start = Date.now();
-  const res = await rawFetch(iuUrl("/chat/completions"), {
-    method: "POST",
-    headers: iuHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      model: config.ttsPrepModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: input },
-      ],
-      // Reasoning-capable OpenAI models reject `max_tokens`; the modern field works.
-      max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
-    }),
-  });
-  const latencyMs = Date.now() - start;
+  return withSpan(
+    "audio.prep",
+    { "llm.model": config.ttsPrepModel, "audio.prep.kind": summarize ? "summary" : "prep", "audio.input_chars": input.length },
+    async (span) => {
+      const start = Date.now();
+      const res = await rawFetch(iuUrl("/chat/completions"), {
+        method: "POST",
+        headers: iuHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          model: config.ttsPrepModel,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: input },
+          ],
+          // Reasoning-capable OpenAI models reject `max_tokens`; the modern field works.
+          max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
+        }),
+      });
+      const latencyMs = Date.now() - start;
+      span.setAttributes({ "http.status_code": res.status });
 
-  if (res.status < 200 || res.status >= 300) {
-    // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-    const errorText = res.body.slice(0, 500);
-    log.error("tts prep error", {
-      endpoint: usageEndpoint,
-      model: config.ttsPrepModel,
-      status: res.status,
-      latencyMs,
-      error: errorText,
-    });
-    recordUsage({
-      endpoint: usageEndpoint,
-      model: config.ttsPrepModel,
-      status: res.status,
-      latencyMs,
-      inputChars: input.length,
-      errorText,
-    });
-    throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-  }
+      if (res.status < 200 || res.status >= 300) {
+        // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
+        const errorText = res.body.slice(0, 500);
+        log.error("tts prep error", {
+          endpoint: usageEndpoint,
+          model: config.ttsPrepModel,
+          status: res.status,
+          latencyMs,
+          error: errorText,
+        });
+        recordUsage({
+          endpoint: usageEndpoint,
+          model: config.ttsPrepModel,
+          status: res.status,
+          latencyMs,
+          inputChars: input.length,
+          errorText,
+        });
+        throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+      }
 
-  const json = JSON.parse(res.body) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: OpenAiUsage;
-  };
-  recordUsage({
-    endpoint: usageEndpoint,
-    model: config.ttsPrepModel,
-    status: res.status,
-    latencyMs,
-    inputChars: input.length,
-    usageJson: json.usage,
-  });
+      const json = JSON.parse(res.body) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: OpenAiUsage;
+      };
+      recordUsage({
+        endpoint: usageEndpoint,
+        model: config.ttsPrepModel,
+        status: res.status,
+        latencyMs,
+        inputChars: input.length,
+        usageJson: json.usage,
+      });
+      span.setAttributes({ "llm.output_tokens": json.usage?.completion_tokens ?? undefined });
 
-  const content = json.choices?.[0]?.message?.content ?? "";
-  return { prep: parsePrepResponse(content), ran: true };
+      const content = json.choices?.[0]?.message?.content ?? "";
+      return { prep: parsePrepResponse(content), ran: true };
+    },
+    "client",
+  );
 }
 
 interface GeminiTtsResponse {
@@ -196,54 +206,63 @@ function recordSpeechError(model: string, status: number, latencyMs: number, err
  * Decision 2 / §10 bug fix: record a usage row (error status + latency) BEFORE
  * throwing on non-2xx or missing audio, so failures are visible in telemetry.
  */
-async function synthChunk(model: string, voiceName: string, chunk: PrepChunk): Promise<ChunkAudio> {
-  const start = Date.now();
-  const res = await rawFetch(iuGeminiUrl(`/models/${model}:generateContent`), {
-    method: "POST",
-    headers: iuHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `${chunk.style}: ${chunk.text}` }] }],
-      generationConfig: {
-        responseModalities: ["AUDIO"],
-        temperature: 1.0,
-        speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-      },
-    }),
-  });
-  const latencyMs = Date.now() - start;
+async function synthChunk(model: string, voiceName: string, chunk: PrepChunk, index: number): Promise<ChunkAudio> {
+  return withSpan(
+    "audio.synth.chunk",
+    { "audio.chunk_index": index, "gemini.model": model, "audio.input_chars": chunk.text.length },
+    async (span) => {
+      const start = Date.now();
+      const res = await rawFetch(iuGeminiUrl(`/models/${model}:generateContent`), {
+        method: "POST",
+        headers: iuHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${chunk.style}: ${chunk.text}` }] }],
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            temperature: 1.0,
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+          },
+        }),
+      });
+      const latencyMs = Date.now() - start;
+      span.setAttributes({ "http.status_code": res.status });
 
-  if (res.status < 200 || res.status >= 300) {
-    // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-    const errorText = res.body.slice(0, 500);
-    log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
-    recordSpeechError(model, res.status, latencyMs, errorText);
-    throw new Error(`Gemini TTS failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-  }
+      if (res.status < 200 || res.status >= 300) {
+        // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
+        const errorText = res.body.slice(0, 500);
+        log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+        recordSpeechError(model, res.status, latencyMs, errorText);
+        throw new Error(`Gemini TTS failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+      }
 
-  const parsed = JSON.parse(res.body) as GeminiTtsResponse;
-  const inline = parsed.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-  if (!inline?.data) {
-    // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-    const errorText = `no audio in response: ${res.body.slice(0, 400)}`;
-    log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
-    recordSpeechError(model, res.status, latencyMs, errorText);
-    throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-  }
-  const pcm = Uint8Array.from(Buffer.from(inline.data, "base64"));
-  const sampleRate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || SAMPLE_RATE_DEFAULT;
+      const parsed = JSON.parse(res.body) as GeminiTtsResponse;
+      const inline = parsed.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+      if (!inline?.data) {
+        // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
+        const errorText = `no audio in response: ${res.body.slice(0, 400)}`;
+        log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+        recordSpeechError(model, res.status, latencyMs, errorText);
+        throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+      }
+      const pcm = Uint8Array.from(Buffer.from(inline.data, "base64"));
+      const sampleRate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || SAMPLE_RATE_DEFAULT;
 
-  recordUsage({
-    endpoint: "speech",
-    model,
-    status: res.status,
-    latencyMs,
-    inputTokens: parsed.usageMetadata?.promptTokenCount ?? null,
-    outputTokens: parsed.usageMetadata?.candidatesTokenCount ?? null,
-    audioSeconds: pcm.byteLength / (2 * sampleRate),
-    bytesOut: pcm.byteLength,
-  });
+      recordUsage({
+        endpoint: "speech",
+        model,
+        status: res.status,
+        latencyMs,
+        inputTokens: parsed.usageMetadata?.promptTokenCount ?? null,
+        outputTokens: parsed.usageMetadata?.candidatesTokenCount ?? null,
+        audioSeconds: pcm.byteLength / (2 * sampleRate),
+        bytesOut: pcm.byteLength,
+      });
+      span.setAttributes({ "audio.audio_seconds": pcm.byteLength / (2 * sampleRate) });
 
-  return { pcm, sampleRate };
+      return { pcm, sampleRate };
+    },
+    "client",
+  );
 }
 
 /**
@@ -256,7 +275,7 @@ export async function synthChunksConcurrent(
   voiceName: string,
   chunks: PrepChunk[],
 ): Promise<ChunkAudio[]> {
-  return synthConcurrent(config.ttsConcurrency, chunks, (chunk) => synthChunk(model, voiceName, chunk));
+  return synthConcurrent(config.ttsConcurrency, chunks, (chunk, i) => synthChunk(model, voiceName, chunk, i));
 }
 
 export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<Response> {
@@ -293,7 +312,9 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   const parts = await synthChunksConcurrent(model, voiceName, chunks);
 
   const { pcm, sampleRate } = concatPcm(parts);
-  const { bytes, contentType } = await transcode(pcm, { kind: "pcm", sampleRate }, responseFormat);
+  const { bytes, contentType } = await withSpan("audio.transcode", { "audio.output_format": responseFormat }, async () =>
+    transcode(pcm, { kind: "pcm", sampleRate }, responseFormat),
+  );
   setRequestMeta({ audioSeconds: pcm.byteLength / (2 * sampleRate), bytesOut: bytes.byteLength });
 
   return new Response(bytes, {

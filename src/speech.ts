@@ -1,10 +1,17 @@
 import { parseOutputFormat } from "./audio";
+import { config } from "./config";
 import { handleGeminiSpeech } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { GEMINI_TTS, resolveTtsRoute } from "./model-resolution";
+import { getActiveSpan, traceIdFromRequestId, withRootSpan } from "./otel";
 import { handleReplicateSpeech } from "./replicate-tts";
 import { getRequestMeta, recordUsage, runWithRequestContext, setRequestMeta } from "./usage";
+
+/** Attribute values gated by USAGE_KEEP_TEXT — same 600-char cap as the usage sink (usage.ts). */
+const TEXT_ATTR_MAX = 600;
+const textAttr = (s: string | undefined): string | undefined =>
+  config.usageKeepText && s ? s.slice(0, TEXT_ATTR_MAX) : undefined;
 
 // Re-export GEMINI_TTS so any existing importers of the old location still work.
 export { GEMINI_TTS };
@@ -33,7 +40,18 @@ export { GEMINI_TTS };
  */
 export async function handleSpeech(req: Request): Promise<Response> {
   const caller = req.headers.get("x-audio-source") ?? "unknown";
-  return runWithRequestContext({ requestId: crypto.randomUUID(), caller }, () => dispatchSpeech(req, caller));
+  const requestId = crypto.randomUUID();
+  return runWithRequestContext({ requestId, caller }, () =>
+    withRootSpan(
+      {
+        traceId: traceIdFromRequestId(requestId),
+        name: "audio.speech",
+        kind: "server",
+        attrs: { "audio.request_id": requestId, "audio.caller": caller },
+      },
+      () => dispatchSpeech(req, caller),
+    ),
+  );
 }
 
 async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
@@ -98,7 +116,12 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
     });
   }
 
-  /** Record the one "speech-request" summary row for this request, from whatever meta the lane accumulated. */
+  /**
+   * Record the one "speech-request" summary row for this request, from
+   * whatever meta the lane accumulated, and enrich the root span (audio.speech)
+   * the same way — the single point every dispatch path (lane success, lane
+   * throw, passthrough) funnels through.
+   */
   const recordSpeechRequest = (status: number, errorText?: string | null): void => {
     const meta = getRequestMeta();
     recordUsage({
@@ -121,6 +144,26 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
       text: { input, output: meta.outputText },
       errorText: errorText ?? null,
     });
+
+    const span = getActiveSpan();
+    span.setAttributes({
+      "audio.model": route.model,
+      "audio.lane": meta.lane,
+      "audio.mode": meta.mode,
+      "audio.voice": meta.voice,
+      "audio.language_code": meta.languageCode,
+      "audio.response_format": responseFormat,
+      "audio.input_chars": inputChars,
+      "audio.chunks": meta.chunks,
+      "audio.audio_seconds": meta.audioSeconds,
+      "audio.bytes_out": meta.bytesOut,
+      "audio.summarize": summarize,
+      "audio.title": meta.title,
+      "http.status_code": status,
+      "audio.text.input": textAttr(input),
+      "audio.text.output": textAttr(meta.outputText),
+    });
+    if (status >= 500) span.setStatus("error", errorText ?? undefined);
   };
 
   if (route.provider === "gemini" || route.provider === "replicate") {

@@ -177,4 +177,13 @@ export const config = {
    * to `false` to disable; every other usage column is unaffected.
    */
   usageKeepText: oneOf("USAGE_KEEP_TEXT", ["true", "false"] as const, "true") === "true",
+  /**
+   * OTLP/HTTP JSON collector base URL (e.g. a ClickStack/HyperDX endpoint),
+   * e.g. `http://clickstack:4319` — traces POST to `${otelEndpoint}/v1/traces`,
+   * logs to `${otelEndpoint}/v1/logs`. Unset (default) disables the exporter
+   * entirely — see `otel.ts`.
+   */
+  otelEndpoint: (process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "").replace(/\/+$/, ""),
+  /** OTel resource `service.name` / scope name stamped on every span and log record. */
+  otelServiceName: process.env["OTEL_SERVICE_NAME"] ?? "audio-gateway",
 } as const;

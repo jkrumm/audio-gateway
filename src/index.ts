@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
+import { flushOtel } from "./otel";
 import { handleSpeech } from "./speech";
 import { handleTranscriptions } from "./transcriptions";
 
@@ -100,6 +101,7 @@ if (import.meta.main) {
       console.warn(`audio-gateway shutdown: ${inFlight} request(s) still in flight after drain timeout`);
     }
 
+    await flushOtel();
     server.stop();
     process.exit(0);
   };

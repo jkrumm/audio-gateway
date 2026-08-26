@@ -3,7 +3,13 @@ import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveSttModel } from "./model-resolution";
+import { getActiveSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { recordUsage, runWithRequestContext } from "./usage";
+
+/** Attribute values gated by USAGE_KEEP_TEXT — same 600-char cap as the usage sink (usage.ts). */
+const TEXT_ATTR_MAX = 600;
+const textAttr = (s: string | undefined): string | undefined =>
+  config.usageKeepText && s ? s.slice(0, TEXT_ATTR_MAX) : undefined;
 
 /**
  * gpt-4o(-mini)-transcribe and -diarize only support `json`/`text` on IU —
@@ -71,7 +77,18 @@ const isModelUnavailable = (status: number): boolean => status === 404 || status
  */
 export async function handleTranscriptions(req: Request): Promise<Response> {
   const caller = req.headers.get("x-audio-source") ?? "unknown";
-  return runWithRequestContext({ requestId: crypto.randomUUID(), caller }, () => dispatchTranscription(req, caller));
+  const requestId = crypto.randomUUID();
+  return runWithRequestContext({ requestId, caller }, () =>
+    withRootSpan(
+      {
+        traceId: traceIdFromRequestId(requestId),
+        name: "audio.transcription",
+        kind: "server",
+        attrs: { "audio.request_id": requestId, "audio.caller": caller },
+      },
+      () => dispatchTranscription(req, caller),
+    ),
+  );
 }
 
 async function dispatchTranscription(req: Request, caller: string): Promise<Response> {
@@ -112,17 +129,29 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
   };
 
   const attempt = async (model: string) => {
-    const start = Date.now();
-    const res = await fetch(iuUrl("/audio/transcriptions"), {
-      method: "POST",
-      headers: iuHeaders(),
-      body: buildUpstream(model),
-    });
-    const latencyMs = Date.now() - start;
-    return { res, latencyMs, body: await res.text(), contentType: res.headers.get("content-type") ?? "" };
+    return withSpan(
+      "audio.stt.upstream",
+      { "audio.model": model },
+      async (span) => {
+        const start = Date.now();
+        const res = await fetch(iuUrl("/audio/transcriptions"), {
+          method: "POST",
+          headers: iuHeaders(),
+          body: buildUpstream(model),
+        });
+        const latencyMs = Date.now() - start;
+        span.setAttributes({ "http.status_code": res.status });
+        if (!res.ok) span.setStatus("error");
+        return { res, latencyMs, body: await res.text(), contentType: res.headers.get("content-type") ?? "" };
+      },
+      "client",
+    );
   };
 
-  /** Record the one "transcription-request" summary row for this request, then return `response`. */
+  /**
+   * Record the one "transcription-request" summary row for this request and
+   * enrich the root span (audio.transcription) the same way, then return `response`.
+   */
   const finish = (
     response: Response,
     opts: { model: string; status: number; audioSeconds?: number | null; outputText?: string },
@@ -136,6 +165,19 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
       audioSeconds: opts.audioSeconds ?? null,
       text: { output: opts.outputText },
     });
+
+    const span = getActiveSpan();
+    span.setAttributes({
+      "audio.model": opts.model,
+      "audio.requested_model": resolved.requested,
+      "audio.language_hint": language ?? undefined,
+      "audio.response_format": clientFormat,
+      "audio.fallback": opts.model !== resolved.model,
+      "audio.audio_seconds": opts.audioSeconds ?? undefined,
+      "http.status_code": opts.status,
+      "audio.text.output": textAttr(opts.outputText),
+    });
+    if (opts.status >= 500) span.setStatus("error");
     return response;
   };
 
@@ -199,7 +241,7 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
   // fallback returns rich formats natively, so it takes the passthrough branch.
   const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
   if (synth && file instanceof File) {
-    const duration = await audioDuration(file);
+    const duration = await withSpan("audio.stt.probe", {}, async () => audioDuration(file));
     const synthOpts = { model, status: res.status, audioSeconds: duration, outputText: text };
     if (clientFormat === "verbose_json") return finish(Response.json(verboseJson(text, duration, detectedLang)), synthOpts);
     if (clientFormat === "srt") {

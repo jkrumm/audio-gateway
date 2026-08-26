@@ -37,6 +37,17 @@ data, persisted to the VPS SQLite file and pushed to Argo's `raw` column). Revie
 `bun run usage:tail [--prod] [--since 2h] [--limit 30]`, which prints one line per request plus a
 per-lane/mode rollup.
 
+### Telemetry
+
+The SQLite/Argo usage rows above are the cost-accounting layer; ClickStack traces + logs are the
+observability layer beside them, not a replacement. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable a
+hand-rolled OTLP/HTTP JSON exporter (no SDK) that emits one trace per request (root span
+`audio.speech`/`audio.transcription`, child spans per pipeline stage) plus every `log.*` call as an
+OTLP log record. The join key is `request_id` = trace id (dashes stripped from the UUID), so a
+trace and its usage rows correlate with no extra column. Unset (default), the exporter is a
+complete no-op. Request/response texts on spans are gated by `USAGE_KEEP_TEXT` exactly like the
+usage sink.
+
 ## Develop
 ```bash
 bun install

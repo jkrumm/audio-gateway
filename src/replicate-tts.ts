@@ -6,6 +6,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
 import { log } from "./log";
+import { withSpan } from "./otel";
 import { recordUsage, setRequestMeta } from "./usage";
 
 // Replicate TTS lane: ElevenLabs models (flash-v2.5, turbo-v2.5, v3) served
@@ -130,38 +131,51 @@ async function runReplicatePrep(
 
   const userContent = instructions ? `${input}\n\n[delivery hint: ${instructions}]` : input;
 
-  const start = Date.now();
-  const res = await rawFetch(iuUrl("/chat/completions"), {
-    method: "POST",
-    headers: iuHeaders({ "content-type": "application/json" }),
-    body: JSON.stringify({
-      model: config.ttsPrepModel,
-      messages: [
-        // `summarize` swaps the whole job: one ≤30-word spoken confirmation
-        // instead of a faithful chunked rewrite (Hermes' spoken-summary mode).
-        { role: "system", content: summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT_ELEVENLABS },
-        { role: "user", content: userContent },
-      ],
-      max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
-    }),
-  });
-  const latencyMs = Date.now() - start;
+  return withSpan(
+    "audio.prep",
+    {
+      "llm.model": config.ttsPrepModel,
+      "audio.prep.kind": summarize ? "summary" : "prep",
+      "audio.input_chars": input.length,
+    },
+    async (span) => {
+      const start = Date.now();
+      const res = await rawFetch(iuUrl("/chat/completions"), {
+        method: "POST",
+        headers: iuHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({
+          model: config.ttsPrepModel,
+          messages: [
+            // `summarize` swaps the whole job: one ≤30-word spoken confirmation
+            // instead of a faithful chunked rewrite (Hermes' spoken-summary mode).
+            { role: "system", content: summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT_ELEVENLABS },
+            { role: "user", content: userContent },
+          ],
+          max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
+        }),
+      });
+      const latencyMs = Date.now() - start;
+      span.setAttributes({ "http.status_code": res.status });
 
-  if (res.status < 200 || res.status >= 300) {
-    const errorText = res.body.slice(0, 500);
-    log.error("elevenlabs tts prep error", { endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, error: errorText });
-    recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, errorText });
-    throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-  }
+      if (res.status < 200 || res.status >= 300) {
+        const errorText = res.body.slice(0, 500);
+        log.error("elevenlabs tts prep error", { endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, error: errorText });
+        recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, errorText });
+        throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+      }
 
-  const json = JSON.parse(res.body) as {
-    choices?: Array<{ message?: { content?: string } }>;
-    usage?: OpenAiUsage;
-  };
-  recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, usageJson: json.usage });
+      const json = JSON.parse(res.body) as {
+        choices?: Array<{ message?: { content?: string } }>;
+        usage?: OpenAiUsage;
+      };
+      recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, usageJson: json.usage });
+      span.setAttributes({ "llm.output_tokens": json.usage?.completion_tokens ?? undefined });
 
-  const content = json.choices?.[0]?.message?.content ?? "";
-  return { prep: parsePrepResponse(content), ran: true };
+      const content = json.choices?.[0]?.message?.content ?? "";
+      return { prep: parsePrepResponse(content), ran: true };
+    },
+    "client",
+  );
 }
 
 interface ReplicatePrediction {
@@ -188,10 +202,13 @@ async function createPrediction(model: string, input: Record<string, unknown>): 
   return JSON.parse(res.body) as ReplicatePrediction;
 }
 
-async function pollPrediction(id: string): Promise<ReplicatePrediction> {
+/** `polls` is exposed as the `replicate.polls` span attribute (audio.synth.chunk). */
+async function pollPrediction(id: string): Promise<{ pred: ReplicatePrediction; polls: number }> {
   const deadline = Date.now() + CREATE_DEADLINE_MS;
+  let polls = 0;
   while (Date.now() < deadline) {
     await Bun.sleep(POLL_INTERVAL_MS);
+    polls++;
     // Deliberately NOT iuReplicateUrl(`/models/.../predictions/${id}`) — the poll
     // path is flat under the Replicate base, keyed by prediction id alone.
     const res = await rawFetch(iuReplicateUrl(`/predictions/${id}`), { method: "GET", headers: iuHeaders() });
@@ -199,16 +216,17 @@ async function pollPrediction(id: string): Promise<ReplicatePrediction> {
       throw new ReplicateSynthError(`Replicate poll failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
     }
     const pred = JSON.parse(res.body) as ReplicatePrediction;
-    if (pred.status !== "starting" && pred.status !== "processing") return pred;
+    if (pred.status !== "starting" && pred.status !== "processing") return { pred, polls };
   }
   throw new ReplicateSynthError(`Replicate prediction ${id} timed out after ${CREATE_DEADLINE_MS}ms`);
 }
 
-async function runPrediction(model: string, input: Record<string, unknown>): Promise<ReplicatePrediction> {
+async function runPrediction(model: string, input: Record<string, unknown>): Promise<{ pred: ReplicatePrediction; polls: number }> {
   let pred = await createPrediction(model, input);
+  let polls = 0;
   if (pred.status === "starting" || pred.status === "processing") {
     if (!pred.id) throw new ReplicateSynthError("Replicate prediction missing id for polling");
-    pred = await pollPrediction(pred.id);
+    ({ pred, polls } = await pollPrediction(pred.id));
   }
   if (pred.status === "failed" || pred.status === "canceled") {
     throw new ReplicateSynthError(`Replicate prediction ${pred.status}: ${pred.error ?? "unknown error"}`);
@@ -216,7 +234,7 @@ async function runPrediction(model: string, input: Record<string, unknown>): Pro
   if (pred.status !== "succeeded") {
     throw new ReplicateSynthError(`Replicate prediction ended in unexpected status: ${pred.status}`);
   }
-  return pred;
+  return { pred, polls };
 }
 
 /** Replicate serves prediction output from its own CDN only; anything else is refused (no open fetch). */
@@ -231,12 +249,20 @@ function isReplicateDeliveryUrl(raw: string): boolean {
 }
 
 async function fetchDelivery(pred: ReplicatePrediction): Promise<Uint8Array> {
-  const url = Array.isArray(pred.output) ? pred.output[0] : pred.output;
-  if (!url) throw new ReplicateSynthError("Replicate prediction succeeded with no output URL");
-  if (!isReplicateDeliveryUrl(url)) throw new ReplicateSynthError("Replicate output URL is not a replicate.delivery URL");
-  const res = await fetch(url);
-  if (!res.ok) throw new ReplicateSynthError(`Failed to fetch Replicate output: HTTP ${res.status}`);
-  return new Uint8Array(await res.arrayBuffer());
+  return withSpan(
+    "audio.delivery.fetch",
+    {},
+    async (span) => {
+      const url = Array.isArray(pred.output) ? pred.output[0] : pred.output;
+      if (!url) throw new ReplicateSynthError("Replicate prediction succeeded with no output URL");
+      if (!isReplicateDeliveryUrl(url)) throw new ReplicateSynthError("Replicate output URL is not a replicate.delivery URL");
+      const res = await fetch(url);
+      span.setAttributes({ "http.status_code": res.status });
+      if (!res.ok) throw new ReplicateSynthError(`Failed to fetch Replicate output: HTTP ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    },
+    "client",
+  );
 }
 
 /** Clamp `speed` to ElevenLabs' 0.7–1.2 range; omit the field entirely at the neutral 1. */
@@ -249,6 +275,7 @@ function clampSpeed(speed: number | undefined): number | undefined {
 interface ReplicateChunkParams {
   model: string;
   chunk: PrepChunk;
+  index: number;
   previousText?: string;
   nextText?: string;
   voice: string;
@@ -279,54 +306,67 @@ interface ReplicateChunkResult {
  * ffmpeg fan-out bounded by `config.ttsConcurrency`.
  */
 async function synthReplicateChunk(params: ReplicateChunkParams): Promise<ReplicateChunkResult> {
-  const speed = clampSpeed(params.speed);
-  const input = {
-    prompt: params.chunk.text,
-    voice: params.voice,
-    language_code: params.languageCode,
-    stability: params.stability,
-    style: params.style,
-    similarity_boost: params.similarityBoost,
-    ...(speed !== undefined && { speed }),
-    ...(params.previousText && { previous_text: params.previousText }),
-    ...(params.nextText && { next_text: params.nextText }),
-  };
+  return withSpan(
+    "audio.synth.chunk",
+    { "audio.chunk_index": params.index, "audio.input_chars": params.chunk.text.length },
+    async (span) => {
+      const speed = clampSpeed(params.speed);
+      const input = {
+        prompt: params.chunk.text,
+        voice: params.voice,
+        language_code: params.languageCode,
+        stability: params.stability,
+        style: params.style,
+        similarity_boost: params.similarityBoost,
+        ...(speed !== undefined && { speed }),
+        ...(params.previousText && { previous_text: params.previousText }),
+        ...(params.nextText && { next_text: params.nextText }),
+      };
 
-  const start = Date.now();
-  let result: ReplicateChunkResult;
-  try {
-    const pred = await runPrediction(params.model, input);
-    const mp3 = await fetchDelivery(pred);
-    const latencyMs = Date.now() - start;
-    const decoded = await transcode(mp3, { kind: "auto" }, "pcm");
-    const pcm = new Uint8Array(decoded.bytes);
-    result = {
-      mp3,
-      pcm,
-      audioSeconds: pcm.byteLength / (2 * SAMPLE_RATE_DEFAULT),
-      inputChars: params.chunk.text.length,
-      latencyMs,
-      predictTime: pred.metrics?.predict_time ?? null,
-    };
-  } catch (err) {
-    const latencyMs = Date.now() - start;
-    const errorText = (err instanceof Error ? err.message : String(err)).slice(0, 500);
-    log.error("replicate tts synth error", { endpoint: "speech", model: params.model, latencyMs, error: errorText });
-    recordUsage({ endpoint: "speech", model: params.model, status: 502, latencyMs, inputChars: params.chunk.text.length, errorText });
-    throw err;
-  }
-  // One usage row per chunk — Replicate bills per input character, not per token.
-  recordUsage({
-    endpoint: "speech",
-    model: params.model,
-    status: 200,
-    latencyMs: result.latencyMs,
-    inputChars: result.inputChars,
-    audioSeconds: result.audioSeconds,
-    bytesOut: result.mp3.byteLength,
-    usageJson: { predict_time: result.predictTime, language_code: params.languageCode },
-  });
-  return result;
+      const start = Date.now();
+      let result: ReplicateChunkResult;
+      try {
+        const { pred, polls } = await runPrediction(params.model, input);
+        span.setAttributes({
+          "replicate.prediction_id": pred.id,
+          "replicate.polls": polls,
+          "replicate.predict_time_s": pred.metrics?.predict_time ?? undefined,
+        });
+        const mp3 = await fetchDelivery(pred);
+        const latencyMs = Date.now() - start;
+        const decoded = await withSpan("audio.decode", {}, async () => transcode(mp3, { kind: "auto" }, "pcm"));
+        const pcm = new Uint8Array(decoded.bytes);
+        result = {
+          mp3,
+          pcm,
+          audioSeconds: pcm.byteLength / (2 * SAMPLE_RATE_DEFAULT),
+          inputChars: params.chunk.text.length,
+          latencyMs,
+          predictTime: pred.metrics?.predict_time ?? null,
+        };
+      } catch (err) {
+        const latencyMs = Date.now() - start;
+        const errorText = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+        log.error("replicate tts synth error", { endpoint: "speech", model: params.model, latencyMs, error: errorText });
+        recordUsage({ endpoint: "speech", model: params.model, status: 502, latencyMs, inputChars: params.chunk.text.length, errorText });
+        throw err;
+      }
+      span.setAttributes({ "audio.audio_seconds": result.audioSeconds });
+      // One usage row per chunk — Replicate bills per input character, not per token.
+      recordUsage({
+        endpoint: "speech",
+        model: params.model,
+        status: 200,
+        latencyMs: result.latencyMs,
+        inputChars: result.inputChars,
+        audioSeconds: result.audioSeconds,
+        bytesOut: result.mp3.byteLength,
+        usageJson: { predict_time: result.predictTime, language_code: params.languageCode },
+      });
+      return result;
+    },
+    "client",
+  );
 }
 
 export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Promise<Response> {
@@ -363,6 +403,7 @@ export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Pr
       synthReplicateChunk({
         model,
         chunk,
+        index: i,
         previousText: chunks[i - 1]?.text,
         nextText: chunks[i + 1]?.text,
         voice: voiceName,
@@ -391,8 +432,10 @@ export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Pr
     contentType = "audio/mpeg";
   } else {
     const pcmParts: ChunkAudio[] = parts.map((p) => ({ pcm: p.pcm, sampleRate: SAMPLE_RATE_DEFAULT }));
-    const { pcm, sampleRate } = concatPcm(pcmParts);
-    const encoded = await transcode(pcm, { kind: "pcm", sampleRate }, responseFormat);
+    const { pcm, sampleRate } = await withSpan("audio.concat", {}, async () => concatPcm(pcmParts));
+    const encoded = await withSpan("audio.transcode", { "audio.output_format": responseFormat }, async () =>
+      transcode(pcm, { kind: "pcm", sampleRate }, responseFormat),
+    );
     bytes = encoded.bytes;
     contentType = encoded.contentType;
   }
