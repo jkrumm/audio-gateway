@@ -20,9 +20,29 @@ export interface PrepResult {
 }
 
 /** Crude German detection shared by both TTS lanes (no-LLM default path, and language steering). */
+const DE_MARKERS =
+  /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute|ich|du|dir|dich|wir|uns|ihr|sie|sich|mach|mache|gern|gerne|alles|gut|klar|passt|erledigt|bis|später|soll|sollte|noch|schon|jetzt|hier|habe|hast|hat|kann|kannst|wird|wenn|dann|oder|aber|nach|vor|bei|zum|zur|vom|im|am|auf|aus|morgen|guten|termin|rechnung|grad|uhr)\b/i;
+const EN_MARKERS =
+  /\b(the|a|an|and|or|but|is|are|was|were|be|been|to|of|in|on|at|for|with|from|by|this|that|these|those|it|its|you|your|i|i'm|i'll|we|they|he|she|will|would|can|could|should|do|does|did|not|no|yes|done|sure|thing|good|morning|meeting|moved|take|care|turn|down)\b/i;
+
+/**
+ * Best-effort DE/EN detection for a single request. Umlauts or German
+ * function words → "de"; English function words → "en"; nothing decisive
+ * (names, numbers, "Okay.") → null, and the caller applies the configured
+ * default. A wrong code is audible on ElevenLabs — `language_code` steers
+ * pronunciation — so ambiguity must fall to the household default rather
+ * than to English.
+ */
+export function detectLanguage(text: string): "de" | "en" | null {
+  if (/[äöüßÄÖÜ]/.test(text)) return "de";
+  if (DE_MARKERS.test(text)) return "de";
+  if (EN_MARKERS.test(text)) return "en";
+  return null;
+}
+
+/** Legacy boolean form: true unless the text is decisively English. */
 export function looksGerman(text: string): boolean {
-  if (/[äöüßÄÖÜ]/.test(text)) return true;
-  return /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute)\b/i.test(text);
+  return detectLanguage(text) !== "en";
 }
 
 /**

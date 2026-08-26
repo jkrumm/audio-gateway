@@ -2,7 +2,7 @@ import type { AudioOutputFormat, ChunkAudio } from "./audio";
 import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
 import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { recordUsage } from "./usage";
@@ -72,7 +72,7 @@ function fallbackTitle(input: string, de: boolean): string {
 
 /** Build a single-chunk PrepResult with a default Hermes style directive — no LLM call. */
 function defaultPrep(input: string): PrepResult {
-  const de = looksGerman(input);
+  const de = (detectLanguage(input) ?? config.ttsDefaultLanguage) === "de";
   const style = de
     ? "Lies als warmer, ruhiger Erzähler, ohne Begrüßung, sachlich und natürlich"
     : "Read as a warm, calm narrator, no greeting, natural and matter-of-fact";

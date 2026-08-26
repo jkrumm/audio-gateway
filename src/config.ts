@@ -124,6 +124,13 @@ export const config = {
    * unrecognized voice name — see the VOICES enum in replicate-tts.ts.
    */
   ttsElevenLabsVoice: process.env["TTS_ELEVENLABS_VOICE"] ?? "Mark",
+  /**
+   * Language applied when a request carries no `language`/`lang_code` and the
+   * text itself is not decisive ("Okay.", names, numbers). Hermes' streaming
+   * client sends one sentence per request with no hint, so this default is
+   * what most short replies get — it must match the household, not English.
+   */
+  ttsDefaultLanguage: oneOf("TTS_DEFAULT_LANGUAGE", ["de", "en"] as const, "de"),
   /** ElevenLabs delivery defaults (Replicate lane), all 0–1. */
   ttsElevenLabsStability: num("TTS_ELEVENLABS_STABILITY", 0.5),
   ttsElevenLabsStyle: num("TTS_ELEVENLABS_STYLE", 0),

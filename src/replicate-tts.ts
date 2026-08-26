@@ -3,7 +3,7 @@ import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
 import { config } from "./config";
 import { rawFetch } from "./gemini-tts";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
 import { log } from "./log";
 import { recordUsage } from "./usage";
@@ -73,6 +73,11 @@ Your job, in order:
 Return STRICT JSON only, no markdown, no commentary:
 {"lang":"de"|"en","title":"<short title>","chunks":[{"style":"<directive>","text":"<transcript with at most one tag per chunk>"}]}`;
 
+/** Detected language, falling back to the configured household default when the text isn't decisive. */
+function resolveLanguage(input: string): "de" | "en" {
+  return detectLanguage(input) ?? config.ttsDefaultLanguage;
+}
+
 /** First few words of the input as a fallback title for the no-LLM path. */
 function fallbackTitle(input: string, de: boolean): string {
   const words = input.replace(/\s+/g, " ").trim().split(" ").slice(0, 6).join(" ");
@@ -82,7 +87,7 @@ function fallbackTitle(input: string, de: boolean): string {
 
 /** Split raw sentences via the shared limits splitter, no LLM rewriting, no tags. */
 function splitNoPrep(input: string): PrepResult {
-  const de = looksGerman(input);
+  const de = resolveLanguage(input) === "de";
   const chunks = enforceChunkLimits([{ style: "", text: input.trim() }], CHUNK_LIMITS);
   return { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks };
 }
@@ -115,7 +120,7 @@ async function runReplicatePrep(
 
   if (!summarize && !wantsPrep(model)) {
     if (input.length > NO_PREP_SPLIT_THRESHOLD) return { prep: splitNoPrep(input), ran: false };
-    const de = looksGerman(input);
+    const de = resolveLanguage(input) === "de";
     return {
       prep: { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks: [{ style: "", text: input.trim() }] },
       ran: false,
@@ -316,7 +321,7 @@ async function synthReplicateChunk(params: ReplicateChunkParams): Promise<Replic
     inputChars: result.inputChars,
     audioSeconds: result.audioSeconds,
     bytesOut: result.mp3.byteLength,
-    usageJson: { predict_time: result.predictTime },
+    usageJson: { predict_time: result.predictTime, language_code: params.languageCode },
   });
   return result;
 }
@@ -328,7 +333,7 @@ export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Pr
   }
 
   const voiceName = VOICES.has(voice) ? voice : config.ttsElevenLabsVoice;
-  const languageCode = language && LANGUAGE_CODE.test(language) ? language : looksGerman(input) ? "de" : "en";
+  const languageCode = language && LANGUAGE_CODE.test(language) ? language : resolveLanguage(input);
   const unit = (v: number | undefined, fallback: number): number =>
     v === undefined ? fallback : Math.min(1, Math.max(0, v));
 

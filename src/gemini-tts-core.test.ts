@@ -1,9 +1,26 @@
 import { describe, expect, test } from "bun:test";
 import type { ChunkLimits } from "./gemini-tts-core";
-import { enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 
 // pcmToWav now lives in audio.test.ts alongside the rest of the ffmpeg/ffprobe
 // process boundary module it moved into.
+
+describe("detectLanguage", () => {
+  const de = ["Okay, erledigt.", "Klar.", "Passt.", "Rechnung markiert.", "Termin eingetragen.", "Guten Morgen Johannes.",
+    "Soll ich sie runterdrehen?", "Mach ich.", "Alles gut.", "Gern geschehen.", "Bis später."];
+  const en = ["Done.", "Sure thing.", "Meeting moved to three pm.", "I will take care of it.", "Good morning Johannes.",
+    "Should I turn it down?", "All good.", "On it."];
+  test("short German replies are never classified as English", () => {
+    for (const s of de) expect(detectLanguage(s)).not.toBe("en");
+  });
+  test("short English replies are classified as English", () => {
+    for (const s of en) expect(detectLanguage(s)).toBe("en");
+  });
+  test("names and numbers alone are undecided", () => {
+    expect(detectLanguage("Johannes, 14:30.")).toBeNull();
+    expect(detectLanguage("Okay.")).toBeNull();
+  });
+});
 
 describe("looksGerman", () => {
   test("detects umlauts", () => {

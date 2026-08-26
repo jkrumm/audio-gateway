@@ -13,6 +13,7 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 
 # Optional ElevenLabs (Replicate lane) delivery overrides — defaults live in
 # config.ts (voice Mark, stability 0.5, style 0, similarity 0.75).
+# TTS_DEFAULT_LANGUAGE=de   # applied when neither the request nor the text decides DE/EN
 # TTS_ELEVENLABS_VOICE=Mark
 # TTS_ELEVENLABS_STABILITY=0.5
 # TTS_ELEVENLABS_STYLE=0

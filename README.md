@@ -19,6 +19,10 @@ native TTS pipelines: **Gemini expressive TTS** and **Replicate/ElevenLabs TTS**
   mono 24 kHz, the shape Hermes' `OpenAIStreamer` expects). `speed` is forwarded on the Replicate
   (clamped to 0.7–1.2) and passthrough lanes; Gemini has no speed parameter and ignores it. The
   Gemini and Replicate lanes both return an `X-Audio-Title` header when their prep LLM ran.
+  Language per request: `language`/`lang_code` if sent, else detected from the text (umlauts,
+  DE/EN function words), else `TTS_DEFAULT_LANGUAGE` (`de`) — never English by accident, because
+  ElevenLabs' `language_code` steers pronunciation and Hermes streams one hint-less sentence per
+  request. Each Replicate usage row records the `language_code` actually sent.
 
 The single source of truth for audio across the stack. Deployed as a single Docker container on the
 VPS at `audio-gateway.jkrumm.com`, reachable only over the tailnet; consumed by Argo over localhost
