@@ -16,7 +16,14 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 - `src/index.ts` — `Bun.serve` entry: routing, auth gate, `/health`, `/models`, top-level error wrap.
 - `src/config.ts` — the ONLY place env is read; exports a frozen `config`. Required vars fail fast at boot.
 - `src/iu.ts` — upstream URL builders + bearer-header helper (OpenAI, Gemini, Replicate bases).
-- `src/usage.ts` — usage sink. SQLite adapter (default); HTTP adapter is the Phase-3 seam.
+- `src/usage.ts` — usage sink. SQLite adapter (default); HTTP adapter is the Phase-3 seam. Also
+  owns request correlation (`runWithRequestContext`/`setRequestMeta`, AsyncLocalStorage): every
+  `recordUsage` call made while handling one HTTP request is stamped with the same
+  `request_id`/`caller`, and the dispatcher records one `speech-request`/`transcription-request`
+  summary row per request (mode/lane/chunks/text) once it resolves — see `src/usage-report.ts`.
+- `src/usage-report.ts` — pure parsing/rollup for `usage:tail`: joins a `*-request` row with its
+  chunk/prep/stt siblings by `request_id` into one reviewable `RequestLine`, plus a per-lane/mode
+  rollup. No SQLite, no network — hermetically tested.
 - `src/transcriptions.ts` — STT handler + verbose_json/srt/vtt envelope synthesis.
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
@@ -42,6 +49,9 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 ## Run
 - Dev: `bun run dev` (`secrets-run` injects secrets from `.env.tpl` — drop-in op shim: live `op` on the MacBook, encrypted cache on the mini; listens on `:7714`).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime.
+- `bun run usage:tail [--db <path>] [--prod] [--since 30m|2h|1d|<ISO>] [--limit N] [--json]` — a
+  readable per-request usage timeline (mode, stage timings, text snippets) for reviewing TTS/STT
+  quality; `--prod` scp's the VPS SQLite file (+ WAL/SHM) to a temp dir first.
 
 ## Reference
 `docs/reference/audio-proxy-spec.md` is the behavioral contract, extracted from the original

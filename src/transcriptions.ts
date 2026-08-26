@@ -3,7 +3,7 @@ import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveSttModel } from "./model-resolution";
-import { recordUsage } from "./usage";
+import { recordUsage, runWithRequestContext } from "./usage";
 
 /**
  * gpt-4o(-mini)-transcribe and -diarize only support `json`/`text` on IU —
@@ -62,8 +62,20 @@ const FALLBACK_MODEL = "whisper";
  */
 const isModelUnavailable = (status: number): boolean => status === 404 || status >= 500;
 
+/**
+ * Request correlation: every recordUsage call made while handling one
+ * transcription (including a fallback retry) is stamped with the same
+ * request_id/caller via runWithRequestContext, and a single
+ * "transcription-request" summary row is recorded once the response is
+ * decided so a whole request can be reviewed as one timeline entry.
+ */
 export async function handleTranscriptions(req: Request): Promise<Response> {
   const caller = req.headers.get("x-audio-source") ?? "unknown";
+  return runWithRequestContext({ requestId: crypto.randomUUID(), caller }, () => dispatchTranscription(req, caller));
+}
+
+async function dispatchTranscription(req: Request, caller: string): Promise<Response> {
+  const requestStart = Date.now();
   const form = await req.formData();
   // Central model resolution: a wrong or absent model never reaches the upstream.
   // The default matches /transcribe/i so DE/EN prompt steering applies.
@@ -110,6 +122,23 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
     return { res, latencyMs, body: await res.text(), contentType: res.headers.get("content-type") ?? "" };
   };
 
+  /** Record the one "transcription-request" summary row for this request, then return `response`. */
+  const finish = (
+    response: Response,
+    opts: { model: string; status: number; audioSeconds?: number | null; outputText?: string },
+  ): Response => {
+    recordUsage({
+      endpoint: "transcription-request",
+      model: opts.model,
+      status: opts.status,
+      latencyMs: Date.now() - requestStart,
+      responseFormat: clientFormat,
+      audioSeconds: opts.audioSeconds ?? null,
+      text: { output: opts.outputText },
+    });
+    return response;
+  };
+
   let model = resolved.model;
   let { res, latencyMs, body, contentType } = await attempt(model);
 
@@ -141,7 +170,10 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
       error: errorText,
     });
     recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat, errorText });
-    return new Response(body, { status: res.status, headers: { "content-type": contentType } });
+    return finish(new Response(body, { status: res.status, headers: { "content-type": contentType } }), {
+      model,
+      status: res.status,
+    });
   }
 
   let text = body;
@@ -168,12 +200,19 @@ export async function handleTranscriptions(req: Request): Promise<Response> {
   const synth = SYNTH_MODEL.test(model) && RICH_FORMATS.has(clientFormat);
   if (synth && file instanceof File) {
     const duration = await audioDuration(file);
-    if (clientFormat === "verbose_json") return Response.json(verboseJson(text, duration, detectedLang));
-    if (clientFormat === "srt") return new Response(srt(text, duration), { headers: { "content-type": "text/plain; charset=utf-8" } });
-    return new Response(vtt(text, duration), { headers: { "content-type": "text/vtt; charset=utf-8" } });
+    const synthOpts = { model, status: res.status, audioSeconds: duration, outputText: text };
+    if (clientFormat === "verbose_json") return finish(Response.json(verboseJson(text, duration, detectedLang)), synthOpts);
+    if (clientFormat === "srt") {
+      return finish(new Response(srt(text, duration), { headers: { "content-type": "text/plain; charset=utf-8" } }), synthOpts);
+    }
+    return finish(new Response(vtt(text, duration), { headers: { "content-type": "text/vtt; charset=utf-8" } }), synthOpts);
   }
 
   // Whisper rich formats and plain json/text pass through faithfully.
-  if (clientFormat === "json") return Response.json({ text });
-  return new Response(body, { status: res.status, headers: { "content-type": contentType } });
+  if (clientFormat === "json") return finish(Response.json({ text }), { model, status: res.status, outputText: text });
+  return finish(new Response(body, { status: res.status, headers: { "content-type": contentType } }), {
+    model,
+    status: res.status,
+    outputText: text,
+  });
 }

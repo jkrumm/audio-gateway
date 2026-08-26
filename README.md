@@ -29,6 +29,14 @@ VPS at `audio-gateway.jkrumm.com`, reachable only over the tailnet; consumed by 
 (same host) and by Hermes over the tailnet. Local development runs on the Mac via `bun run dev`
 (`:7714`). There is no Mac LaunchAgent. Logs usage to a pluggable sink (SQLite today).
 
+Every TTS/STT request is correlated end to end: all rows written while handling one HTTP request
+(prep, per-chunk synth, the final response) share a `request_id`, plus one `speech-request`/
+`transcription-request` summary row per request carrying the mode/lane, stage timings, and —
+unless `USAGE_KEEP_TEXT=false` — the input/output text (truncated to 600 chars; this is personal
+data, persisted to the VPS SQLite file and pushed to Argo's `raw` column). Review it with
+`bun run usage:tail [--prod] [--since 2h] [--limit 30]`, which prints one line per request plus a
+per-lane/mode rollup.
+
 ## Develop
 ```bash
 bun install

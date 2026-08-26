@@ -30,3 +30,8 @@ USAGE_SINK=both
 USAGE_HTTP_URL=https://argo.jkrumm.com/api/usage/records
 USAGE_SOURCE_LABEL=audio-gateway
 ARGO_API_SECRET=op://common/api/SECRET
+
+# Keep request/response text (truncated 600 chars) on usage rows for the
+# usage:tail CLI. Personal data — persisted to the VPS SQLite file and pushed
+# to Argo's raw column. Set to 'false' to disable.
+# USAGE_KEEP_TEXT=true

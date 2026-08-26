@@ -11,7 +11,8 @@
     "test": "bun test",
     "test:e2e": "secrets-run run --env-file=.env.tpl -- env RUN_E2E=1 bun test src/e2e.smoke.test.ts",
     "test:roundtrip": "secrets-run run --env-file=.env.tpl -- bun src/roundtrip.ts",
-    "test:roundtrip:prod": "RT_BASE_URL=https://audio-gateway.jkrumm.com bun src/roundtrip.ts"
+    "test:roundtrip:prod": "RT_BASE_URL=https://audio-gateway.jkrumm.com bun src/roundtrip.ts",
+    "usage:tail": "bun run scripts/usage-tail.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

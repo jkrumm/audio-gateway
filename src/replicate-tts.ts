@@ -6,7 +6,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
 import { log } from "./log";
-import { recordUsage } from "./usage";
+import { recordUsage, setRequestMeta } from "./usage";
 
 // Replicate TTS lane: ElevenLabs models (flash-v2.5, turbo-v2.5, v3) served
 // through the IU gateway's Replicate route. Unlike Gemini, the upstream call
@@ -342,6 +342,20 @@ export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Pr
 
   const { prep, ran: prepRan } = await runReplicatePrep(model, input, summarize, instructions);
   const chunks = enforceChunkLimits(prep.chunks, CHUNK_LIMITS);
+  const title = prep.title || fallbackTitle(input, prep.lang === "de");
+
+  // Surface as much of the request-level summary meta as is known before synth
+  // even starts, so a later synth failure still leaves lane/mode/chunks visible
+  // on the "speech-request" row (see speech.ts).
+  setRequestMeta({
+    mode: summarize ? "summary" : prepRan ? "prep" : "direct",
+    lane: "replicate",
+    chunks: chunks.length,
+    languageCode,
+    voice: voiceName,
+    title,
+    outputText: chunks.map((c) => c.text).join(" "),
+  });
 
   let parts: ReplicateChunkResult[];
   try {
@@ -383,9 +397,13 @@ export async function handleReplicateSpeech(reqBody: ReplicateSpeechRequest): Pr
     contentType = encoded.contentType;
   }
 
-  const title = prep.title || fallbackTitle(input, prep.lang === "de");
   const headers: Record<string, string> = { "content-type": contentType };
   if (prepRan) headers["x-audio-title"] = encodeURIComponent(title);
+
+  setRequestMeta({
+    audioSeconds: parts.reduce((sum, p) => sum + p.audioSeconds, 0),
+    bytesOut: bytes.byteLength,
+  });
 
   return new Response(bytes, { status: 200, headers });
 }

@@ -378,12 +378,14 @@ describe("STT: upstream error records usage row", () => {
     expect(res.status).toBe(503);
     expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
 
+    // Two per-attempt rows plus one "transcription-request" summary row.
     const rows = getUsageRows();
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
     expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
     expect(rows[0]?.["status"]).toBe(503);
     expect(rows[1]?.["model"]).toBe("whisper");
     expect(rows[1]?.["status"]).toBe(503);
+    expect(rows[2]?.["endpoint"]).toBe("transcription-request");
   });
 
   test("primary 404 → whisper fallback succeeds → 200 with fallback text", async () => {
@@ -407,13 +409,14 @@ describe("STT: upstream error records usage row", () => {
     expect(json["text"]).toBe("from whisper");
     expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
 
-    // Failed primary + successful fallback are both recorded.
+    // Failed primary + successful fallback + one "transcription-request" summary row.
     const rows = getUsageRows();
-    expect(rows.length).toBe(2);
+    expect(rows.length).toBe(3);
     expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
     expect(rows[0]?.["status"]).toBe(404);
     expect(rows[1]?.["model"]).toBe("whisper");
     expect(rows[1]?.["status"]).toBe(200);
+    expect(rows[2]?.["endpoint"]).toBe("transcription-request");
   });
 
   test("client-error status (400) does not trigger the fallback", async () => {
@@ -429,9 +432,11 @@ describe("STT: upstream error records usage row", () => {
     expect(res.status).toBe(400);
     expect(sentModels).toEqual(["gpt-4o-transcribe"]);
 
+    // One per-attempt row plus one "transcription-request" summary row.
     const rows = getUsageRows();
-    expect(rows.length).toBe(1);
+    expect(rows.length).toBe(2);
     expect(rows[0]?.["status"]).toBe(400);
+    expect(rows[1]?.["endpoint"]).toBe("transcription-request");
   });
 });
 

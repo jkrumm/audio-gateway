@@ -169,4 +169,12 @@ export const config = {
   machine: process.env["MACHINE"] ?? hostname(),
   /** Graceful-shutdown drain budget in milliseconds (Decision 5). */
   shutdownDrainMs: num("SHUTDOWN_DRAIN_MS", 10000),
+  /**
+   * Whether usage rows keep request/response TEXT (input/output, truncated to
+   * 600 chars) on the `*-request` summary rows — powers `usage:tail`'s
+   * transcript snippets. This is personal data, persisted to the VPS SQLite
+   * file and pushed to Argo's `raw` column when USAGE_SINK includes http. Set
+   * to `false` to disable; every other usage column is unaffected.
+   */
+  usageKeepText: oneOf("USAGE_KEEP_TEXT", ["true", "false"] as const, "true") === "true",
 } as const;

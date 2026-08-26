@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { config } from "./config";
@@ -9,7 +10,13 @@ import { config } from "./config";
 
 export interface UsageRow {
   /** Drop the dead 'models' member (Decision 2 / §10 bug fix). */
-  endpoint: "transcriptions" | "speech" | "speech-prep" | "speech-summary";
+  endpoint:
+    | "transcriptions"
+    | "speech"
+    | "speech-prep"
+    | "speech-summary"
+    | "speech-request"
+    | "transcription-request";
   model: string;
   status: number;
   latencyMs: number;
@@ -23,6 +30,12 @@ export interface UsageRow {
   usageJson?: unknown;
   /** Truncated upstream error body for non-2xx responses (max 500 chars). */
   errorText?: string | null;
+  /**
+   * Request/response text for quality review — only ever set on the
+   * `*-request` summary rows, never on per-chunk rows. Truncated to 600 chars
+   * and gated by `USAGE_KEEP_TEXT` inside the sink (see `resolveText`).
+   */
+  text?: { input?: string; output?: string } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -36,6 +49,57 @@ export interface UsageRow {
  */
 export interface UsageSink {
   record(row: UsageRow): void | Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Request correlation (AsyncLocalStorage)
+// ---------------------------------------------------------------------------
+
+/**
+ * Metadata a lane handler (gemini-tts.ts, replicate-tts.ts) can enrich for the
+ * CURRENT request without changing its own return type — the dispatcher
+ * (speech.ts/transcriptions.ts) reads it back via `getRequestMeta()` right
+ * after the lane call returns, to build the one `*-request` summary row.
+ */
+export interface RequestMeta {
+  mode?: "direct" | "prep" | "summary" | "passthrough";
+  lane?: "gemini" | "replicate" | "passthrough";
+  chunks?: number;
+  languageCode?: string;
+  voice?: string;
+  title?: string;
+  outputText?: string;
+  audioSeconds?: number;
+  bytesOut?: number;
+}
+
+interface RequestContextValue {
+  requestId: string;
+  caller: string;
+  meta: RequestMeta;
+}
+
+const requestContext = new AsyncLocalStorage<RequestContextValue>();
+
+/**
+ * Run `fn` inside a fresh request-correlation context. Every `recordUsage`
+ * call made (directly or transitively, across awaits) while `fn` is running
+ * is stamped with `requestId`/`caller` — no signature churn on `recordUsage`
+ * or any of its call-sites across the TTS/STT lanes.
+ */
+export function runWithRequestContext<T>(ctx: { requestId: string; caller: string }, fn: () => T): T {
+  return requestContext.run({ ...ctx, meta: {} }, fn);
+}
+
+/** Merge fields into the current request's metadata accumulator. No-op outside a request context. */
+export function setRequestMeta(patch: RequestMeta): void {
+  const store = requestContext.getStore();
+  if (store) Object.assign(store.meta, patch);
+}
+
+/** Read the current request's accumulated metadata (used to build the `*-request` summary row). */
+export function getRequestMeta(): RequestMeta {
+  return requestContext.getStore()?.meta ?? {};
 }
 
 // ---------------------------------------------------------------------------
@@ -157,10 +221,42 @@ function computeCost(
 }
 
 // ---------------------------------------------------------------------------
+// Text handling — quality-review snippets, gated + truncated
+// ---------------------------------------------------------------------------
+
+const TEXT_MAX_CHARS = 600;
+
+const truncate = (s: string | undefined): string | undefined =>
+  s === undefined ? undefined : s.length > TEXT_MAX_CHARS ? s.slice(0, TEXT_MAX_CHARS) : s;
+
+/**
+ * Resolve the text object to persist for a row: `null` when `keepText` is off
+ * or the row carries no text, otherwise the input/output truncated to
+ * `TEXT_MAX_CHARS`. Centralised here so both sinks (sqlite text_json, http
+ * raw.text) apply the exact same gate — personal data, opt-out by design.
+ * Takes `keepText` as a parameter (rather than reading `config.usageKeepText`
+ * directly) so it's unit-testable independent of the config singleton.
+ */
+export function resolveText(
+  row: UsageRow,
+  keepText: boolean = config.usageKeepText,
+): { input?: string; output?: string } | null {
+  if (!keepText || !row.text) return null;
+  const input = truncate(row.text.input);
+  const output = truncate(row.text.output);
+  if (input === undefined && output === undefined) return null;
+  return { ...(input !== undefined && { input }), ...(output !== undefined && { output }) };
+}
+
+// ---------------------------------------------------------------------------
 // SQLite adapter (default)
 // ---------------------------------------------------------------------------
 
-function buildSqliteSink(dbPath: string): UsageSink {
+// Exported so tests can build a sink against an arbitrary path directly —
+// `config.usageDb` is a process-wide singleton (see routes.test.ts), which
+// would make it impossible to test the idempotent-migration boot path
+// against a temp DB file from within the same `bun test` process.
+export function buildSqliteSink(dbPath: string): UsageSink {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const db = new Database(dbPath, { create: true });
@@ -180,33 +276,46 @@ function buildSqliteSink(dbPath: string): UsageSink {
       audio_seconds   REAL,
       input_chars     INTEGER,                    -- TTS input length
       bytes_out       INTEGER,                    -- TTS audio size
-      usage_json      TEXT                        -- raw upstream usage object
+      usage_json      TEXT,                       -- raw upstream usage object
+      request_id      TEXT,                       -- correlates every row of one HTTP request
+      caller          TEXT,                       -- x-audio-source header value
+      text_json       TEXT                        -- {input?,output?} on *-request rows only (USAGE_KEEP_TEXT)
     );
   `);
   db.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_record (ts);");
 
-  // Idempotent column migration: the prod DB was created without error_text.
-  // If we reference $errorText in the prepared INSERT without adding the column
-  // first, db.prepare() throws at boot time on the old schema.
+  // Idempotent column migration: the prod DB predates error_text/request_id/
+  // caller/text_json. If we reference their bind params in the prepared INSERT
+  // (or index a column) without adding it first, db.prepare()/db.exec() throws
+  // at boot time on the old schema — so add whichever are still missing BEFORE
+  // anything else touches those columns.
   const cols = db.query("PRAGMA table_info(usage_record)").all() as Array<{ name: string }>;
-  if (!cols.some((c) => c.name === "error_text")) {
-    db.exec("ALTER TABLE usage_record ADD COLUMN error_text TEXT");
+  const existingCols = new Set(cols.map((c) => c.name));
+  const newColumns = ["error_text", "request_id", "caller", "text_json"];
+  for (const name of newColumns) {
+    if (!existingCols.has(name)) db.exec(`ALTER TABLE usage_record ADD COLUMN ${name} TEXT`);
   }
+
+  db.exec("CREATE INDEX IF NOT EXISTS idx_usage_request_id ON usage_record (request_id);");
 
   const insert = db.prepare(`
     INSERT INTO usage_record
       (ts, endpoint, model, status, latency_ms, response_format,
        input_tokens, output_tokens, audio_tokens, audio_seconds,
-       input_chars, bytes_out, usage_json, error_text)
+       input_chars, bytes_out, usage_json, error_text,
+       request_id, caller, text_json)
     VALUES
       ($ts, $endpoint, $model, $status, $latencyMs, $responseFormat,
        $inputTokens, $outputTokens, $audioTokens, $audioSeconds,
-       $inputChars, $bytesOut, $usageJson, $errorText)
+       $inputChars, $bytesOut, $usageJson, $errorText,
+       $requestId, $caller, $textJson)
   `);
 
   return {
     record(row: UsageRow): void {
       const t = tokens(row.usageJson);
+      const ctx = requestContext.getStore();
+      const text = resolveText(row);
       insert.run({
         $ts: new Date().toISOString(),
         $endpoint: row.endpoint,
@@ -222,6 +331,9 @@ function buildSqliteSink(dbPath: string): UsageSink {
         $bytesOut: row.bytesOut ?? null,
         $usageJson: row.usageJson ? JSON.stringify(row.usageJson) : null,
         $errorText: row.errorText ?? null,
+        $requestId: ctx?.requestId ?? null,
+        $caller: ctx?.caller ?? null,
+        $textJson: text ? JSON.stringify(text) : null,
       });
     },
   };
@@ -246,8 +358,17 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
       const audioSeconds = row.audioSeconds ?? t.audioSeconds;
 
       const modelNorm = normalizeModel(row.model);
-      const cost = computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds, inputChars: row.inputChars ?? null });
+      // The *-request summary rows are a correlation/reporting artifact — the
+      // per-chunk rows (speech/speech-prep/speech-summary/transcriptions)
+      // already carry the billed cost. Costing the summary row too would
+      // double-count spend against the same request.
+      const isRequestSummary = row.endpoint === "speech-request" || row.endpoint === "transcription-request";
+      const cost = isRequestSummary
+        ? { costUsd: null, costSource: "none" as const }
+        : computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds, inputChars: row.inputChars ?? null });
       const now = new Date().toISOString();
+      const ctx = requestContext.getStore();
+      const text = resolveText(row);
 
       const record = {
         source: sourceLabel,
@@ -278,6 +399,9 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
           bytes_out: row.bytesOut ?? null,
           response_format: row.responseFormat ?? null,
           error_text: row.errorText ?? null,
+          request_id: ctx?.requestId ?? null,
+          caller: ctx?.caller ?? null,
+          text: text ?? null,
         },
       };
 

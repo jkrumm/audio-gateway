@@ -5,7 +5,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
-import { recordUsage } from "./usage";
+import { recordUsage, setRequestMeta } from "./usage";
 
 // Gemini TTS pipeline. The OpenAI-compatible `/audio/speech` route 404s for
 // Gemini voice models — TTS only answers on the native `generateContent`
@@ -114,13 +114,13 @@ interface OpenAiUsage {
  * always calls the LLM) and the SUMMARY_SYSTEM_PROMPT is used instead. Usage is
  * recorded under `"speech-summary"` so summary calls are separable in telemetry.
  */
-async function runPrep(input: string, summarize: boolean): Promise<PrepResult> {
+async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
   const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
 
   if (!summarize) {
     const isLong = input.length >= config.ttsChunkCharThreshold;
-    if (config.ttsPrep === "off") return defaultPrep(input);
-    if (config.ttsPrep === "long" && !isLong) return defaultPrep(input);
+    if (config.ttsPrep === "off") return { prep: defaultPrep(input), ran: false };
+    if (config.ttsPrep === "long" && !isLong) return { prep: defaultPrep(input), ran: false };
   }
 
   const systemPrompt = summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT;
@@ -176,7 +176,7 @@ async function runPrep(input: string, summarize: boolean): Promise<PrepResult> {
   });
 
   const content = json.choices?.[0]?.message?.content ?? "";
-  return parsePrepResponse(content);
+  return { prep: parsePrepResponse(content), ran: true };
 }
 
 interface GeminiTtsResponse {
@@ -269,22 +269,32 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   }
 
   const voiceName = VOICES.has(voice) ? voice : DEFAULT_VOICE;
-  const prep = await runPrep(input, summarize);
+  const { prep, ran } = await runPrep(input, summarize);
   // Enforce the per-chunk ceiling regardless of how the prep LLM split things —
   // long chunks are the cause of mid-audio voice drift. Re-splits at natural
   // boundaries; short inputs and well-behaved chunks pass through untouched.
   const chunks = enforceChunkLimits(prep.chunks, CHUNK_LIMITS);
+
+  // Surface as much of the request-level summary meta as is known before synth
+  // even starts, so a later synth failure still leaves lane/mode/chunks visible
+  // on the "speech-request" row (see speech.ts).
+  const title = prep.title || fallbackTitle(input, prep.lang === "de");
+  setRequestMeta({
+    mode: summarize ? "summary" : ran ? "prep" : "direct",
+    lane: "gemini",
+    chunks: chunks.length,
+    languageCode: prep.lang,
+    voice: voiceName,
+    title,
+    outputText: chunks.map((c) => c.text).join(" "),
+  });
 
   // Concurrent, order-preserving synth (Decision 1).
   const parts = await synthChunksConcurrent(model, voiceName, chunks);
 
   const { pcm, sampleRate } = concatPcm(parts);
   const { bytes, contentType } = await transcode(pcm, { kind: "pcm", sampleRate }, responseFormat);
-
-  // Surface the prep-LLM title so OpenAI-compatible clients (e.g. Hermes) can
-  // name the file / Slack attachment. URL-encoded because HTTP header values
-  // are ASCII-only and titles are often German (umlauts). Clients decode it.
-  const title = prep.title || fallbackTitle(input, prep.lang === "de");
+  setRequestMeta({ audioSeconds: pcm.byteLength / (2 * sampleRate), bytesOut: bytes.byteLength });
 
   return new Response(bytes, {
     status: 200,
