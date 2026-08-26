@@ -1,16 +1,20 @@
+import { parseOutputFormat } from "./audio";
 import { handleGeminiSpeech } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
-import { GEMINI_TTS, resolveTtsModel } from "./model-resolution";
+import { GEMINI_TTS, resolveTtsRoute } from "./model-resolution";
+import { handleReplicateSpeech } from "./replicate-tts";
 import { recordUsage } from "./usage";
 
 // Re-export GEMINI_TTS so any existing importers of the old location still work.
 export { GEMINI_TTS };
 
 /**
- * TTS dispatcher. Gemini TTS models route to the native synth pipeline
- * (`gemini-tts.ts`); everything else is a straight proxy of OpenAI's
- * `/audio/speech`, returning the audio stream unchanged.
+ * TTS dispatcher. `resolveTtsRoute` (model-resolution.ts) decides the lane:
+ * Gemini TTS models route to the native synth pipeline (`gemini-tts.ts`),
+ * Replicate `owner/name` ids (ElevenLabs) route to `replicate-tts.ts`,
+ * everything else is a straight proxy of OpenAI's `/audio/speech`, returning
+ * the audio stream unchanged.
  *
  * Decision 2 / §10 bug fix: if the request body is not valid JSON, respond with
  * 400 immediately — do NOT forward the raw body and do NOT write a blank-model
@@ -29,8 +33,14 @@ export async function handleSpeech(req: Request): Promise<Response> {
   let inputChars: number;
   let input: string;
   let voice: string;
-  let responseFormat: string;
+  let responseFormatRaw: string;
   let summarize: boolean;
+  let speed: number | undefined;
+  let instructions: string | undefined;
+  let language: string | undefined;
+  let stability: number | undefined;
+  let style: number | undefined;
+  let similarityBoost: number | undefined;
 
   try {
     const json = JSON.parse(body) as Record<string, unknown>;
@@ -38,8 +48,16 @@ export async function handleSpeech(req: Request): Promise<Response> {
     input = typeof json["input"] === "string" ? json["input"] : "";
     inputChars = input.length;
     voice = typeof json["voice"] === "string" ? json["voice"] : "";
-    responseFormat = typeof json["response_format"] === "string" ? json["response_format"] : "";
+    responseFormatRaw = typeof json["response_format"] === "string" ? json["response_format"] : "";
     summarize = json["summarize"] === true;
+    speed = typeof json["speed"] === "number" ? json["speed"] : undefined;
+    instructions = typeof json["instructions"] === "string" ? json["instructions"] : undefined;
+    // `lang_code` is what Hermes' OpenAI provider sends (tts.openai.language → extra_body.lang_code).
+    const lang = json["language"] ?? json["lang_code"];
+    language = typeof lang === "string" ? lang : undefined;
+    stability = typeof json["stability"] === "number" ? json["stability"] : undefined;
+    style = typeof json["style"] === "number" ? json["style"] : undefined;
+    similarityBoost = typeof json["similarity_boost"] === "number" ? json["similarity_boost"] : undefined;
   } catch {
     // Bug fix: non-JSON body → 400 JSON, no blank-model usage row.
     return Response.json(
@@ -48,28 +66,55 @@ export async function handleSpeech(req: Request): Promise<Response> {
     );
   }
 
+  // Reject an unrecognized response_format before dispatch, in every lane —
+  // a client typo must never silently fall through to a broken upstream call.
+  const responseFormat = parseOutputFormat(responseFormatRaw);
+  if (responseFormat === null) {
+    return Response.json(
+      { error: { message: `unsupported response_format: ${responseFormatRaw}`, type: "invalid_request_error" } },
+      { status: 400 },
+    );
+  }
+
   // Central model resolution: a wrong or absent model never reaches the upstream.
-  const resolved = resolveTtsModel(requestedModel);
-  if (resolved.overridden) {
+  const route = resolveTtsRoute(requestedModel);
+  if (requestedModel.length > 0 && route.model !== requestedModel) {
     log.warn("tts model overridden", {
       endpoint: "speech",
-      requested: resolved.requested,
-      used: resolved.model,
+      requested: requestedModel,
+      used: route.model,
       caller,
     });
   }
 
-  if (GEMINI_TTS.test(resolved.model)) {
-    return handleGeminiSpeech({ model: resolved.model, input, voice, responseFormat, summarize });
+  if (route.provider === "gemini") {
+    return handleGeminiSpeech({ model: route.model, input, voice, responseFormat, summarize });
+  }
+
+  if (route.provider === "replicate") {
+    return handleReplicateSpeech({
+      model: route.model,
+      input,
+      voice,
+      responseFormat,
+      summarize,
+      speed,
+      instructions,
+      language,
+      stability,
+      style,
+      similarityBoost,
+    });
   }
 
   // IU OpenAI passthrough — build body from parsed fields so the resolved model
   // is used, not whatever the caller sent (which may be wrong or absent).
   const upstreamBody = JSON.stringify({
-    model: resolved.model,
+    model: route.model,
     input,
     ...(voice && { voice }),
-    ...(responseFormat && { response_format: responseFormat }),
+    response_format: responseFormat,
+    ...(speed !== undefined && { speed }),
   });
 
   const start = Date.now();
@@ -85,7 +130,7 @@ export async function handleSpeech(req: Request): Promise<Response> {
   if (!res.ok) {
     log.error("tts upstream error", {
       endpoint: "speech",
-      model: resolved.model,
+      model: route.model,
       status: res.status,
       latencyMs,
       caller,
@@ -95,7 +140,7 @@ export async function handleSpeech(req: Request): Promise<Response> {
 
   recordUsage({
     endpoint: "speech",
-    model: resolved.model,
+    model: route.model,
     status: res.status,
     latencyMs,
     inputChars,

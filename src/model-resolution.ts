@@ -15,30 +15,50 @@ import { config } from "./config";
 /** Models served by the native Gemini `generateContent` route, not OpenAI `/audio/speech`. */
 export const GEMINI_TTS = /gemini.*tts/i;
 
+/** A Replicate `owner/name` model id, e.g. "elevenlabs/flash-v2.5". */
+// Each segment must start alphanumeric so a dot-segment (`foo/..`) can never
+// reach the credentialed upstream URL builder.
+export const REPLICATE_MODEL = /^[a-z0-9][a-z0-9-]*\/[a-z0-9][a-z0-9.-]*$/;
+
 export interface ModelResolution {
   model: string;
   requested: string;
   overridden: boolean;
 }
 
+export type TtsProvider = "gemini" | "replicate" | "passthrough";
+
+export interface TtsRoute {
+  provider: TtsProvider;
+  model: string;
+}
+
+function classifyTtsModel(model: string): TtsProvider {
+  if (GEMINI_TTS.test(model)) return "gemini";
+  if (REPLICATE_MODEL.test(model)) return "replicate";
+  return "passthrough";
+}
+
 /**
- * Resolve the TTS model to use.
+ * Resolve which TTS lane serves a request: the native Gemini `generateContent`
+ * pipeline, the Replicate `owner/name` route (ElevenLabs models), or a
+ * straight IU `/audio/speech` passthrough for anything else.
  *
- * If `requested` matches /gemini.*tts/i it is a recognized Gemini TTS model
- * and is honoured as-is. Any other value (empty, a chat model like
- * "gemini-3.1-flash", "tts-1", etc.) is replaced with `config.ttsModel`.
- * `overridden` is true only when the caller sent a non-empty but unrecognized
- * value — empty means omitted, which is the normal Argo/Hermes usage pattern.
+ * An empty `requested` defaults to `config.ttsModel`. A non-empty value that
+ * matches neither Gemini nor the Replicate id shape ALSO falls back to
+ * `config.ttsModel` — deliberately: the gateway owns model choice, and a
+ * caller's typo (`tts-1`, `gemini-3.1-flash`) must land on the configured
+ * default rather than on an upstream that 400s. The passthrough lane is
+ * therefore only reachable when `TTS_MODEL` itself names a plain IU
+ * `/audio/speech` model.
  */
-export function resolveTtsModel(requested: string): ModelResolution {
-  if (GEMINI_TTS.test(requested)) {
-    return { model: requested, requested, overridden: false };
-  }
-  return {
-    model: config.ttsModel,
-    requested,
-    overridden: requested.length > 0,
-  };
+export function resolveTtsRoute(requested: string): TtsRoute {
+  const candidate = requested.length > 0 ? requested : config.ttsModel;
+  const provider = classifyTtsModel(candidate);
+  if (provider !== "passthrough") return { provider, model: candidate };
+
+  const fallback = config.ttsModel;
+  return { provider: classifyTtsModel(fallback), model: fallback };
 }
 
 /**

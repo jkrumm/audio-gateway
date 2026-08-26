@@ -1,6 +1,8 @@
+import type { AudioOutputFormat, ChunkAudio } from "./audio";
+import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
 import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { enforceChunkLimits, parsePrepResponse, SAMPLE_RATE_DEFAULT } from "./gemini-tts-core";
+import { enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { recordUsage } from "./usage";
@@ -23,8 +25,6 @@ const VOICES = new Set([
 ]);
 const DEFAULT_VOICE = "Charon";
 
-const SILENCE_MS = 400;
-
 /** Hard per-chunk ceilings applied to the prep output before synthesis (see config). */
 const CHUNK_LIMITS: ChunkLimits = {
   targetWords: config.ttsChunkTargetWords,
@@ -36,7 +36,7 @@ export interface GeminiSpeechRequest {
   model: string;
   input: string;
   voice: string;
-  responseFormat: string;
+  responseFormat: AudioOutputFormat;
   summarize: boolean;
 }
 
@@ -63,12 +63,6 @@ Your job, in order:
 Return STRICT JSON only, no markdown, no commentary:
 {"lang":"de"|"en","title":"<short title>","chunks":[{"style":"<directive>","text":"<transcript with inline tags>"}]}`;
 
-/** Crude German detection for the no-LLM default path (off / short+long-mode). */
-function looksGerman(text: string): boolean {
-  if (/[äöüßÄÖÜ]/.test(text)) return true;
-  return /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute)\b/i.test(text);
-}
-
 /** First few words of the input as a fallback title for the no-LLM path. */
 function fallbackTitle(input: string, de: boolean): string {
   const words = input.replace(/\s+/g, " ").trim().split(" ").slice(0, 6).join(" ");
@@ -85,13 +79,16 @@ function defaultPrep(input: string): PrepResult {
   return { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks: [{ style, text: input.trim() }] };
 }
 
-interface RawResponse {
+export interface RawResponse {
   status: number;
   body: string;
 }
 
-/** fetch with backoff retry on 503/429 (mirrors modelpick's transient-failure handling). */
-async function rawFetch(url: string, init: RequestInit, attempts = 3): Promise<RawResponse> {
+/**
+ * fetch with backoff retry on 503/429 (mirrors modelpick's transient-failure
+ * handling). Exported — shared with the Replicate lane's create/poll calls.
+ */
+export async function rawFetch(url: string, init: RequestInit, attempts = 3): Promise<RawResponse> {
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const res = await fetch(url, init);
     if ((res.status === 503 || res.status === 429) && attempt < attempts) {
@@ -189,11 +186,6 @@ interface GeminiTtsResponse {
   usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
 }
 
-interface ChunkAudio {
-  pcm: Uint8Array;
-  sampleRate: number;
-}
-
 /** Record a best-effort error usage row for a failed Gemini synth (bug fix §10.1). */
 function recordSpeechError(model: string, status: number, latencyMs: number, errorText?: string | null): void {
   recordUsage({ endpoint: "speech", model, status, latencyMs, errorText: errorText ?? null });
@@ -254,101 +246,17 @@ async function synthChunk(model: string, voiceName: string, chunk: PrepChunk): P
   return { pcm, sampleRate };
 }
 
-/** Concatenate s16le PCM chunks with SILENCE_MS of silence between them. */
-function concatPcm(parts: ChunkAudio[]): { pcm: Uint8Array; sampleRate: number } {
-  const sampleRate = parts[0]?.sampleRate ?? SAMPLE_RATE_DEFAULT;
-  const silenceBytes = Math.round((SILENCE_MS / 1000) * sampleRate) * 2; // 16-bit mono
-  const gaps = Math.max(0, parts.length - 1);
-  const total = parts.reduce((n, p) => n + p.pcm.byteLength, 0) + gaps * silenceBytes;
-  const out = new Uint8Array(total);
-  let offset = 0;
-  parts.forEach((p, i) => {
-    out.set(p.pcm, offset);
-    offset += p.pcm.byteLength;
-    if (i < parts.length - 1) offset += silenceBytes; // leave zeroed silence
-  });
-  return { pcm: out, sampleRate };
-}
-
-interface Encoded {
-  bytes: ArrayBuffer;
-  contentType: string;
-}
-
-/**
- * Transcode raw s16le mono PCM to a compressed, speech-tuned MP3 (default) or
- * Opus/OGG via ffmpeg. Bitrates are intentionally low — this is TTS narration,
- * not music — and Opus uses libopus's `voip` mode, optimized for voice.
- */
-async function transcode(pcm: Uint8Array, sampleRate: number, opus: boolean): Promise<Encoded> {
-  const codec = opus
-    ? ["-c:a", "libopus", "-b:a", `${config.ttsOpusBitrateKbps}k`, "-application", "voip", "-f", "ogg"]
-    : ["-c:a", "libmp3lame", "-b:a", `${config.ttsBitrateKbps}k`, "-f", "mp3"];
-  const proc = Bun.spawn(
-    ["ffmpeg", "-hide_banner", "-loglevel", "error", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", "pipe:0", ...codec, "pipe:1"],
-    { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
-  );
-  // Read stdout/stderr concurrently with the write so the output pipe never deadlocks.
-  const stdout = new Response(proc.stdout).arrayBuffer();
-  const stderr = new Response(proc.stderr).text();
-  proc.stdin.write(pcm);
-  await proc.stdin.end();
-  const [bytes, errText, exitCode] = await Promise.all([stdout, stderr, proc.exited]);
-  if (exitCode !== 0) {
-    throw new Error(`ffmpeg transcode failed (${exitCode}): ${errText.slice(0, 300)}`);
-  }
-  return { bytes, contentType: opus ? "audio/ogg" : "audio/mpeg" };
-}
-
 /**
  * Synthesize all chunks with bounded concurrency, preserving order (Decision 1).
- *
- * Runs up to `config.ttsConcurrency` chunks in parallel. Results are reassembled
- * by index. If any chunk fails after its retries, all other in-flight chunks are
- * allowed to settle (best-effort usage rows recorded) before the error is thrown
- * to preserve "no silent partial output" semantics.
+ * Thin wrapper around the shared `synthConcurrent` runner (gemini-tts-core.ts),
+ * binding it to this lane's model/voice and `config.ttsConcurrency`.
  */
 export async function synthChunksConcurrent(
   model: string,
   voiceName: string,
   chunks: PrepChunk[],
 ): Promise<ChunkAudio[]> {
-  const concurrency = config.ttsConcurrency;
-  const results: (ChunkAudio | Error)[] = new Array(chunks.length);
-
-  // Process in windows of `concurrency` to stay within the bounded pool.
-  // Each window fans out, waits for all, then moves to the next.
-  for (let windowStart = 0; windowStart < chunks.length; windowStart += concurrency) {
-    const windowEnd = Math.min(windowStart + concurrency, chunks.length);
-    const batch = chunks.slice(windowStart, windowEnd);
-    const settled = await Promise.allSettled(
-      batch.map((chunk) => synthChunk(model, voiceName, chunk)),
-    );
-    for (let i = 0; i < settled.length; i++) {
-      const outcome = settled[i];
-      if (outcome === undefined) continue; // required by noUncheckedIndexedAccess
-      if (outcome.status === "fulfilled") {
-        results[windowStart + i] = outcome.value;
-      } else {
-        results[windowStart + i] = outcome.reason instanceof Error
-          ? outcome.reason
-          : new Error(String(outcome.reason));
-      }
-    }
-    // A chunk in this window failed after its retries. The window has settled
-    // (above), but do NOT launch further windows — they'd burn upstream quota on
-    // output the 500 discards (Decision 1: don't abort in-flight, but don't start
-    // new batches once a failure is known).
-    if (results.some((r) => r instanceof Error)) break;
-  }
-
-  // Check for failures; already-settled error rows were recorded inside synthChunk.
-  const parts: ChunkAudio[] = [];
-  for (const result of results) {
-    if (result instanceof Error) throw result;
-    if (result !== undefined) parts.push(result);
-  }
-  return parts;
+  return synthConcurrent(config.ttsConcurrency, chunks, (chunk) => synthChunk(model, voiceName, chunk));
 }
 
 export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<Response> {
@@ -371,7 +279,7 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   const parts = await synthChunksConcurrent(model, voiceName, chunks);
 
   const { pcm, sampleRate } = concatPcm(parts);
-  const { bytes, contentType } = await transcode(pcm, sampleRate, responseFormat === "opus");
+  const { bytes, contentType } = await transcode(pcm, { kind: "pcm", sampleRate }, responseFormat);
 
   // Surface the prep-LLM title so OpenAI-compatible clients (e.g. Hermes) can
   // name the file / Slack attachment. URL-encoded because HTTP header values

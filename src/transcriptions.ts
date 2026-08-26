@@ -1,4 +1,4 @@
-import { unlink } from "node:fs/promises";
+import { audioDuration } from "./audio";
 import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
@@ -14,26 +14,6 @@ import { recordUsage } from "./usage";
  */
 const SYNTH_MODEL = /transcribe/i;
 const RICH_FORMATS = new Set(["verbose_json", "srt", "vtt"]);
-
-/** Probe audio length via ffprobe; 0 if unavailable (timing is best-effort). */
-async function audioDuration(file: File): Promise<number> {
-  const tmp = `/tmp/audio-gateway-${crypto.randomUUID()}`;
-  try {
-    await Bun.write(tmp, await file.arrayBuffer());
-    const proc = Bun.spawn(
-      ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=nw=1:nk=1", tmp],
-      { stdout: "pipe", stderr: "ignore" },
-    );
-    const out = await new Response(proc.stdout).text();
-    await proc.exited;
-    const d = Number.parseFloat(out.trim());
-    return Number.isFinite(d) ? d : 0;
-  } catch {
-    return 0;
-  } finally {
-    await unlink(tmp).catch(() => {});
-  }
-}
 
 export const srtTime = (s: number): string => {
   const ms = Math.max(0, Math.round(s * 1000));

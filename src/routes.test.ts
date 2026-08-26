@@ -1,47 +1,76 @@
 /**
  * Mocked-route tests for audio-gateway.
  *
- * Uses a temp SQLite DB and stubs globalThis.fetch to avoid any real network
- * calls. Exercises: bug fixes (Decision 2), suffix routing, auth gate, and
- * graceful-shutdown /health → 503 (Decision 5).
+ * Stubs globalThis.fetch to avoid any real network calls. Exercises: bug
+ * fixes (Decision 2), suffix routing, auth gate, and graceful-shutdown
+ * /health → 503 (Decision 5).
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { UsageRow } from "./usage";
 
 // ---------------------------------------------------------------------------
 // Set env before importing any gateway module (config.ts reads env at import).
 // We set PROXY_API_KEY to a non-empty test key so the auth gate is exercisable.
 // ---------------------------------------------------------------------------
 
-const tmpDir = mkdtempSync(join(tmpdir(), "audio-gateway-test-"));
-const DB_PATH = join(tmpDir, "test-usage.db");
-
-process.env["IU_API_KEY"] = "test-key";
-process.env["IU_OPENAI_BASE_URL"] = "https://iu.example.com/openai/v1";
-process.env["IU_GEMINI_BASE_URL"] = "https://iu.example.com/gemini/v1beta";
-process.env["USAGE_DB"] = DB_PATH;
-process.env["PROXY_API_KEY"] = "test-proxy-secret";
-process.env["TTS_PREP"] = "off"; // avoid LLM calls in dispatch path
+// See audio.test.ts — config.ts is a process-wide singleton across bun test's
+// shared module registry; every config-touching file sets this SAME baseline.
+process.env["IU_API_KEY"] ??= "test-key";
+process.env["IU_OPENAI_BASE_URL"] ??= "https://iu.example.com/openai/v1";
+process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
+process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
+process.env["USAGE_DB"] ??= ":memory:";
+process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
+process.env["TTS_PREP"] ??= "off"; // avoid LLM calls in dispatch path
 
 // Now import gateway modules (env is already set).
 const { handleRequest, setDraining } = await import("./index");
 
 // ---------------------------------------------------------------------------
-// DB helper — read rows directly to assert usage recording.
+// Usage-row capture — intercepts the shared `_sink` singleton (usage.ts) at
+// the `record()` boundary rather than reading a SQLite file. `config.usageDb`
+// is a genuine process-wide singleton (bun test shares one module registry
+// across ALL test files, and config.ts reads env exactly once, on whichever
+// file's import chain resolves it first — NOT necessarily this file's own
+// USAGE_DB assignment above). Intercepting the sink sidesteps that race
+// entirely: it works regardless of which physical DB file ends up wired up.
 // ---------------------------------------------------------------------------
 
+const { _sink: usageSink } = await import("./usage");
+
+let capturedRows: Array<Record<string, unknown>> = [];
+
+/** Mirror the sqlite adapter's column shape so existing snake_case assertions keep working. */
+function toRow(row: UsageRow): Record<string, unknown> {
+  return {
+    endpoint: row.endpoint,
+    model: row.model,
+    status: row.status,
+    latency_ms: row.latencyMs,
+    response_format: row.responseFormat ?? null,
+    input_tokens: row.inputTokens ?? null,
+    output_tokens: row.outputTokens ?? null,
+    audio_tokens: row.audioTokens ?? null,
+    audio_seconds: row.audioSeconds ?? null,
+    input_chars: row.inputChars ?? null,
+    bytes_out: row.bytesOut ?? null,
+    usage_json: row.usageJson ? JSON.stringify(row.usageJson) : null,
+    error_text: row.errorText ?? null,
+  };
+}
+
+const originalSinkRecord = usageSink.record.bind(usageSink);
+(usageSink as { record: typeof usageSink.record }).record = (row) => {
+  capturedRows.push(toRow(row));
+  return originalSinkRecord(row);
+};
+
 function getUsageRows(): Array<Record<string, unknown>> {
-  const db = new Database(DB_PATH, { readonly: true });
-  const rows = db.query("SELECT * FROM usage_record ORDER BY id").all() as Array<Record<string, unknown>>;
-  db.close();
-  return rows;
+  return capturedRows;
 }
 
 function countUsageRows(): number {
-  return getUsageRows().length;
+  return capturedRows.length;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,21 +105,10 @@ afterEach(() => {
   setDraining(false);
 });
 
-// Delete all rows between tests so row counts are per-test.
+// Clear captured rows between tests so row counts are per-test.
 beforeEach(() => {
-  try {
-    const db = new Database(DB_PATH);
-    db.exec("DELETE FROM usage_record;");
-    db.close();
-  } catch {
-    // DB may not exist yet on the very first run — ignore.
-  }
+  capturedRows = [];
 });
-
-// No temp-dir cleanup: usage.ts opens a single process-lifetime SQLite connection
-// (a module singleton). bun test shares one module registry across files, so all
-// files write through this connection. Deleting its backing dir mid-run causes
-// SQLITE_IOERR_VNODE in sibling test files. The few-KB temp DB is reaped by the OS.
 
 // ---------------------------------------------------------------------------
 // Helper: build a minimal multipart STT request (auth header included).

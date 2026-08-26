@@ -83,6 +83,7 @@ interface Rate {
   audioInput?: number; // audio input tokens, USD per 1M (STT split)
   output?: number; // output tokens, USD per 1M
   perMinute?: number; // whisper-style, USD per minute of audio
+  perInputChars1k?: number; // Replicate ElevenLabs TTS, USD per 1,000 input characters
 }
 
 // USD list prices used as ESTIMATES — IU's actual EU per-token rates may differ
@@ -106,6 +107,13 @@ const RATES: Record<string, Rate> = {
   "whisper": { perMinute: 0.006 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
+  // Replicate pricing page, verified 2026-08-26: $0.05 per 1,000 input characters.
+  "flash-v2.5": { perInputChars1k: 0.05 },
+  // Not published as a separate line item by Replicate — assumed identical to
+  // flash-v2.5 pending a dedicated rate. Re-check if turbo spend matters.
+  "turbo-v2.5": { perInputChars1k: 0.05 }, // unverified
+  // Deliberately absent: "v3". No published per-char or per-token rate found;
+  // reports as cost_source: 'none' rather than inventing a number.
 };
 
 interface CostInputs {
@@ -113,6 +121,7 @@ interface CostInputs {
   outputTokens: number | null;
   audioTokens: number | null;
   audioSeconds: number | null;
+  inputChars: number | null;
 }
 
 function computeCost(
@@ -126,6 +135,12 @@ function computeCost(
   if (rate.perMinute != null) {
     if (c.audioSeconds == null) return { costUsd: null, costSource: "none" };
     return { costUsd: (c.audioSeconds / 60) * rate.perMinute, costSource: "estimated" };
+  }
+
+  // Per-1k-input-chars models (Replicate ElevenLabs TTS): need input chars.
+  if (rate.perInputChars1k != null) {
+    if (c.inputChars == null) return { costUsd: null, costSource: "none" };
+    return { costUsd: (c.inputChars / 1000) * rate.perInputChars1k, costSource: "estimated" };
   }
 
   const input = c.inputTokens ?? 0;
@@ -231,7 +246,7 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
       const audioSeconds = row.audioSeconds ?? t.audioSeconds;
 
       const modelNorm = normalizeModel(row.model);
-      const cost = computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds });
+      const cost = computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds, inputChars: row.inputChars ?? null });
       const now = new Date().toISOString();
 
       const record = {

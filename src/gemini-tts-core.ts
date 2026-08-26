@@ -1,8 +1,9 @@
-// Pure, config-free transforms for the Gemini TTS pipeline: PCM/WAV framing and
-// prep-response parsing. Kept separate from gemini-tts.ts (which boots config,
-// fetch and ffmpeg) so these can be unit-tested without any environment.
-
-export const SAMPLE_RATE_DEFAULT = 24000;
+// Pure, config-free transforms shared by both TTS lanes: prep-response
+// parsing, chunk-size enforcement, language detection, and the bounded-
+// concurrency synth runner. Kept separate from gemini-tts.ts/replicate-tts.ts
+// (which boot config, fetch and ffmpeg) so these can be unit-tested without
+// any environment. PCM/WAV framing and transcoding live in audio.ts instead —
+// that's a real ffmpeg/ffprobe process boundary, not a pure transform.
 
 export interface PrepChunk {
   /** Natural-language delivery directive, in the transcript's language. Spoken as direction, not aloud. */
@@ -18,34 +19,51 @@ export interface PrepResult {
   chunks: PrepChunk[];
 }
 
+/** Crude German detection shared by both TTS lanes (no-LLM default path, and language steering). */
+export function looksGerman(text: string): boolean {
+  if (/[äöüßÄÖÜ]/.test(text)) return true;
+  return /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute)\b/i.test(text);
+}
+
 /**
- * Wrap raw s16le PCM in a 44-byte WAV header (mono, 16-bit). Not used by the
- * ffmpeg path (which consumes raw `-f s16le`), but kept as a documented
- * single-chunk fallback and exercised by the header unit test.
+ * Run `synth` over `items` with bounded concurrency, reassembling results in
+ * original order regardless of completion order (Decision 1). Processes in
+ * windows of `concurrency`; if any item in a window fails after its own
+ * retries, the window is allowed to fully settle (so every item's outcome is
+ * observable) but no further windows start — "no silent partial output": the
+ * caller gets either every result in order, or the first error.
  */
-export function pcmToWav(pcm: Uint8Array, sampleRate = SAMPLE_RATE_DEFAULT, channels = 1, bitsPerSample = 16): ArrayBuffer {
-  const blockAlign = (channels * bitsPerSample) / 8;
-  const byteRate = sampleRate * blockAlign;
-  const buffer = new ArrayBuffer(44 + pcm.byteLength);
-  const view = new DataView(buffer);
-  const writeStr = (off: number, s: string): void => {
-    for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i));
-  };
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + pcm.byteLength, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true); // PCM subchunk size
-  view.setUint16(20, 1, true); // audio format = PCM
-  view.setUint16(22, channels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeStr(36, "data");
-  view.setUint32(40, pcm.byteLength, true);
-  new Uint8Array(buffer, 44).set(pcm);
-  return buffer;
+export async function synthConcurrent<I, O>(
+  concurrency: number,
+  items: readonly I[],
+  synth: (item: I, index: number) => Promise<O>,
+): Promise<O[]> {
+  const results: (O | Error)[] = new Array(items.length);
+
+  for (let windowStart = 0; windowStart < items.length; windowStart += concurrency) {
+    const windowEnd = Math.min(windowStart + concurrency, items.length);
+    const batch = items.slice(windowStart, windowEnd);
+    const settled = await Promise.allSettled(batch.map((item, i) => synth(item, windowStart + i)));
+    for (let i = 0; i < settled.length; i++) {
+      const outcome = settled[i];
+      if (outcome === undefined) continue; // required by noUncheckedIndexedAccess
+      if (outcome.status === "fulfilled") {
+        results[windowStart + i] = outcome.value;
+      } else {
+        results[windowStart + i] = outcome.reason instanceof Error
+          ? outcome.reason
+          : new Error(String(outcome.reason));
+      }
+    }
+    if (results.some((r) => r instanceof Error)) break;
+  }
+
+  const out: O[] = [];
+  for (const result of results) {
+    if (result instanceof Error) throw result;
+    if (result !== undefined) out.push(result);
+  }
+  return out;
 }
 
 /**

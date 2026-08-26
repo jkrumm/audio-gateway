@@ -29,10 +29,25 @@ const oneOf = <T extends string>(name: string, allowed: readonly T[], fallback: 
   return raw as T;
 };
 
+const iuBaseUrl = required("IU_OPENAI_BASE_URL").replace(/\/+$/, "");
+
+/**
+ * IU Replicate base, e.g. `.../replicate/v1` — serves ElevenLabs TTS models via
+ * `POST /models/{owner}/{name}/predictions`. Optional env override
+ * (IU_REPLICATE_BASE_URL) for when the derivation below doesn't hold; when
+ * unset it is DERIVED from IU_OPENAI_BASE_URL by swapping a trailing
+ * `/openai/v1` for `/replicate/v1` — prod compose does not pass a dedicated
+ * var, so this derivation must hold there.
+ */
+const iuReplicateBaseUrl = (
+  process.env["IU_REPLICATE_BASE_URL"] ?? iuBaseUrl.replace(/\/openai\/v1$/, "/replicate/v1")
+).replace(/\/+$/, "");
+
 export const config = {
   port: num("PORT", 7714),
   iuApiKey: required("IU_API_KEY"),
-  iuBaseUrl: required("IU_OPENAI_BASE_URL").replace(/\/+$/, ""),
+  iuBaseUrl,
+  iuReplicateBaseUrl,
   /**
    * IU Gemini (native `generateContent`) base, e.g. `.../gemini/v1beta`. Optional
    * at startup — only a Gemini TTS request needs it, so STT-only deployments boot
@@ -104,6 +119,22 @@ export const config = {
    * Clamped to [1, 8]; value of 1 = sequential (matches the original audio-proxy behaviour).
    */
   ttsConcurrency: Math.min(8, Math.max(1, num("TTS_CONCURRENCY", 4))),
+  /**
+   * Default ElevenLabs voice (Replicate lane) when a request omits or sends an
+   * unrecognized voice name — see the VOICES enum in replicate-tts.ts.
+   */
+  ttsElevenLabsVoice: process.env["TTS_ELEVENLABS_VOICE"] ?? "Roger",
+  /** ElevenLabs delivery defaults (Replicate lane), all 0–1. */
+  ttsElevenLabsStability: num("TTS_ELEVENLABS_STABILITY", 0.5),
+  ttsElevenLabsStyle: num("TTS_ELEVENLABS_STYLE", 0),
+  ttsElevenLabsSimilarity: num("TTS_ELEVENLABS_SIMILARITY", 0.75),
+  /**
+   * Comma-separated Replicate model ids (or prefixes) that get the prep LLM
+   * pass before synthesis. A model not listed skips prep entirely — a single
+   * Replicate call, no title, no LLM round trip (the Hermes chat fast path).
+   * `summarize: true` still forces prep regardless of this list.
+   */
+  ttsReplicatePrepModels: process.env["TTS_REPLICATE_PREP_MODELS"] ?? "elevenlabs/v3",
   /** Usage sink selection: which adapter records audio usage rows. */
   usageSink: oneOf("USAGE_SINK", ["sqlite", "http", "both"] as const, "sqlite"),
   /** Base URL for the HTTP usage sink (Phase-3 seam; unused while sink is `sqlite`). */

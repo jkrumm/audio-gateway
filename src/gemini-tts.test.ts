@@ -11,11 +11,16 @@ import type { PrepChunk } from "./gemini-tts-core";
 // Env must be set before importing modules — config.ts reads env at import.
 // In-memory usage DB: this test asserts only audio ordering, never usage rows,
 // and an in-memory sink keeps it independent of sibling test files' temp dirs.
-process.env["IU_API_KEY"] = "test-key";
-process.env["IU_OPENAI_BASE_URL"] = "https://iu.example.com/openai/v1";
-process.env["IU_GEMINI_BASE_URL"] = "https://iu.example.com/gemini/v1beta";
-process.env["USAGE_DB"] = ":memory:";
-process.env["TTS_CONCURRENCY"] = "4";
+// See audio.test.ts — config.ts is a process-wide singleton across bun test's
+// shared module registry; every config-touching file sets this SAME baseline.
+process.env["IU_API_KEY"] ??= "test-key";
+process.env["IU_OPENAI_BASE_URL"] ??= "https://iu.example.com/openai/v1";
+process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
+process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
+process.env["USAGE_DB"] ??= ":memory:";
+process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
+process.env["TTS_PREP"] ??= "off";
+process.env["TTS_CONCURRENCY"] ??= "4";
 
 const { synthChunksConcurrent } = await import("./gemini-tts");
 

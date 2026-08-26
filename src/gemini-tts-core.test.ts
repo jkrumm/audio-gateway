@@ -1,30 +1,58 @@
 import { describe, expect, test } from "bun:test";
 import type { ChunkLimits } from "./gemini-tts-core";
-import { enforceChunkLimits, parsePrepResponse, pcmToWav } from "./gemini-tts-core";
+import { enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 
-describe("pcmToWav", () => {
-  test("writes a valid 44-byte WAV header for mono 16-bit 24kHz", () => {
-    const pcm = new Uint8Array([1, 2, 3, 4]);
-    const buf = pcmToWav(pcm, 24000);
-    const view = new DataView(buf);
-    const str = (off: number, len: number): string =>
-      String.fromCharCode(...new Uint8Array(buf, off, len));
+// pcmToWav now lives in audio.test.ts alongside the rest of the ffmpeg/ffprobe
+// process boundary module it moved into.
 
-    expect(buf.byteLength).toBe(44 + pcm.byteLength);
-    expect(str(0, 4)).toBe("RIFF");
-    expect(view.getUint32(4, true)).toBe(36 + pcm.byteLength);
-    expect(str(8, 4)).toBe("WAVE");
-    expect(str(12, 4)).toBe("fmt ");
-    expect(view.getUint32(16, true)).toBe(16); // PCM subchunk size
-    expect(view.getUint16(20, true)).toBe(1); // audio format = PCM
-    expect(view.getUint16(22, true)).toBe(1); // mono
-    expect(view.getUint32(24, true)).toBe(24000); // sample rate
-    expect(view.getUint32(28, true)).toBe(24000 * 2); // byte rate = rate * blockAlign
-    expect(view.getUint16(32, true)).toBe(2); // block align = channels * bytes/sample
-    expect(view.getUint16(34, true)).toBe(16); // bits per sample
-    expect(str(36, 4)).toBe("data");
-    expect(view.getUint32(40, true)).toBe(pcm.byteLength);
-    expect(new Uint8Array(buf, 44)).toEqual(pcm);
+describe("looksGerman", () => {
+  test("detects umlauts", () => {
+    expect(looksGerman("Grüß dich")).toBe(true);
+  });
+
+  test("detects common German stopwords", () => {
+    expect(looksGerman("Das ist ein Test und nicht mehr")).toBe(true);
+  });
+
+  test("returns false for plain English", () => {
+    expect(looksGerman("This is a simple test sentence")).toBe(false);
+  });
+});
+
+describe("synthConcurrent", () => {
+  test("preserves order even when later items finish first", async () => {
+    const items = [0, 1, 2, 3, 4];
+    const out = await synthConcurrent(2, items, async (i) => {
+      await Bun.sleep((5 - i) * 5);
+      return i * 10;
+    });
+    expect(out).toEqual([0, 10, 20, 30, 40]);
+  });
+
+  test("throws the first failure — no silent partial output", async () => {
+    const items = [0, 1, 2, 3];
+    await expect(
+      synthConcurrent(2, items, async (i) => {
+        if (i === 1) throw new Error("boom");
+        return i;
+      }),
+    ).rejects.toThrow(/boom/);
+  });
+
+  test("does not start a new window once a failure is known", async () => {
+    const seen: number[] = [];
+    const items = [0, 1, 2, 3, 4, 5];
+    await expect(
+      synthConcurrent(2, items, async (i) => {
+        seen.push(i);
+        if (i === 1) throw new Error("boom");
+        return i;
+      }),
+    ).rejects.toThrow();
+    // Window 1 (items 0,1) is allowed to fully settle; windows after the
+    // failure (items 4,5) must never start.
+    expect(seen).not.toContain(4);
+    expect(seen).not.toContain(5);
   });
 });
 

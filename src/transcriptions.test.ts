@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { srt, srtTime, verboseJson, vtt } from "./transcriptions";
+
+// See audio.test.ts — config.ts is a process-wide singleton across bun test's
+// shared module registry; every config-touching file sets this SAME baseline.
+// A dynamic import (not a static one) is required here so these assignments
+// run before "./transcriptions" (which imports config.ts transitively) does —
+// a static `import` would be hoisted ahead of any top-level statement.
+process.env["IU_API_KEY"] ??= "test-key";
+process.env["IU_OPENAI_BASE_URL"] ??= "https://iu.example.com/openai/v1";
+process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
+process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
+process.env["USAGE_DB"] ??= ":memory:";
+process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
+process.env["TTS_PREP"] ??= "off";
+
+const { srt, srtTime, verboseJson, vtt } = await import("./transcriptions");
 
 describe("srtTime", () => {
   test("formats zero as 00:00:00,000", () => {

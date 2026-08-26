@@ -6,6 +6,19 @@ IU_API_KEY=op://common/anthropic/API_KEY
 IU_OPENAI_BASE_URL=op://common/anthropic/OPENAI_BASE_URL
 IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 
+# Optional override — only needed if the IU Replicate route doesn't live at
+# <IU_OPENAI_BASE_URL with /openai/v1 swapped for /replicate/v1> (the default
+# derivation config.ts falls back to when this is unset).
+# IU_REPLICATE_BASE_URL=op://common/anthropic/REPLICATE_BASE_URL
+
+# Optional ElevenLabs (Replicate lane) delivery overrides — defaults live in
+# config.ts (voice Roger, stability 0.5, style 0, similarity 0.75).
+# TTS_ELEVENLABS_VOICE=Roger
+# TTS_ELEVENLABS_STABILITY=0.5
+# TTS_ELEVENLABS_STYLE=0
+# TTS_ELEVENLABS_SIMILARITY=0.75
+# TTS_REPLICATE_PREP_MODELS=elevenlabs/v3
+
 # Optional STT language steering (client-supplied values always win)
 STT_PROMPT=Die Aufnahme ist auf Deutsch oder Englisch.
 
