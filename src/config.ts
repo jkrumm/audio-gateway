@@ -123,7 +123,7 @@ export const config = {
    * Default ElevenLabs voice (Replicate lane) when a request omits or sends an
    * unrecognized voice name — see the VOICES enum in replicate-tts.ts.
    */
-  ttsElevenLabsVoice: process.env["TTS_ELEVENLABS_VOICE"] ?? "Roger",
+  ttsElevenLabsVoice: process.env["TTS_ELEVENLABS_VOICE"] ?? "Mark",
   /** ElevenLabs delivery defaults (Replicate lane), all 0–1. */
   ttsElevenLabsStability: num("TTS_ELEVENLABS_STABILITY", 0.5),
   ttsElevenLabsStyle: num("TTS_ELEVENLABS_STYLE", 0),

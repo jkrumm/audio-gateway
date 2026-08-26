@@ -12,8 +12,8 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 # IU_REPLICATE_BASE_URL=op://common/anthropic/REPLICATE_BASE_URL
 
 # Optional ElevenLabs (Replicate lane) delivery overrides — defaults live in
-# config.ts (voice Roger, stability 0.5, style 0, similarity 0.75).
-# TTS_ELEVENLABS_VOICE=Roger
+# config.ts (voice Mark, stability 0.5, style 0, similarity 0.75).
+# TTS_ELEVENLABS_VOICE=Mark
 # TTS_ELEVENLABS_STABILITY=0.5
 # TTS_ELEVENLABS_STYLE=0
 # TTS_ELEVENLABS_SIMILARITY=0.75
