@@ -40,7 +40,7 @@ export interface GeminiSpeechRequest {
   summarize: boolean;
 }
 
-const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into ONE short spoken confirmation, in the persona of Hermes — a calm, warm, concise "sharp older friend". The user is in a hands-free voice conversation and only wants the gist spoken aloud, not the full reply.
+export const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into ONE short spoken confirmation, in the persona of Hermes — a calm, warm, concise "sharp older friend". The user is in a hands-free voice conversation and only wants the gist spoken aloud, not the full reply.
 
 Your job, in order:
 1. Detect the language of the input: "de" (German) or "en" (English).

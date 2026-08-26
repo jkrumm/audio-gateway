@@ -1,7 +1,7 @@
 import type { AudioOutputFormat, ChunkAudio } from "./audio";
 import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
 import { config } from "./config";
-import { rawFetch } from "./gemini-tts";
+import { rawFetch, SUMMARY_SYSTEM_PROMPT } from "./gemini-tts";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
@@ -136,7 +136,9 @@ async function runReplicatePrep(
     body: JSON.stringify({
       model: config.ttsPrepModel,
       messages: [
-        { role: "system", content: PREP_SYSTEM_PROMPT_ELEVENLABS },
+        // `summarize` swaps the whole job: one ≤30-word spoken confirmation
+        // instead of a faithful chunked rewrite (Hermes' spoken-summary mode).
+        { role: "system", content: summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT_ELEVENLABS },
         { role: "user", content: userContent },
       ],
       max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),

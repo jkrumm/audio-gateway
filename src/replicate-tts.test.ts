@@ -297,6 +297,44 @@ describe("handleReplicateSpeech — success paths", () => {
   });
 });
 
+describe("handleReplicateSpeech — spoken summary", () => {
+  test("summarize on a prep-off model uses the SUMMARY prompt, one prediction, title header", async () => {
+    let systemPrompt = "";
+    setFetch(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/chat/completions")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ role: string; content: string }> };
+        systemPrompt = body.messages[0]?.content ?? "";
+        return jsonRes({
+          choices: [{ message: { content: JSON.stringify({
+            lang: "de", title: "Todo erstellt",
+            chunks: [{ style: "ruhig", text: "Todo Serverrechnung für morgen erstellt." }],
+          }) } }],
+          usage: { prompt_tokens: 80, completion_tokens: 20 },
+        });
+      }
+      if (u === PREDICTIONS_PATH) {
+        return jsonRes({ id: "ps", status: "succeeded", output: DELIVERY_URL, metrics: { predict_time: 0.9 } });
+      }
+      if (u === DELIVERY_URL) return new Response(MOCK_MP3, { status: 200 });
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    const res = await handleReplicateSpeech({
+      model: "elevenlabs/flash-v2.5",
+      input: "Erledigt! Ich habe das Todo 'Serverrechnung bezahlen' für morgen angelegt. " + "Weitere Details. ".repeat(20),
+      voice: "Mark",
+      responseFormat: "pcm",
+      summarize: true,
+    });
+
+    expect(res.status).toBe(200);
+    expect(systemPrompt).toContain("ONE short spoken confirmation");
+    expect(res.headers.get("x-audio-title")).toBe(encodeURIComponent("Todo erstellt"));
+    expect(res.headers.get("content-type")).toBe("audio/pcm");
+  });
+});
+
 describe("handleReplicateSpeech — failure path", () => {
   test("a failed prediction status maps to 502, with an error usage row", async () => {
     setFetch(async (url) => {
