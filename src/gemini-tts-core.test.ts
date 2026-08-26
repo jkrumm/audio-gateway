@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChunkLimits } from "./gemini-tts-core";
-import { detectLanguage, enforceChunkLimits, looksGerman, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, looksGerman, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 
 // pcmToWav now lives in audio.test.ts alongside the rest of the ffmpeg/ffprobe
 // process boundary module it moved into.
@@ -19,6 +19,28 @@ describe("detectLanguage", () => {
   test("names and numbers alone are undecided", () => {
     expect(detectLanguage("Johannes, 14:30.")).toBeNull();
     expect(detectLanguage("Okay.")).toBeNull();
+  });
+});
+
+describe("detectLanguage — German sentences containing English look-alikes", () => {
+  test("in / an / do / was never flip a German sentence to English", () => {
+    for (const s of ["Rund 17 bis 26 Grad, meist wechselhaft, nur geringe Regenchance.", "Do, 27. Aug.: Heiß und trocken.",
+      "Was steht an?", "In München regnet es.", "Zeitweise sonnig, UV-Index bis 5,9."]) {
+      expect(detectLanguage(s)).not.toBe("en");
+    }
+  });
+});
+
+describe("normalizeForSpeech", () => {
+  test("German weather line: weekday, month, range, units, decoration", () => {
+    const out = normalizeForSpeech("**Do, 27. Aug.:** Heiß und überwiegend trocken, etwa **17–32 °C**. UV-Index bis **5,9**. Böen bis etwa **77 km/h** – auffällig. ★", "de");
+    expect(out).toBe("Donnerstag, 27. August: Heiß und überwiegend trocken, etwa 17 bis 32 Grad. UV-Index bis 5,9. Böen bis etwa 77 Kilometer pro Stunde – auffällig.");
+  });
+  test("percent and month with trailing colon, English", () => {
+    expect(normalizeForSpeech("Fri, 28 Aug.: rain likely (98 %), 16–27 °C.", "en")).toBe("Friday, 28 August: rain likely (98 percent), 16 to 27 degrees.");
+  });
+  test("leaves ordinary prose untouched", () => {
+    expect(normalizeForSpeech("Alles klar, Todo ist angelegt.", "de")).toBe("Alles klar, Todo ist angelegt.");
   });
 });
 

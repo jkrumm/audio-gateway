@@ -21,9 +21,9 @@ export interface PrepResult {
 
 /** Crude German detection shared by both TTS lanes (no-LLM default path, and language steering). */
 const DE_MARKERS =
-  /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute|ich|du|dir|dich|wir|uns|ihr|sie|sich|mach|mache|gern|gerne|alles|gut|klar|passt|erledigt|bis|später|soll|sollte|noch|schon|jetzt|hier|habe|hast|hat|kann|kannst|wird|wenn|dann|oder|aber|nach|vor|bei|zum|zur|vom|im|am|auf|aus|morgen|guten|termin|rechnung|grad|uhr)\b/i;
+  /\b(der|die|das|und|nicht|ein|eine|ist|mit|für|auch|werden|heute|ich|du|dir|dich|wir|uns|ihr|sie|sich|mach|mache|gern|gerne|alles|gut|klar|passt|erledigt|bis|später|soll|sollte|noch|schon|jetzt|hier|habe|hast|hat|kann|kannst|wird|wenn|dann|oder|aber|nach|vor|bei|zum|zur|vom|im|am|auf|aus|morgen|guten|termin|rechnung|grad|uhr|nur|sehr|etwa|rund|meist|wieder|kein|keine|mehr|weniger|möglich|über|unter|zwischen|gestern|wetter|regen|wind|tag|tage)\b/i;
 const EN_MARKERS =
-  /\b(the|a|an|and|or|but|is|are|was|were|be|been|to|of|in|on|at|for|with|from|by|this|that|these|those|it|its|you|your|i|i'm|i'll|we|they|he|she|will|would|can|could|should|do|does|did|not|no|yes|done|sure|thing|good|morning|meeting|moved|take|care|turn|down)\b/i;
+  /\b(the|and|or|but|is|are|were|been|of|with|from|this|that|these|those|it|its|you|your|i'm|i'll|we|they|he|she|will|would|can|could|should|does|did|not|yes|done|sure|thing|good|morning|meeting|moved|take|care|turn|down|weather|tomorrow|today)\b/i;
 
 /**
  * Best-effort DE/EN detection for a single request. Umlauts or German
@@ -215,4 +215,50 @@ export function enforceChunkLimits(chunks: PrepChunk[], limits: ChunkLimits): Pr
     out.push(...pack(atomize(chunk.text, limits), chunk.style, limits));
   }
   return out;
+}
+
+const DE_MONTHS: Record<string, string> = {
+  jan: "Januar", feb: "Februar", mär: "März", mrz: "März", apr: "April", jun: "Juni", jul: "Juli",
+  aug: "August", sep: "September", sept: "September", okt: "Oktober", nov: "November", dez: "Dezember",
+};
+const EN_MONTHS: Record<string, string> = {
+  jan: "January", feb: "February", mar: "March", apr: "April", jun: "June", jul: "July",
+  aug: "August", sep: "September", sept: "September", oct: "October", nov: "November", dec: "December",
+};
+const DE_WEEKDAYS: Record<string, string> = {
+  mo: "Montag", di: "Dienstag", mi: "Mittwoch", do: "Donnerstag", fr: "Freitag", sa: "Samstag", so: "Sonntag",
+};
+const EN_WEEKDAYS: Record<string, string> = {
+  mon: "Monday", tue: "Tuesday", wed: "Wednesday", thu: "Thursday", fri: "Friday", sat: "Saturday", sun: "Sunday",
+};
+
+/**
+ * Deterministic spoken-form rewrite for text that skips the prep LLM (the
+ * chat fast path): abbreviated weekdays/months, units and symbols, numeric
+ * ranges, and leftover markdown/decoration TTS would otherwise read out or
+ * mispronounce ("Aug.", "°C", "17–32", "★"). Numbers themselves are left to
+ * the TTS engine, which handles digits fine once `language_code` is right.
+ */
+export function normalizeForSpeech(text: string, lang: "de" | "en"): string {
+  const de = lang === "de";
+  const months = de ? DE_MONTHS : EN_MONTHS;
+  const weekdays = de ? DE_WEEKDAYS : EN_WEEKDAYS;
+  let out = text
+    .replace(/[*_`#>]+/g, "")
+    .replace(/[★☆•▪●◦✓✔➜→]+/g, " ")
+    .replace(/\p{Extended_Pictographic}\uFE0F?/gu, " ")
+    .replace(/(\d)\s*[–—-]\s*(\d)/g, de ? "$1 bis $2" : "$1 to $2")
+    .replace(/(\d)\s*°\s*C\b/g, de ? "$1 Grad" : "$1 degrees")
+    .replace(/(\d)\s*°/g, de ? "$1 Grad" : "$1 degrees")
+    .replace(/(\d)\s*%/g, de ? "$1 Prozent" : "$1 percent")
+    .replace(/\bkm\/h\b/gi, de ? "Kilometer pro Stunde" : "kilometres per hour")
+    .replace(/(\d)\s*km\b/g, de ? "$1 Kilometer" : "$1 kilometres")
+    .replace(/\bca\.\s*/gi, de ? "circa " : "approximately ")
+    .replace(/\bz\.\s?B\.\s*/g, "zum Beispiel ")
+    .replace(/\bbzw\.\s*/gi, "beziehungsweise ")
+    .replace(/\bEUR\b|€/g, de ? "Euro" : "euros");
+  // "Do, 27. Aug.:" → "Donnerstag, 27. August:" — only abbreviated forms with a trailing dot/comma
+  out = out.replace(/\b([A-Za-zÄÖÜäöü]{2,4})\.(?=\s|,|:|$)/g, (m, abbr: string) => months[abbr.toLowerCase()] ?? m);
+  out = out.replace(/\b([A-Za-z]{2,3})(?=,\s*\d)/g, (m, abbr: string) => weekdays[abbr.toLowerCase()] ?? m);
+  return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
 }

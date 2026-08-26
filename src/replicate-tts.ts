@@ -3,7 +3,7 @@ import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
 import { config } from "./config";
 import { rawFetch, SUMMARY_SYSTEM_PROMPT } from "./gemini-tts";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
 import { log } from "./log";
 import { recordUsage } from "./usage";
@@ -87,9 +87,10 @@ function fallbackTitle(input: string, de: boolean): string {
 
 /** Split raw sentences via the shared limits splitter, no LLM rewriting, no tags. */
 function splitNoPrep(input: string): PrepResult {
-  const de = resolveLanguage(input) === "de";
-  const chunks = enforceChunkLimits([{ style: "", text: input.trim() }], CHUNK_LIMITS);
-  return { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks };
+  const lang = resolveLanguage(input);
+  const de = lang === "de";
+  const chunks = enforceChunkLimits([{ style: "", text: normalizeForSpeech(input, lang) }], CHUNK_LIMITS);
+  return { lang, title: fallbackTitle(input, de), chunks };
 }
 
 /** Whether `model` (or a listed prefix of it) is in `config.ttsReplicatePrepModels`. */
@@ -120,9 +121,9 @@ async function runReplicatePrep(
 
   if (!summarize && !wantsPrep(model)) {
     if (input.length > NO_PREP_SPLIT_THRESHOLD) return { prep: splitNoPrep(input), ran: false };
-    const de = resolveLanguage(input) === "de";
+    const lang = resolveLanguage(input);
     return {
-      prep: { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks: [{ style: "", text: input.trim() }] },
+      prep: { lang, title: fallbackTitle(input, lang === "de"), chunks: [{ style: "", text: normalizeForSpeech(input, lang) }] },
       ran: false,
     };
   }
