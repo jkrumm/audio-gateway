@@ -62,6 +62,9 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
   quality; `--prod` scp's the VPS SQLite file (+ WAL/SHM) to a temp dir first.
 
 ## Reference
+`docs/hyperdx-dashboard.md` — the ClickStack span model and the tile definitions (search + SQL) for the
+HyperDX "Audio" dashboard; `bun run usage:tail --prod` is the terminal view of the same requests.
+
 `docs/reference/audio-proxy-spec.md` is the behavioral contract, extracted from the original
 `audio-proxy` service. That service is RETIRED (2026-06-17): its macOS LaunchAgent was removed and
 its GitHub repo archived; the local checkout at `../audio-proxy` is kept read-only for reference.
