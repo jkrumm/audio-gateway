@@ -117,6 +117,7 @@ interface OpenAiUsage {
  */
 async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
   const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
+  const prepModel = summarize ? config.ttsSummaryModel : config.ttsPrepModel;
 
   if (!summarize) {
     const isLong = input.length >= config.ttsChunkCharThreshold;
@@ -128,14 +129,14 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
 
   return withSpan(
     "audio.prep",
-    { "llm.model": config.ttsPrepModel, "audio.prep.kind": summarize ? "summary" : "prep", "audio.input_chars": input.length },
+    { "llm.model": prepModel, "audio.prep.kind": summarize ? "summary" : "prep", "audio.input_chars": input.length },
     async (span) => {
       const start = Date.now();
       const res = await rawFetch(iuUrl("/chat/completions"), {
         method: "POST",
         headers: iuHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({
-          model: config.ttsPrepModel,
+          model: prepModel,
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: input },
@@ -152,14 +153,14 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
         const errorText = res.body.slice(0, 500);
         log.error("tts prep error", {
           endpoint: usageEndpoint,
-          model: config.ttsPrepModel,
+          model: prepModel,
           status: res.status,
           latencyMs,
           error: errorText,
         });
         recordUsage({
           endpoint: usageEndpoint,
-          model: config.ttsPrepModel,
+          model: prepModel,
           status: res.status,
           latencyMs,
           inputChars: input.length,
@@ -174,7 +175,7 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
       };
       recordUsage({
         endpoint: usageEndpoint,
-        model: config.ttsPrepModel,
+        model: prepModel,
         status: res.status,
         latencyMs,
         inputChars: input.length,

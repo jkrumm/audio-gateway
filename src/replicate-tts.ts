@@ -119,6 +119,7 @@ async function runReplicatePrep(
   instructions: string | undefined,
 ): Promise<{ prep: PrepResult; ran: boolean }> {
   const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
+  const prepModel = summarize ? config.ttsSummaryModel : config.ttsPrepModel;
 
   if (!summarize && !wantsPrep(model)) {
     if (input.length > NO_PREP_SPLIT_THRESHOLD) return { prep: splitNoPrep(input), ran: false };
@@ -134,7 +135,7 @@ async function runReplicatePrep(
   return withSpan(
     "audio.prep",
     {
-      "llm.model": config.ttsPrepModel,
+      "llm.model": prepModel,
       "audio.prep.kind": summarize ? "summary" : "prep",
       "audio.input_chars": input.length,
     },
@@ -144,7 +145,7 @@ async function runReplicatePrep(
         method: "POST",
         headers: iuHeaders({ "content-type": "application/json" }),
         body: JSON.stringify({
-          model: config.ttsPrepModel,
+          model: prepModel,
           messages: [
             // `summarize` swaps the whole job: one ≤30-word spoken confirmation
             // instead of a faithful chunked rewrite (Hermes' spoken-summary mode).
@@ -159,8 +160,8 @@ async function runReplicatePrep(
 
       if (res.status < 200 || res.status >= 300) {
         const errorText = res.body.slice(0, 500);
-        log.error("elevenlabs tts prep error", { endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, error: errorText });
-        recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, errorText });
+        log.error("elevenlabs tts prep error", { endpoint: usageEndpoint, model: prepModel, status: res.status, latencyMs, error: errorText });
+        recordUsage({ endpoint: usageEndpoint, model: prepModel, status: res.status, latencyMs, inputChars: input.length, errorText });
         throw new Error(`TTS prep failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
       }
 
@@ -168,7 +169,7 @@ async function runReplicatePrep(
         choices?: Array<{ message?: { content?: string } }>;
         usage?: OpenAiUsage;
       };
-      recordUsage({ endpoint: usageEndpoint, model: config.ttsPrepModel, status: res.status, latencyMs, inputChars: input.length, usageJson: json.usage });
+      recordUsage({ endpoint: usageEndpoint, model: prepModel, status: res.status, latencyMs, inputChars: input.length, usageJson: json.usage });
       span.setAttributes({ "llm.output_tokens": json.usage?.completion_tokens ?? undefined });
 
       const content = json.choices?.[0]?.message?.content ?? "";

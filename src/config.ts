@@ -86,6 +86,15 @@ export const config = {
    */
   ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "gpt-5.6-luna",
   /**
+   * Model for the spoken-summary rewrite (`summarize: true`) — a short,
+   * JSON-shaped task where a small model wins outright. Bake-off on the real
+   * prompt, 2026-08-27: gemini-3.5-flash-lite 0.8–1.0 s, ministral-8b 0.8–1.2 s,
+   * gpt-5.4-mini 1.5 s, gpt-5.6-luna 2.1–3.0 s, claude-haiku-4-5 3.2–4.0 s (too
+   * verbose). The full prep (chunking + tags + number rewriting for briefings)
+   * stays on TTS_PREP_MODEL, where latency is irrelevant and judgement matters.
+   */
+  ttsSummaryModel: process.env["TTS_SUMMARY_MODEL"] ?? "gemini-3.5-flash-lite",
+  /**
    * Output bitrates (kbps) for the transcoded Gemini TTS audio, tuned for SPEECH
    * rather than music: the source is mono 24 kHz expressive narration, so these
    * low bitrates stay transparent for voice while keeping Hermes/Slack
