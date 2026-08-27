@@ -72,11 +72,31 @@ function toOtlpAttributes(attrs: Record<string, unknown>): Array<{ key: string; 
   return out;
 }
 
+/**
+ * Parse the standard `OTEL_RESOURCE_ATTRIBUTES` env var (`key=value,key=value`,
+ * per the OTel resource SDK spec) so a compose file can override any default
+ * below without a code change. Malformed pairs (no `=`) are skipped. Exported
+ * (pure, no env read) so otel.test.ts can exercise the parsing directly.
+ */
+export function parseResourceAttributesEnv(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const idx = pair.indexOf("=");
+    if (idx === -1) continue;
+    const key = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1).trim();
+    if (key) out[key] = value;
+  }
+  return out;
+}
+
 const RESOURCE = {
   attributes: toOtlpAttributes({
     "service.name": config.otelServiceName,
     "service.version": SERVICE_VERSION,
-    "deployment.environment": config.machine,
+    "deployment.environment": config.deploymentEnvironment,
+    "host.name": config.machine,
+    ...parseResourceAttributesEnv(process.env["OTEL_RESOURCE_ATTRIBUTES"] ?? ""),
   }),
 };
 

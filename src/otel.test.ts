@@ -22,8 +22,17 @@ process.env["USAGE_DB"] ??= ":memory:";
 process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
 process.env["TTS_PREP"] ??= "off";
 
-const { traceIdFromRequestId, withSpan, withRootSpan, buildTracesPayload, buildLogsPayload, emitLog, _test } =
-  await import("./otel");
+const {
+  traceIdFromRequestId,
+  withSpan,
+  withRootSpan,
+  buildTracesPayload,
+  buildLogsPayload,
+  emitLog,
+  parseResourceAttributesEnv,
+  _test,
+} = await import("./otel");
+const { resolveDeploymentEnvironment } = await import("./config");
 type SpanRecord = import("./otel").SpanRecord;
 type LogRecord = import("./otel").LogRecord;
 
@@ -57,6 +66,38 @@ describe("traceIdFromRequestId", () => {
     const b = traceIdFromRequestId("not-a-uuid");
     expect(a).toMatch(/^[0-9a-f]{32}$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe("resolveDeploymentEnvironment (deployment.environment resource attribute)", () => {
+  test("maps NODE_ENV=production to \"production\"", () => {
+    expect(resolveDeploymentEnvironment("production")).toBe("production");
+  });
+
+  test("maps anything else (unset, dev, test) to \"development\"", () => {
+    expect(resolveDeploymentEnvironment(undefined)).toBe("development");
+    expect(resolveDeploymentEnvironment("development")).toBe("development");
+    expect(resolveDeploymentEnvironment("test")).toBe("development");
+  });
+});
+
+describe("parseResourceAttributesEnv (OTEL_RESOURCE_ATTRIBUTES override)", () => {
+  test("parses comma-separated key=value pairs, trimming whitespace", () => {
+    expect(parseResourceAttributesEnv("deployment.environment=staging, host.name = vps ")).toEqual({
+      "deployment.environment": "staging",
+      "host.name": "vps",
+    });
+  });
+
+  test("returns an empty object for an empty string", () => {
+    expect(parseResourceAttributesEnv("")).toEqual({});
+  });
+
+  test("skips malformed pairs with no \"=\"", () => {
+    expect(parseResourceAttributesEnv("valid=1,malformed,also.valid=2")).toEqual({
+      valid: "1",
+      "also.valid": "2",
+    });
   });
 });
 

@@ -47,7 +47,10 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
   (`usage.ts`'s `requestId`, dashes stripped), so a trace and its `usage_record`/Argo rows join on
   the same value with no extra correlation column. `src/log.ts` mirrors every `log.*` call into an
   OTLP log record via `emitLog`, stamped with the active span's ids. Disabled (a true no-op on the
-  network path) unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+  network path) unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Resource attributes: `deployment.environment`
+  follows `NODE_ENV` (`production` → `production`, else `development`) to match every other VPS
+  service — the machine (`MACHINE`/hostname) is its own `host.name` attribute instead. The standard
+  `OTEL_RESOURCE_ATTRIBUTES` env var (`key=value,key=value`) merges on top of both.
 
 ## Conventions
 - Deep modules, **ports & adapters** (the usage sink is the canonical example), early returns, no `any`.

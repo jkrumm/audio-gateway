@@ -29,6 +29,15 @@ const oneOf = <T extends string>(name: string, allowed: readonly T[], fallback: 
   return raw as T;
 };
 
+/**
+ * Map `NODE_ENV` to the OTel `deployment.environment` resource attribute —
+ * `production` only for an exact `NODE_ENV=production`, `development`
+ * otherwise (unset, `dev`, `test`, anything else). Exported (pure, no env
+ * read) so otel.test.ts can exercise the mapping directly.
+ */
+export const resolveDeploymentEnvironment = (nodeEnv: string | undefined): "production" | "development" =>
+  nodeEnv === "production" ? "production" : "development";
+
 const iuBaseUrl = required("IU_OPENAI_BASE_URL").replace(/\/+$/, "");
 
 /**
@@ -176,6 +185,14 @@ export const config = {
    * hostname; prod overrides with `MACHINE=vps`.
    */
   machine: process.env["MACHINE"] ?? hostname(),
+  /**
+   * OTel `deployment.environment` value — `production` when `NODE_ENV=production`,
+   * `development` otherwise. Deliberately NOT derived from `machine`: every other
+   * service on the VPS reports `deployment.environment=production` regardless of
+   * which host runs it, so dashboards grouping by environment split audio-gateway
+   * off when this followed `MACHINE` (e.g. `vps`) instead.
+   */
+  deploymentEnvironment: resolveDeploymentEnvironment(process.env["NODE_ENV"]),
   /** Graceful-shutdown drain budget in milliseconds (Decision 5). */
   shutdownDrainMs: num("SHUTDOWN_DRAIN_MS", 10000),
   /**
