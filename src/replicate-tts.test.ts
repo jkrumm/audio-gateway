@@ -329,7 +329,7 @@ describe("handleReplicateSpeech — spoken summary", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(systemPrompt).toContain("ONE short spoken confirmation");
+    expect(systemPrompt).toContain("what should be SPOKEN aloud");
     expect(res.headers.get("x-audio-title")).toBe(encodeURIComponent("Todo erstellt"));
     expect(res.headers.get("content-type")).toBe("audio/pcm");
   });
@@ -361,7 +361,7 @@ describe("handleSpeech — gateway-side auto-summarize for whole-file clients", 
     const res = await post({ model: "elevenlabs/flash-v2.5", input: LONG, voice: "Mark" });
     expect(res.status).toBe(200);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("ONE short spoken confirmation");
+    expect(prompts[0]).toContain("what should be SPOKEN aloud");
   });
   test("the same text as pcm (a streaming sentence) is never summarized", async () => {
     const { prompts } = stub();
