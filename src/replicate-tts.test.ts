@@ -335,6 +335,48 @@ describe("handleReplicateSpeech — spoken summary", () => {
   });
 });
 
+describe("handleSpeech — gateway-side auto-summarize for whole-file clients", () => {
+  const LONG = "Erledigt! Ich habe das Todo Serverrechnung bezahlen für morgen angelegt. " + "Weitere Details, die man lesen kann. ".repeat(6);
+  function stub(): { prompts: string[] } {
+    const prompts: string[] = [];
+    setFetch(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/chat/completions")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+        prompts.push(body.messages[0]?.content ?? "");
+        return jsonRes({ choices: [{ message: { content: JSON.stringify({ lang: "de", title: "Todo", chunks: [{ style: "", text: "Todo angelegt." }] }) } }], usage: {} });
+      }
+      if (u === PREDICTIONS_PATH) return jsonRes({ id: "pa", status: "succeeded", output: DELIVERY_URL, metrics: { predict_time: 0.5 } });
+      if (u === DELIVERY_URL) return new Response(MOCK_MP3, { status: 200 });
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+    return { prompts };
+  }
+  // Dynamic import: a static one would hoist above this file's env baseline and load config too early.
+  const post = async (body: Record<string, unknown>) =>
+    (await import("./speech")).handleSpeech(new Request("http://x/v1/audio/speech", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }));
+
+  test("long mp3 request on flash is summarized without the client asking", async () => {
+    const { prompts } = stub();
+    const res = await post({ model: "elevenlabs/flash-v2.5", input: LONG, voice: "Mark" });
+    expect(res.status).toBe(200);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain("ONE short spoken confirmation");
+  });
+  test("the same text as pcm (a streaming sentence) is never summarized", async () => {
+    const { prompts } = stub();
+    const res = await post({ model: "elevenlabs/flash-v2.5", input: LONG, voice: "Mark", response_format: "pcm" });
+    expect(res.status).toBe(200);
+    expect(prompts).toHaveLength(0);
+  });
+  test("short mp3 requests stay direct", async () => {
+    const { prompts } = stub();
+    const res = await post({ model: "elevenlabs/flash-v2.5", input: "Alles klar, erledigt.", voice: "Mark" });
+    expect(res.status).toBe(200);
+    expect(prompts).toHaveLength(0);
+  });
+});
+
 describe("handleReplicateSpeech — failure path", () => {
   test("a failed prediction status maps to 502, with an error usage row", async () => {
     setFetch(async (url) => {

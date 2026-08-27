@@ -104,6 +104,16 @@ export const config = {
    */
   ttsSummaryModel: process.env["TTS_SUMMARY_MODEL"] ?? "gemini-3.5-flash-lite",
   /**
+   * Whole-file requests (mp3/opus/wav, not pcm) on a prep-off model whose text
+   * is at least this long are spoken as a summary even though the client did
+   * not ask for one. Slack's auto-TTS is exactly that client: it hands the whole
+   * reply to `text_to_speech_tool` with no way to say `summarize`, and a
+   * 300-char reply is 20 s of audio under a text bubble the user can read.
+   * Streaming clients send pcm per sentence and are never affected; prep
+   * models (v3 briefings) keep their full prep. 0 = off.
+   */
+  ttsAutoSummarizeMinChars: num("TTS_AUTO_SUMMARIZE_MIN_CHARS", 120),
+  /**
    * Output bitrates (kbps) for the transcoded Gemini TTS audio, tuned for SPEECH
    * rather than music: the source is mono 24 kHz expressive narration, so these
    * low bitrates stay transparent for voice while keeping Hermes/Slack

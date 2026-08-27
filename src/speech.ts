@@ -5,7 +5,7 @@ import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { GEMINI_TTS, resolveTtsRoute } from "./model-resolution";
 import { getActiveSpan, traceIdFromRequestId, withRootSpan } from "./otel";
-import { handleReplicateSpeech } from "./replicate-tts";
+import { handleReplicateSpeech, wantsPrep } from "./replicate-tts";
 import { getRequestMeta, recordUsage, runWithRequestContext, setRequestMeta } from "./usage";
 
 /** Attribute values gated by USAGE_KEEP_TEXT — same 600-char cap as the usage sink (usage.ts). */
@@ -107,6 +107,18 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
 
   // Central model resolution: a wrong or absent model never reaches the upstream.
   const route = resolveTtsRoute(requestedModel);
+
+  // Whole-file clients (Slack auto-TTS) can't ask for a summary; decide it here
+  // for long text on a prep-off Replicate model. pcm = a streaming client
+  // speaking one sentence at a time — never summarize those.
+  const autoSummarize =
+    !summarize &&
+    route.provider === "replicate" &&
+    !wantsPrep(route.model) &&
+    responseFormat !== "pcm" &&
+    config.ttsAutoSummarizeMinChars > 0 &&
+    input.trim().length >= config.ttsAutoSummarizeMinChars;
+  if (autoSummarize) summarize = true;
   if (requestedModel.length > 0 && route.model !== requestedModel) {
     log.warn("tts model overridden", {
       endpoint: "speech",
@@ -159,6 +171,7 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
       "audio.audio_seconds": meta.audioSeconds,
       "audio.bytes_out": meta.bytesOut,
       "audio.summarize": summarize,
+      "audio.auto_summarize": autoSummarize,
       "audio.title": meta.title,
       "http.status_code": status,
       "audio.text.input": textAttr(input),

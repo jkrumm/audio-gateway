@@ -95,7 +95,7 @@ function splitNoPrep(input: string): PrepResult {
 }
 
 /** Whether `model` (or a listed prefix of it) is in `config.ttsReplicatePrepModels`. */
-function wantsPrep(model: string): boolean {
+export function wantsPrep(model: string): boolean {
   const listed = config.ttsReplicatePrepModels.split(",").map((s) => s.trim()).filter(Boolean);
   return listed.some((entry) => model === entry || model.startsWith(entry));
 }
