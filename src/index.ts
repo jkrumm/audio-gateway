@@ -19,10 +19,32 @@ export function setDraining(v: boolean): void {
   draining = v;
 }
 
-/** Optional bearer-token gate. No-op when PROXY_API_KEY is unset. */
+/** Bearer token from the Authorization header, if shaped like `Bearer <token>`. */
+const bearerToken = (req: Request): string | undefined => {
+  const header = req.headers.get("authorization");
+  return header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+};
+
+/**
+ * Caller name for a request authenticated via a mapped AUDIO_CALLER_TOKENS entry
+ * (config.ts), or undefined if its bearer token isn't in the map. Used both by
+ * `authorized()` below (a mapped token is accepted exactly like PROXY_API_KEY)
+ * and by handleRequest to seed `audio.caller` for clients that can't send
+ * `x-audio-source` — an explicit header still wins there.
+ */
+const callerFromToken = (req: Request): string | undefined => {
+  const token = bearerToken(req);
+  return token ? config.audioCallerTokens[token] : undefined;
+};
+
+/**
+ * Optional bearer-token gate. No-op when PROXY_API_KEY is unset. A mapped
+ * AUDIO_CALLER_TOKENS entry is accepted exactly like PROXY_API_KEY.
+ */
 const authorized = (req: Request): boolean => {
   if (!config.proxyApiKey) return true;
-  return req.headers.get("authorization") === `Bearer ${config.proxyApiKey}`;
+  if (req.headers.get("authorization") === `Bearer ${config.proxyApiKey}`) return true;
+  return callerFromToken(req) !== undefined;
 };
 
 async function handleModels(): Promise<Response> {
@@ -61,8 +83,10 @@ export async function handleRequest(req: Request): Promise<Response> {
   inFlight++;
   try {
     // Match regardless of /v1 prefix so OpenAI clients with either base form work.
-    if (req.method === "POST" && path.endsWith("/audio/transcriptions")) return await handleTranscriptions(req);
-    if (req.method === "POST" && path.endsWith("/audio/speech")) return await handleSpeech(req);
+    if (req.method === "POST" && path.endsWith("/audio/transcriptions")) {
+      return await handleTranscriptions(req, callerFromToken(req));
+    }
+    if (req.method === "POST" && path.endsWith("/audio/speech")) return await handleSpeech(req, callerFromToken(req));
     if (req.method === "GET" && path.endsWith("/models")) return await handleModels();
   } catch (err) {
     const message = err instanceof Error ? err.message : "internal error";

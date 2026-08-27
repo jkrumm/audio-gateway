@@ -19,6 +19,25 @@ const num = (name: string, fallback: number): number => {
   return parsed;
 };
 
+/**
+ * Parse `name=token,name=token` pairs (AUDIO_CALLER_TOKENS) into a token→name
+ * map. Optional; empty/unset → `{}`. Malformed pairs (no `=`, empty name, empty
+ * token) are skipped rather than failing boot — mirrors otel.ts's
+ * `parseResourceAttributesEnv` leniency, since a typo here shouldn't crash the
+ * whole gateway.
+ */
+const callerTokens = (raw: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const idx = pair.indexOf("=");
+    if (idx === -1) continue;
+    const name = pair.slice(0, idx).trim();
+    const token = pair.slice(idx + 1).trim();
+    if (name && token) out[token] = name;
+  }
+  return out;
+};
+
 /** Parse an enum env var against a whitelist; fail fast on an out-of-set value. */
 const oneOf = <T extends string>(name: string, allowed: readonly T[], fallback: T): T => {
   const raw = process.env[name];
@@ -66,6 +85,16 @@ export const config = {
   usageDb: process.env["USAGE_DB"] ?? "./data/usage.db",
   /** When set, callers must send `Authorization: Bearer <proxyApiKey>`. */
   proxyApiKey: process.env["PROXY_API_KEY"] ?? "",
+  /**
+   * Token→caller map for clients that cannot set the `x-audio-source` header —
+   * Hermes' stock OpenAI client has no header knob, MacWhisper only takes a base
+   * URL + key. Format: `name=token,name=token` (e.g. `hermes=...,macwhisper=...`).
+   * Each token is accepted by `authorized()` (index.ts) exactly like
+   * `proxyApiKey`; when a request authenticates with a mapped token and sends no
+   * `x-audio-source`, `audio.caller` becomes that name — an explicit header
+   * still wins. Optional; empty/unset disables this entirely.
+   */
+  audioCallerTokens: callerTokens(process.env["AUDIO_CALLER_TOKENS"] ?? ""),
   /**
    * Default TTS output model injected when a `/audio/speech` request omits `model`.
    * A model matching /gemini.*tts/i routes to the native expressive pipeline;

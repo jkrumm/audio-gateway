@@ -71,6 +71,13 @@ export interface RequestMeta {
   outputText?: string;
   audioSeconds?: number;
   bytesOut?: number;
+  /** Running total across every billing-relevant `recordUsage` call in this request (see `accumulateRequestCost`). */
+  costUsd?: number;
+  costSource?: string;
+  /** Running total of `inputChars` across `endpoint: "speech"` rows — the char count ElevenLabs bills on. */
+  charsBilled?: number;
+  /** `rawFetch` 503/429 backoff attempts consumed anywhere in this request (see `recordRetry`). */
+  retries?: number;
 }
 
 interface RequestContextValue {
@@ -100,6 +107,32 @@ export function setRequestMeta(patch: RequestMeta): void {
 /** Read the current request's accumulated metadata (used to build the `*-request` summary row). */
 export function getRequestMeta(): RequestMeta {
   return requestContext.getStore()?.meta ?? {};
+}
+
+/** Increment the current request's retry counter. No-op outside a request context. */
+export function recordRetry(): void {
+  const store = requestContext.getStore();
+  if (store) store.meta.retries = (store.meta.retries ?? 0) + 1;
+}
+
+// ---------------------------------------------------------------------------
+// In-flight request gauge — a single module-level counter of concurrently
+// dispatching Server requests. Not request-scoped (there is nothing to read
+// back via AsyncLocalStorage until the request itself starts), so it lives as
+// plain module state; handleSpeech/handleTranscriptions pair start/end in a
+// try/finally around the whole dispatch.
+// ---------------------------------------------------------------------------
+
+let inflightCount = 0;
+
+/** Mark one more request in flight; returns the new count (including this one). */
+export function inflightStart(): number {
+  return ++inflightCount;
+}
+
+/** Mark one request as finished (success or failure). */
+export function inflightEnd(): void {
+  inflightCount = Math.max(0, inflightCount - 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -218,6 +251,53 @@ function computeCost(
     (textIn * (rate.input ?? 0) + audioIn * (rate.audioInput ?? 0) + output * (rate.output ?? 0)) /
     1_000_000;
   return { costUsd: cost, costSource: "estimated" };
+}
+
+/**
+ * Compute cost for one usage row, deriving the same {@link CostInputs} shape
+ * both the HTTP sink and the request-level accumulator (below) need — the
+ * single place `computeCost`/`RATES` are applied to a `UsageRow`, so the sink
+ * and the root-span attributes always report the same number.
+ */
+function costForRow(row: UsageRow): { costUsd: number | null; costSource: string } {
+  const t = tokens(row.usageJson);
+  return computeCost(normalizeModel(row.model), {
+    inputTokens: row.inputTokens ?? t.input,
+    outputTokens: row.outputTokens ?? t.output,
+    audioTokens: row.audioTokens ?? t.audioTokens,
+    audioSeconds: row.audioSeconds ?? t.audioSeconds,
+    inputChars: row.inputChars ?? null,
+  });
+}
+
+/**
+ * The `*-request` summary rows are a correlation/reporting artifact, not a
+ * billed call — costing them would double-count spend already carried by the
+ * per-chunk rows they summarize (mirrors the HTTP sink's `isRequestSummary` gate).
+ */
+const isRequestSummaryEndpoint = (endpoint: UsageRow["endpoint"]): boolean =>
+  endpoint === "speech-request" || endpoint === "transcription-request";
+
+/**
+ * Fold one row's cost into the active request's running total (`RequestMeta.costUsd`/
+ * `costSource`) and, for TTS `speech` rows, the char count ElevenLabs bills on
+ * (`charsBilled`). No-op outside a request context or for summary rows.
+ */
+function accumulateRequestCost(row: UsageRow): void {
+  const store = requestContext.getStore();
+  if (!store || isRequestSummaryEndpoint(row.endpoint)) return;
+
+  const cost = costForRow(row);
+  if (cost.costUsd != null) {
+    store.meta.costUsd = (store.meta.costUsd ?? 0) + cost.costUsd;
+    store.meta.costSource = "estimated";
+  } else if (store.meta.costSource !== "estimated") {
+    store.meta.costSource = "none";
+  }
+
+  if (row.endpoint === "speech" && row.inputChars != null) {
+    store.meta.charsBilled = (store.meta.charsBilled ?? 0) + row.inputChars;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -362,10 +442,7 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
       // per-chunk rows (speech/speech-prep/speech-summary/transcriptions)
       // already carry the billed cost. Costing the summary row too would
       // double-count spend against the same request.
-      const isRequestSummary = row.endpoint === "speech-request" || row.endpoint === "transcription-request";
-      const cost = isRequestSummary
-        ? { costUsd: null, costSource: "none" as const }
-        : computeCost(modelNorm, { inputTokens, outputTokens, audioTokens, audioSeconds, inputChars: row.inputChars ?? null });
+      const cost = isRequestSummaryEndpoint(row.endpoint) ? { costUsd: null, costSource: "none" as const } : costForRow(row);
       const now = new Date().toISOString();
       const ctx = requestContext.getStore();
       const text = resolveText(row);
@@ -462,6 +539,7 @@ function safeRecord(target: UsageSink, row: UsageRow): void {
 
 /** Record a usage row via the active sink (fail-safe — see {@link safeRecord}). */
 export function recordUsage(row: UsageRow): void {
+  accumulateRequestCost(row);
   safeRecord(sink, row);
 }
 

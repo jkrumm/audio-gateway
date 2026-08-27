@@ -11,6 +11,12 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 # derivation config.ts falls back to when this is unset).
 # IU_REPLICATE_BASE_URL=op://common/anthropic/REPLICATE_BASE_URL
 
+# Optional per-caller bearer tokens (name=token,name=token), accepted exactly
+# like PROXY_API_KEY, for clients that cannot set x-audio-source (Hermes' stock
+# OpenAI client, MacWhisper) — see README.md → Auth. Real tokens belong in
+# 1Password, injected the same way PROXY_API_KEY would be.
+# AUDIO_CALLER_TOKENS=hermes=<token>,macwhisper=<token>
+
 # Optional ElevenLabs (Replicate lane) delivery overrides — defaults live in
 # config.ts (voice Mark, stability 0.5, style 0, similarity 0.75).
 # TTS_SUMMARY_MODEL=gemini-3.5-flash-lite   # spoken-summary rewrite; TTS_PREP_MODEL keeps the full briefing prep

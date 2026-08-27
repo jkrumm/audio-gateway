@@ -51,6 +51,11 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
   follows `NODE_ENV` (`production` → `production`, else `development`) to match every other VPS
   service — the machine (`MACHINE`/hostname) is its own `host.name` attribute instead. The standard
   `OTEL_RESOURCE_ATTRIBUTES` env var (`key=value,key=value`) merges on top of both.
+  Root spans are self-sufficient for dashboards without joining the usage sink: `audio.cost_usd`/
+  `audio.cost_source` (summed across every billed `recordUsage` call in the request, via `usage.ts`'s
+  `computeCost`), `audio.chars_billed` (ElevenLabs lane only), `audio.requested_model`/`audio.fallback`,
+  `audio.retries` (rawFetch 503/429 backoff attempts), and `audio.inflight` (concurrent-request gauge,
+  also on the `tts.done`/`stt.done` logs).
 
 ## Conventions
 - Deep modules, **ports & adapters** (the usage sink is the canonical example), early returns, no `any`.

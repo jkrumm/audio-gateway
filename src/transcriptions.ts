@@ -4,7 +4,7 @@ import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveSttModel } from "./model-resolution";
 import { getActiveSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
-import { recordUsage, runWithRequestContext } from "./usage";
+import { getRequestMeta, inflightEnd, inflightStart, recordUsage, runWithRequestContext } from "./usage";
 
 /** Attribute values gated by USAGE_KEEP_TEXT — same 600-char cap as the usage sink (usage.ts). */
 const TEXT_ATTR_MAX = 600;
@@ -75,23 +75,31 @@ const isModelUnavailable = (status: number): boolean => status === 404 || status
  * "transcription-request" summary row is recorded once the response is
  * decided so a whole request can be reviewed as one timeline entry.
  */
-export async function handleTranscriptions(req: Request): Promise<Response> {
-  const caller = req.headers.get("x-audio-source") ?? "unknown";
+export async function handleTranscriptions(req: Request, tokenCaller?: string): Promise<Response> {
+  // Explicit x-audio-source wins; otherwise fall back to the caller identified
+  // by a mapped AUDIO_CALLER_TOKENS bearer token (index.ts's callerFromToken),
+  // for clients that cannot set headers (Hermes' stock OpenAI client, MacWhisper).
+  const caller = req.headers.get("x-audio-source") ?? tokenCaller ?? "unknown";
   const requestId = crypto.randomUUID();
-  return runWithRequestContext({ requestId, caller }, () =>
-    withRootSpan(
-      {
-        traceId: traceIdFromRequestId(requestId),
-        name: "audio.transcription",
-        kind: "server",
-        attrs: { "audio.request_id": requestId, "audio.caller": caller },
-      },
-      () => dispatchTranscription(req, caller),
-    ),
-  );
+  const inflight = inflightStart();
+  try {
+    return await runWithRequestContext({ requestId, caller }, () =>
+      withRootSpan(
+        {
+          traceId: traceIdFromRequestId(requestId),
+          name: "audio.transcription",
+          kind: "server",
+          attrs: { "audio.request_id": requestId, "audio.caller": caller, "audio.inflight": inflight },
+        },
+        () => dispatchTranscription(req, caller, inflight),
+      ),
+    );
+  } finally {
+    inflightEnd();
+  }
 }
 
-async function dispatchTranscription(req: Request, caller: string): Promise<Response> {
+async function dispatchTranscription(req: Request, caller: string, inflight: number): Promise<Response> {
   const requestStart = Date.now();
   const form = await req.formData();
   // Central model resolution: a wrong or absent model never reaches the upstream.
@@ -167,6 +175,7 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
       text: { output: opts.outputText },
     });
 
+    const meta = getRequestMeta();
     const span = getActiveSpan();
     span.setAttributes({
       "audio.model": opts.model,
@@ -174,9 +183,13 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
       "audio.language_hint": language ?? undefined,
       "audio.response_format": clientFormat,
       "audio.fallback": opts.model !== resolved.model,
+      "audio.retries": meta.retries ?? 0,
+      "audio.inflight": inflight,
       "audio.audio_seconds": opts.audioSeconds ?? undefined,
       "http.status_code": opts.status,
       "audio.text.output": textAttr(opts.outputText),
+      "audio.cost_usd": meta.costUsd != null ? Number(meta.costUsd.toFixed(6)) : undefined,
+      "audio.cost_source": meta.costSource ?? "none",
     });
     if (opts.status >= 500) span.setStatus("error");
     if (opts.status < 400) {
@@ -186,6 +199,7 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
         latencyMs,
         responseFormat: clientFormat,
         audioSeconds: opts.audioSeconds ?? null,
+        inflight,
       });
     }
     return response;

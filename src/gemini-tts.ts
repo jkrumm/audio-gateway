@@ -6,7 +6,7 @@ import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent 
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { withSpan } from "./otel";
-import { recordUsage, setRequestMeta } from "./usage";
+import { recordRetry, recordUsage, setRequestMeta } from "./usage";
 
 // Gemini TTS pipeline. The OpenAI-compatible `/audio/speech` route 404s for
 // Gemini voice models — TTS only answers on the native `generateContent`
@@ -98,6 +98,7 @@ export async function rawFetch(url: string, init: RequestInit, attempts = 3): Pr
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const res = await fetch(url, init);
     if ((res.status === 503 || res.status === 429) && attempt < attempts) {
+      recordRetry();
       await Bun.sleep(500 * attempt);
       continue;
     }

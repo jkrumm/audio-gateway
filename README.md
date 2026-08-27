@@ -37,6 +37,17 @@ data, persisted to the VPS SQLite file and pushed to Argo's `raw` column). Revie
 `bun run usage:tail [--prod] [--since 2h] [--limit 30]`, which prints one line per request plus a
 per-lane/mode rollup.
 
+### Auth
+
+Optional bearer-token gate: when `PROXY_API_KEY` is set, callers must send
+`Authorization: Bearer <PROXY_API_KEY>`; unset (the tailnet-only prod posture) accepts any request.
+`AUDIO_CALLER_TOKENS` (`name=token,name=token`, e.g. `hermes=...,macwhisper=...`) adds per-caller
+tokens on top, accepted exactly like `PROXY_API_KEY`, for clients that cannot set the
+`x-audio-source` header used to attribute usage rows/spans (Hermes' stock OpenAI client has no
+header knob; MacWhisper only takes a base URL + key). When a request authenticates with a mapped
+token and sends no `x-audio-source`, `audio.caller` becomes that name — an explicit header still
+wins. Optional; empty/unset disables it entirely.
+
 ### Telemetry
 
 The SQLite/Argo usage rows above are the cost-accounting layer; ClickStack traces + logs are the

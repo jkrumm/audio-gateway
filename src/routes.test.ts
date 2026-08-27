@@ -21,6 +21,7 @@ process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
 process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
 process.env["USAGE_DB"] ??= ":memory:";
 process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
+process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=macwhisper-secret-token";
 process.env["TTS_PREP"] ??= "off"; // avoid LLM calls in dispatch path
 
 // Now import gateway modules (env is already set).
@@ -38,6 +39,7 @@ const { handleRequest, setDraining } = await import("./index");
 
 const { _sink: usageSink } = await import("./usage");
 const { _test: otelTest } = await import("./otel");
+type SpanRecord = import("./otel").SpanRecord;
 
 let capturedRows: Array<Record<string, unknown>> = [];
 
@@ -97,6 +99,25 @@ function authed(req: Request): Request {
   return new Request(req, { headers });
 }
 
+/** Build a request authorized via an arbitrary bearer token (e.g. an AUDIO_CALLER_TOKENS entry). */
+function tokenAuthed(req: Request, token: string): Request {
+  const headers = new Headers(req.headers);
+  headers.set("authorization", `Bearer ${token}`);
+  return new Request(req, { headers });
+}
+
+/** Capture every OTel span exported for the rest of this test, via otel.ts's test seam. */
+function captureSpans(): SpanRecord[] {
+  const spans: SpanRecord[] = [];
+  otelTest.onSpanExport((r) => spans.push(r));
+  return spans;
+}
+
+/** Read one attribute's raw OTLP value off a captured span record. */
+function attr(span: SpanRecord | undefined, key: string): unknown {
+  return span?.attributes.find((a) => a.key === key)?.value;
+}
+
 // ---------------------------------------------------------------------------
 // Setup / teardown
 // ---------------------------------------------------------------------------
@@ -105,6 +126,7 @@ afterEach(() => {
   restoreFetch();
   setDraining(false);
   otelTest.onLogExport(null);
+  otelTest.onSpanExport(null);
 });
 
 // Clear captured rows between tests so row counts are per-test.
@@ -331,6 +353,12 @@ describe("Auth gate", () => {
     const res = await handleRequest(req);
     expect(res.status).toBe(200);
   });
+
+  test("401 when the bearer token is neither PROXY_API_KEY nor a mapped AUDIO_CALLER_TOKENS entry", async () => {
+    const req = tokenAuthed(new Request("http://localhost/v1/models", { method: "GET" }), "some-unknown-token");
+    const res = await handleRequest(req);
+    expect(res.status).toBe(401);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -533,5 +561,128 @@ describe("STT model override: unrecognized model replaced with config.sttModel",
 
     expect(res.status).toBe(200);
     expect(sentModel).toBe("gpt-4o-transcribe");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 12. Root-span self-sufficiency: cost, fallback, inflight (see docs/hyperdx-dashboard.md)
+// ---------------------------------------------------------------------------
+
+describe("Root span self-sufficiency", () => {
+  /** Generate a real, valid silent MP3 via ffmpeg — decodable by the real transcode path (mirrors replicate-tts.test.ts). */
+  function silentMp3(durationSec: number): Uint8Array {
+    const proc = Bun.spawnSync(
+      [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+        "-t", String(durationSec),
+        "-c:a", "libmp3lame", "-b:a", "48k", "-f", "mp3", "pipe:1",
+      ],
+      { stdout: "pipe" },
+    );
+    if (!proc.success) throw new Error("ffmpeg fixture generation failed");
+    return new Uint8Array(proc.stdout);
+  }
+
+  test("successful ElevenLabs TTS request: audio.cost_usd/audio.cost_source/audio.chars_billed on the root span", async () => {
+    const spans = captureSpans();
+    const mp3 = silentMp3(0.2);
+    const deliveryUrl = "https://replicate.delivery/mock/routes-test.mp3";
+    stubFetch(async (url) => {
+      const u = String(url);
+      if (u.endsWith("/predictions")) {
+        return Response.json({ id: "p1", status: "succeeded", output: deliveryUrl, metrics: { predict_time: 1 } });
+      }
+      if (u === deliveryUrl) return new Response(mp3, { status: 200 });
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ model: "elevenlabs/flash-v2.5", input: "Guten Morgen.", voice: "Roger", response_format: "mp3" }),
+      headers: { "content-type": "application/json" },
+    }));
+    const res = await handleRequest(req);
+    expect(res.status).toBe(200);
+
+    const root = spans.find((s) => s.name === "audio.speech");
+    expect(root).toBeDefined();
+    expect(attr(root, "audio.cost_source")).toEqual({ stringValue: "estimated" });
+    const costUsd = attr(root, "audio.cost_usd") as { doubleValue?: number; intValue?: string } | undefined;
+    expect(costUsd).toBeDefined();
+    const charsBilled = attr(root, "audio.chars_billed") as { intValue?: string } | undefined;
+    expect(charsBilled).toBeDefined();
+    expect(Number(charsBilled?.intValue)).toBeGreaterThan(0);
+  });
+
+  test("unknown TTS model → audio.fallback=true and audio.requested_model on the root span", async () => {
+    const spans = captureSpans();
+    stubFetch(async () => new Response("upstream error", { status: 500 }));
+
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ input: "Hi", model: "totally-unknown-model" }),
+      headers: { "content-type": "application/json" },
+    }));
+    await handleRequest(req);
+
+    const root = spans.find((s) => s.name === "audio.speech");
+    expect(root).toBeDefined();
+    expect(attr(root, "audio.fallback")).toEqual({ boolValue: true });
+    expect(attr(root, "audio.requested_model")).toEqual({ stringValue: "totally-unknown-model" });
+    // No retries were consumed on this path — always present, default 0.
+    expect(attr(root, "audio.retries")).toEqual({ intValue: "0" });
+  });
+
+  test("audio.inflight is at least 1 on a completed STT root span", async () => {
+    const spans = captureSpans();
+    stubFetch(async () => Response.json({ text: "hello", usage: null }));
+    const res = await handleRequest(sttRequest());
+    expect(res.status).toBe(200);
+
+    const root = spans.find((s) => s.name === "audio.transcription");
+    const inflight = attr(root, "audio.inflight") as { intValue?: string } | undefined;
+    expect(inflight).toBeDefined();
+    expect(Number(inflight?.intValue)).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. AUDIO_CALLER_TOKENS: header-free caller identification for clients that
+// cannot set x-audio-source (Hermes' stock OpenAI client, MacWhisper).
+// ---------------------------------------------------------------------------
+
+describe("AUDIO_CALLER_TOKENS: header-free caller identification", () => {
+  /** A transcription request authorized via a bearer token, with an optional x-audio-source header. */
+  function sttRequestWithToken(token: string, headerCaller?: string): Request {
+    const form = new FormData();
+    form.append("model", "gpt-4o-transcribe");
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const headers: Record<string, string> = { authorization: `Bearer ${token}` };
+    if (headerCaller) headers["x-audio-source"] = headerCaller;
+    return new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form, headers });
+  }
+
+  test("mapped token, no x-audio-source header → audio.caller is the mapped name", async () => {
+    const spans = captureSpans();
+    stubFetch(async () => Response.json({ text: "hello", usage: null }));
+
+    const res = await handleRequest(sttRequestWithToken("hermes-secret-token"));
+    expect(res.status).toBe(200);
+
+    const root = spans.find((s) => s.name === "audio.transcription");
+    expect(attr(root, "audio.caller")).toEqual({ stringValue: "hermes" });
+  });
+
+  test("mapped token + explicit x-audio-source header → the header wins", async () => {
+    const spans = captureSpans();
+    stubFetch(async () => Response.json({ text: "hello", usage: null }));
+
+    const res = await handleRequest(sttRequestWithToken("hermes-secret-token", "argo-dashboard"));
+    expect(res.status).toBe(200);
+
+    const root = spans.find((s) => s.name === "audio.transcription");
+    expect(attr(root, "audio.caller")).toEqual({ stringValue: "argo-dashboard" });
   });
 });

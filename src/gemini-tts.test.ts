@@ -19,6 +19,7 @@ process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
 process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
 process.env["USAGE_DB"] ??= ":memory:";
 process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
+process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=macwhisper-secret-token";
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 

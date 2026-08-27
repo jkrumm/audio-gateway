@@ -6,7 +6,7 @@ import { log } from "./log";
 import { GEMINI_TTS, resolveTtsRoute } from "./model-resolution";
 import { getActiveSpan, traceIdFromRequestId, withRootSpan } from "./otel";
 import { handleReplicateSpeech, wantsPrep } from "./replicate-tts";
-import { getRequestMeta, recordUsage, runWithRequestContext, setRequestMeta } from "./usage";
+import { getRequestMeta, inflightEnd, inflightStart, recordUsage, runWithRequestContext, setRequestMeta } from "./usage";
 
 /** Attribute values gated by USAGE_KEEP_TEXT — same 600-char cap as the usage sink (usage.ts). */
 const TEXT_ATTR_MAX = 600;
@@ -38,23 +38,31 @@ export { GEMINI_TTS };
  * once the lane resolves, a single "speech-request" summary row is recorded
  * so a whole request can be reviewed as one timeline entry (see usage.ts).
  */
-export async function handleSpeech(req: Request): Promise<Response> {
-  const caller = req.headers.get("x-audio-source") ?? "unknown";
+export async function handleSpeech(req: Request, tokenCaller?: string): Promise<Response> {
+  // Explicit x-audio-source wins; otherwise fall back to the caller identified
+  // by a mapped AUDIO_CALLER_TOKENS bearer token (index.ts's callerFromToken),
+  // for clients that cannot set headers (Hermes' stock OpenAI client, MacWhisper).
+  const caller = req.headers.get("x-audio-source") ?? tokenCaller ?? "unknown";
   const requestId = crypto.randomUUID();
-  return runWithRequestContext({ requestId, caller }, () =>
-    withRootSpan(
-      {
-        traceId: traceIdFromRequestId(requestId),
-        name: "audio.speech",
-        kind: "server",
-        attrs: { "audio.request_id": requestId, "audio.caller": caller },
-      },
-      () => dispatchSpeech(req, caller),
-    ),
-  );
+  const inflight = inflightStart();
+  try {
+    return await runWithRequestContext({ requestId, caller }, () =>
+      withRootSpan(
+        {
+          traceId: traceIdFromRequestId(requestId),
+          name: "audio.speech",
+          kind: "server",
+          attrs: { "audio.request_id": requestId, "audio.caller": caller, "audio.inflight": inflight },
+        },
+        () => dispatchSpeech(req, caller, inflight),
+      ),
+    );
+  } finally {
+    inflightEnd();
+  }
 }
 
-async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
+async function dispatchSpeech(req: Request, caller: string, inflight: number): Promise<Response> {
   const requestStart = Date.now();
   const body = await req.text();
 
@@ -119,7 +127,8 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
     config.ttsAutoSummarizeMinChars > 0 &&
     input.trim().length >= config.ttsAutoSummarizeMinChars;
   if (autoSummarize) summarize = true;
-  if (requestedModel.length > 0 && route.model !== requestedModel) {
+  const modelOverridden = requestedModel.length > 0 && route.model !== requestedModel;
+  if (modelOverridden) {
     log.warn("tts model overridden", {
       endpoint: "speech",
       requested: requestedModel,
@@ -161,6 +170,10 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
     const span = getActiveSpan();
     span.setAttributes({
       "audio.model": route.model,
+      "audio.requested_model": requestedModel,
+      "audio.fallback": modelOverridden,
+      "audio.retries": meta.retries ?? 0,
+      "audio.inflight": inflight,
       "audio.lane": meta.lane,
       "audio.mode": meta.mode,
       "audio.voice": meta.voice,
@@ -176,6 +189,9 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
       "http.status_code": status,
       "audio.text.input": textAttr(input),
       "audio.text.output": textAttr(meta.outputText),
+      "audio.cost_usd": meta.costUsd != null ? Number(meta.costUsd.toFixed(6)) : undefined,
+      "audio.cost_source": meta.costSource ?? "none",
+      "audio.chars_billed": route.provider === "replicate" ? meta.charsBilled : undefined,
     });
     if (status >= 500) span.setStatus("error", errorText ?? undefined);
     if (status < 400) {
@@ -188,6 +204,7 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
         inputChars,
         audioSeconds: meta.audioSeconds ?? null,
         bytesOut: meta.bytesOut ?? null,
+        inflight,
       });
     }
   };
