@@ -124,11 +124,12 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
    */
   const recordSpeechRequest = (status: number, errorText?: string | null): void => {
     const meta = getRequestMeta();
+    const latencyMs = Date.now() - requestStart;
     recordUsage({
       endpoint: "speech-request",
       model: route.model,
       status,
-      latencyMs: Date.now() - requestStart,
+      latencyMs,
       inputChars,
       audioSeconds: meta.audioSeconds ?? null,
       bytesOut: meta.bytesOut ?? null,
@@ -164,6 +165,18 @@ async function dispatchSpeech(req: Request, caller: string): Promise<Response> {
       "audio.text.output": textAttr(meta.outputText),
     });
     if (status >= 500) span.setStatus("error", errorText ?? undefined);
+    if (status < 400) {
+      log.info("tts.done", {
+        model: route.model,
+        provider: route.provider,
+        lane: meta.lane,
+        caller,
+        latencyMs,
+        inputChars,
+        audioSeconds: meta.audioSeconds ?? null,
+        bytesOut: meta.bytesOut ?? null,
+      });
+    }
   };
 
   if (route.provider === "gemini" || route.provider === "replicate") {

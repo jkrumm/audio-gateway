@@ -1,5 +1,6 @@
 import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
+import { log } from "./log";
 import { flushOtel } from "./otel";
 import { handleSpeech } from "./speech";
 import { handleTranscriptions } from "./transcriptions";
@@ -85,11 +86,14 @@ if (import.meta.main) {
     fetch: handleRequest,
   });
 
-  console.log(`audio-gateway listening on http://localhost:${server.port} → ${config.iuBaseUrl}`);
+  log.info(`audio-gateway listening on http://localhost:${server.port} → ${config.iuBaseUrl}`, {
+    port: server.port,
+    iuBaseUrl: config.iuBaseUrl,
+  });
 
   // Graceful shutdown (Decision 5): SIGTERM + SIGINT.
   const shutdown = async (signal: string): Promise<void> => {
-    console.log(`audio-gateway received ${signal}, starting graceful shutdown`);
+    log.info(`audio-gateway received ${signal}, starting graceful shutdown`, { signal });
     setDraining(true);
 
     // Wait for in-flight requests to complete, up to shutdownDrainMs.
@@ -98,7 +102,7 @@ if (import.meta.main) {
       await Bun.sleep(50);
     }
     if (inFlight > 0) {
-      console.warn(`audio-gateway shutdown: ${inFlight} request(s) still in flight after drain timeout`);
+      log.warn(`audio-gateway shutdown: ${inFlight} request(s) still in flight after drain timeout`, { inFlight });
     }
 
     await flushOtel();

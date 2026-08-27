@@ -37,6 +37,7 @@ const { handleRequest, setDraining } = await import("./index");
 // ---------------------------------------------------------------------------
 
 const { _sink: usageSink } = await import("./usage");
+const { _test: otelTest } = await import("./otel");
 
 let capturedRows: Array<Record<string, unknown>> = [];
 
@@ -103,6 +104,7 @@ function authed(req: Request): Request {
 afterEach(() => {
   restoreFetch();
   setDraining(false);
+  otelTest.onLogExport(null);
 });
 
 // Clear captured rows between tests so row counts are per-test.
@@ -213,12 +215,15 @@ describe("Default TTS model when `model` omitted", () => {
 // ---------------------------------------------------------------------------
 
 describe("Default STT model when `model` omitted", () => {
-  test("injects config.sttModel into the upstream transcription form", async () => {
+  test("injects config.sttModel into the upstream transcription form, queues an stt.done log", async () => {
     let sentModel = "";
     stubFetch(async (_url, init) => {
       sentModel = String((init?.body as FormData).get("model") ?? "");
       return Response.json({ text: "hello" });
     });
+
+    const logBodies: string[] = [];
+    otelTest.onLogExport((record) => logBodies.push(record.body.stringValue));
 
     const form = new FormData();
     // No `model` — mirrors the Argo dashboard, which uploads the recording only.
@@ -229,6 +234,8 @@ describe("Default STT model when `model` omitted", () => {
 
     expect(res.status).toBe(200);
     expect(sentModel).toBe("gpt-4o-transcribe");
+    // Happy-path completion ships a structured log record (otel.ts emitLog).
+    expect(logBodies).toContain("stt.done");
   });
 });
 

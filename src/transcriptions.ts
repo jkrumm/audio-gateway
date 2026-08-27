@@ -156,11 +156,12 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
     response: Response,
     opts: { model: string; status: number; audioSeconds?: number | null; outputText?: string },
   ): Response => {
+    const latencyMs = Date.now() - requestStart;
     recordUsage({
       endpoint: "transcription-request",
       model: opts.model,
       status: opts.status,
-      latencyMs: Date.now() - requestStart,
+      latencyMs,
       responseFormat: clientFormat,
       audioSeconds: opts.audioSeconds ?? null,
       text: { output: opts.outputText },
@@ -178,6 +179,15 @@ async function dispatchTranscription(req: Request, caller: string): Promise<Resp
       "audio.text.output": textAttr(opts.outputText),
     });
     if (opts.status >= 500) span.setStatus("error");
+    if (opts.status < 400) {
+      log.info("stt.done", {
+        model: opts.model,
+        caller,
+        latencyMs,
+        responseFormat: clientFormat,
+        audioSeconds: opts.audioSeconds ?? null,
+      });
+    }
     return response;
   };
 
