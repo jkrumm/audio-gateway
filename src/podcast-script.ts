@@ -582,7 +582,7 @@ function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; s
   const { req, outline, segment, index, total } = params;
   return `${baseSystemPrompt(req)}
 
-You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
+You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. Keep the segment's length within about fifteen percent of the current draft (target ${segment.targetWords} words) — revise, don't expand. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
 Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/tension), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
 Segment goal: ${segment.goal}
 Central tension for this segment: ${segment.tension}
@@ -668,6 +668,8 @@ export function parseChatCompletionStream(body: string): { content: string; usag
   return { content, usage, finishReason };
 }
 
+const WRITING_STAGES: ReadonlySet<string> = new Set(["segment", "revise"]);
+
 async function callWriterLlm(params: {
   model: string;
   systemPrompt: string;
@@ -691,6 +693,11 @@ async function callWriterLlm(params: {
             { role: "user", content: params.userContent },
           ],
           max_completion_tokens: params.maxCompletionTokens,
+          // Writing stages don't need the model's long deliberation — measured
+          // 2026-09-02 on a revision prompt: default 8.7k completion tokens vs
+          // 4.8k with reasoning_effort=low for the same-length text. Planning
+          // (outline) and reviewing keep the default; the proxy forwards the field.
+          ...(WRITING_STAGES.has(params.stage) && { reasoning_effort: "low" }),
           // Streamed on purpose: a 20-minute episode's outline over a 20k-char
           // source runs several minutes on the writer model, longer than the IU
           // proxy's non-streaming request timeout (observed as an HTML "500 - The
@@ -712,8 +719,15 @@ async function callWriterLlm(params: {
 
       const { content, usage, finishReason } = parseChatCompletionStream(res.body);
       recordUsage({ endpoint: params.usageEndpoint, model: params.model, status: res.status, latencyMs, inputChars: params.userContent.length, usageJson: { ...usage, finish_reason: finishReason ?? null } });
-      span.setAttributes({ "llm.output_tokens": usage?.completion_tokens ?? undefined, "llm.finish_reason": finishReason });
+      span.setAttributes({
+        "llm.output_tokens": usage?.completion_tokens ?? undefined,
+        // Only when the stream carried one — an empty string would read as a value on the dashboard.
+        ...(finishReason && { "llm.finish_reason": finishReason }),
+      });
       if (!content.trim()) {
+        // Surface it on the span too: a retry keeps the job alive, but the
+        // stage-health tile must see that this call produced nothing.
+        span.setStatus("error", `empty content (finish_reason=${finishReason ?? "unknown"})`);
         log.warn("podcast writer returned no content", { stage: params.stage, finishReason, completionTokens: usage?.completion_tokens ?? null, latencyMs });
       }
       return content;
@@ -740,10 +754,23 @@ async function callWriterLlm(params: {
  * On the final failure the full raw reply is logged so the shape of the
  * breakage is diagnosable from the logs alone.
  */
-async function callAndParse<T>(stage: string, call: () => Promise<string>, parse: (raw: string) => T, attempts = 2): Promise<T> {
+/**
+ * Output budget for a writer call. claude-sonnet-5 on the IU endpoint thinks
+ * before it answers on heavy prompts and that reasoning is invisible in the
+ * stream but counted against `max_completion_tokens` (measured 2026-09-02: a
+ * 5.8k-char revision cost 8.7k completion tokens; at 10.4k the reply came back
+ * EMPTY with finish_reason=length). Budgets are therefore sized for reasoning
+ * plus text, and a retry gets double.
+ */
+function writerBudget(visibleTokens: number, attempt: number): number {
+  const reasoningHeadroom = 16000;
+  return Math.min(64000, (visibleTokens + reasoningHeadroom) * attempt);
+}
+
+async function callAndParse<T>(stage: string, call: (attempt: number) => Promise<string>, parse: (raw: string) => T, attempts = 2): Promise<T> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const raw = await call();
+    const raw = await call(attempt);
     try {
       return parse(raw);
     } catch (err) {
@@ -779,7 +806,7 @@ async function reviewEpisode(params: {
     try {
       const result = await callAndParse(
         `review ${role}`,
-        () =>
+        (attempt) =>
           callWriterLlm({
             model,
             systemPrompt: reviewPrompt({ req, outline, role }),
@@ -787,7 +814,7 @@ async function reviewEpisode(params: {
             // Reviewers read source + outline + the whole draft and the writer
             // model reasons before it answers; at 6000 all three came back with
             // EMPTY content (2026-09-02) — the budget was spent on reasoning.
-            maxCompletionTokens: 16000,
+            maxCompletionTokens: writerBudget(4000, attempt),
             stage: "review",
             usageEndpoint: "podcast-review",
           }),
@@ -837,12 +864,12 @@ async function reviseSegments(params: {
     try {
       const turns = await callAndParse(
         `revise ${index + 1}`,
-        () =>
+        (attempt) =>
           callWriterLlm({
             model,
             systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total }),
             userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
-            maxCompletionTokens: Math.round(segmentSpec.targetWords * 8 + 6000),
+            maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
             stage: "revise",
             usageEndpoint: "podcast-segment",
           }),
@@ -872,7 +899,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   opts.onProgress?.("outline", 0, 1);
   const outline = await callAndParse(
     "outline",
-    () =>
+    (attempt) =>
       callWriterLlm({
         model: opts.model,
         systemPrompt: outlinePrompt(req, segmentCount, targetWords),
@@ -881,7 +908,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         // thousand tokens of verbatim key_facts, and the writer model's reasoning
         // counts against the same budget: 6000 was hit exactly (2026-09-02) and the
         // truncated JSON failed to parse. Sized for the worst case, not the average.
-        maxCompletionTokens: 20000,
+        maxCompletionTokens: writerBudget(8000, attempt),
         stage: "outline",
         usageEndpoint: "podcast-outline",
       }),
@@ -894,7 +921,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   const segments = await synthConcurrent(opts.concurrency, outline.segments, async (segmentSpec, index) => {
     const turns = await callAndParse(
       `segment ${index + 1}`,
-      () =>
+      (attempt) =>
         callWriterLlm({
           model: opts.model,
           systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1] }),
@@ -903,7 +930,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
           // segment reply mid-array under the tighter budget (words*4 + 1500), producing an
           // unterminated JSON array — extractJsonObject's naive "last }" then grabs an inner
           // object's closing brace and JSON.parse throws "Expected ']'" (smoke-tested 2026-09-01).
-          maxCompletionTokens: Math.round(segmentSpec.targetWords * 8 + 3000),
+          maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
           stage: "segment",
           usageEndpoint: "podcast-segment",
         }),

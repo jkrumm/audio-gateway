@@ -1,7 +1,8 @@
 import { SAMPLE_RATE_DEFAULT } from "./audio";
 import { synthConcurrent } from "./gemini-tts-core";
 import type { PodcastHost, ScriptSegment } from "./podcast-script";
-import { synthReplicateChunk, type ReplicateChunkParams } from "./replicate-tts";
+import { log } from "./log";
+import { ReplicateSynthError, synthReplicateChunk, type ReplicateChunkParams } from "./replicate-tts";
 
 // One voice per host, one Replicate prediction per turn. Flattens a script's
 // segments into a flat turn list (turnsForSynthesis) and synthesizes each on
@@ -107,7 +108,17 @@ export async function synthesizeTurns(turns: SynthTurnInput[], opts: SynthTurnsO
       similarityBoost: opts.similarityBoost,
       ...(turn.speed !== undefined && { speed: turn.speed }),
     };
-    const result = await synthReplicateChunk(params);
+    let result: Awaited<ReturnType<typeof synthReplicateChunk>>;
+    try {
+      result = await synthReplicateChunk(params);
+    } catch (err) {
+      // rawFetch already retries 503/429; a failed/odd prediction or a delivery
+      // hiccup surfaces as ReplicateSynthError. One more attempt for a single
+      // turn is far cheaper than failing an episode of a hundred turns.
+      if (!(err instanceof ReplicateSynthError)) throw err;
+      log.warn("podcast turn synth failed, retrying once", { index, error: err.message });
+      result = await synthReplicateChunk(params);
+    }
     completed++;
     opts.onProgress?.(completed, turns.length);
     return {

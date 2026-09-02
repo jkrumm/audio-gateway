@@ -192,3 +192,20 @@ docs and a research pass on production practice:
 - **Cost.** ElevenLabs lists v3 at $0.10 per 1k characters; a 22-minute
   episode is ~20k characters (~$2) plus roughly $0.50 of writer-model tokens
   and $0.05 for the cover.
+
+## Writer budgets and reasoning (2026-09-02)
+
+claude-sonnet-5 on the IU endpoint reasons before answering on heavy prompts,
+and that reasoning is invisible in the stream but counted against
+`max_completion_tokens` (a 5.8k-char revision: 8.7k completion tokens; at a
+10.4k cap the reply came back empty with `finish_reason=length`). Budgets are
+therefore `writerBudget(visible, attempt)` = (visible text + 16k headroom) ×
+attempt, capped at 64k, so a parse-failure retry automatically doubles.
+Writing stages (`segment`, `revise`) send `reasoning_effort: low` (same text,
+~45 % fewer output tokens, faster); planning and reviewing keep the default.
+`llm.finish_reason` is recorded on every writer span and usage row.
+Review and revision are polish: a reviewer that fails twice is skipped, a
+revision that fails keeps the draft segment. A running episode survives a
+deploy: the VPS compose gives the old container a long `stop_grace_period`
+and `SHUTDOWN_DRAIN_MS` covers a full job, so RollHook's replacement container
+takes new traffic while the old one finishes.

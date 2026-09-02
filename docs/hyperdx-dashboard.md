@@ -12,6 +12,9 @@ Span model:
 | `audio.prep` | client | `llm.model` · `audio.prep.kind` prep/summary · `llm.output_tokens` |
 | `audio.synth.chunk` | client | `audio.chunk_index` · `replicate.predict_time_s` · `replicate.polls` · `audio.audio_seconds` |
 | `audio.delivery.fetch` · `audio.decode` · `audio.concat` · `audio.transcode` | internal | — |
+| `audio.podcast` (root, one per job; trace id = job id) | server | `audio.podcast.title` · `audio.podcast.turns` · `audio.podcast.chapters` · `audio.audio_seconds` · `audio.bytes_out` · `audio.cost_usd` · `audio.podcast.published` · `audio.caller` |
+| `audio.podcast.llm` | client | `llm.model` · `audio.podcast.stage` outline/segment/review/revise · `llm.output_tokens` · `llm.finish_reason` · `http.status_code` |
+| `audio.cover` · `audio.publish.abs` | client | `http.status_code` · `abs.library_id` · `abs.item_id` · `abs.episode_id` · `abs.created` |
 | `audio.transcription` (root) | server | `audio.model` · `audio.fallback` · `audio.text.output` (transcript) |
 | `audio.stt.upstream` | client | `audio.model` · `http.status_code` |
 
@@ -66,3 +69,48 @@ Search: `ServiceName:audio-gateway SpanName:(audio.speech OR audio.transcription
 
 Same data from the terminal: `bun run usage:tail --prod --since 2h` (rows) or the `/otel` skill
 (`query.py --env prod "<sql above>"`).
+
+## Podcast tiles
+
+**P1. Episodes — count, duration, cost (table)**
+Search: `ServiceName:audio-gateway SpanName:audio.podcast` · columns `SpanAttributes['audio.podcast.title']`, `Duration`, `SpanAttributes['audio.audio_seconds']`, `SpanAttributes['audio.cost_usd']`, `SpanAttributes['audio.podcast.published']`, `StatusCode`.
+```sql
+SELECT Timestamp, SpanAttributes['audio.podcast.title'] title, round(Duration/1e9) wall_s,
+       toFloat64OrZero(SpanAttributes['audio.audio_seconds']) audio_s,
+       toFloat64OrZero(SpanAttributes['audio.cost_usd']) cost_usd,
+       SpanAttributes['audio.podcast.turns'] turns, SpanAttributes['audio.podcast.published'] published, StatusCode
+FROM otel_traces WHERE ServiceName='audio-gateway' AND SpanName='audio.podcast' AND Timestamp > now() - INTERVAL 30 DAY
+ORDER BY Timestamp DESC
+-- KPIs (sum/avg of cost, audio seconds): add StatusCode='Ok' — a failed job carries none of these attributes.
+```
+
+**P2. Writer stages — wall time and output tokens by stage (bar)**
+Search: `ServiceName:audio-gateway SpanName:audio.podcast.llm` · group by `SpanAttributes['audio.podcast.stage']` · p50/max `Duration`.
+```sql
+SELECT SpanAttributes['audio.podcast.stage'] stage, count() n,
+       round(quantile(0.5)(Duration)/1e9) p50_s, round(max(Duration)/1e9) max_s,
+       round(avg(toFloat64OrZero(SpanAttributes['llm.output_tokens']))) avg_out_tokens,
+       countIf(SpanAttributes['llm.finish_reason']='length') truncated
+FROM otel_traces WHERE ServiceName='audio-gateway' AND SpanName='audio.podcast.llm' AND Timestamp > now() - INTERVAL 7 DAY
+GROUP BY stage ORDER BY p50_s DESC
+```
+`truncated > 0` means a writer budget is too small for the model's reasoning — see `writerBudget` in `podcast-script.ts`.
+
+**P3. Synthesis fan-out per episode (line)** — `audio.synth.chunk` spans whose root is `audio.podcast`: count and p95 per trace.
+```sql
+SELECT TraceId, count() turns, round(quantile(0.95)(Duration)/1e6) p95_ms, round(sum(Duration)/1e9) cpu_s
+FROM otel_traces WHERE ServiceName='audio-gateway' AND SpanName='audio.synth.chunk'
+  AND TraceId IN (SELECT TraceId FROM otel_traces WHERE SpanName='audio.podcast' AND Timestamp > now() - INTERVAL 7 DAY)
+GROUP BY TraceId
+```
+
+**P4. Writers' room health (numbers)** — logs, last 7 days: `podcast writer reply did not parse` (retries), `podcast reviewer skipped`, `podcast revision skipped`, `podcast writer returned no content`, `podcast.failed`.
+```sql
+SELECT Body msg, count() n FROM otel_logs
+WHERE ServiceName='audio-gateway' AND Timestamp > now() - INTERVAL 7 DAY
+  AND (Body LIKE 'podcast%' AND SeverityText IN ('WARN','ERROR'))
+GROUP BY msg ORDER BY n DESC
+```
+Alert: `podcast.failed` > 0 in 1 h.
+
+**P5. Publish path (table)** — `audio.publish.abs` spans: `abs.created`, `abs.episode_id`, duration; a null `abs.episode_id` means the ABS scan never surfaced the file.
