@@ -326,7 +326,7 @@ export const config = {
    * catch what a single model's blind spots miss, and reviewers only point,
    * they never draft.
    */
-  podcastReviewModels: csvList("PODCAST_REVIEW_MODELS", "gemini-3.1-pro-preview,gpt-5.6-luna"),
+  podcastReviewModels: csvList("PODCAST_REVIEW_MODELS", "gemini-3.8-flash,gpt-5.6-luna"),
   /** Final metadata pass (title/description/cover prompt/genres/chapter titles) after the script is locked. */
   podcastMetadataModel: process.env["PODCAST_METADATA_MODEL"] ?? "gpt-5.6-luna",
   /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Missing file → empty (logged once). */

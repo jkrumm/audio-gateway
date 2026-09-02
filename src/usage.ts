@@ -244,6 +244,7 @@ const RATES: Record<string, Rate> = {
   "gemini-3.5-flash": { input: 1.5, output: 9 },
   "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
   "gemini-3.7-flash": { input: 0.75, output: 3.75 }, // introductory through 2026-12-31, then 1.5 / 7.5
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 }, // introductory through 2026-12-31, then 1.5 / 7.5
 };
 
 interface CostInputs {

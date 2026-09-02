@@ -172,7 +172,7 @@ row.
 |-|-|-|
 | `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
 | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | The voice owner — segment writers and every revision/tightening pass. |
-| `PODCAST_REVIEW_MODELS` | `gemini-3.1-pro-preview,gpt-5.6-luna` | Comma list; every reviewer role runs on every listed model. |
+| `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,gpt-5.6-luna` | Comma list; every reviewer role runs on every listed model. |
 | `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | Final title/description/cover-prompt/genres/chapter-titles pass. |
 | `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
 | `PODCAST_TTS_MODEL` | `elevenlabs/v3` | Replicate model for per-turn synthesis. |
@@ -245,7 +245,7 @@ polishes the metadata:
 |-|-|-|-|
 | Outline | `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering, which the outline pays for and nothing downstream needs to match. |
 | Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue — practitioners (and Anthropic's own prompting guide) name this version for organic voice and dialogue, where Opus 5 runs longer and more metaphor-heavy by default. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. |
-| Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.1-pro-preview,gpt-5.6-luna` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. |
+| Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,gpt-5.6-luna` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. |
 | Metadata | `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. |
 
 **The voice-owner rule**: exactly one model (`PODCAST_WRITE_MODEL`) ever
