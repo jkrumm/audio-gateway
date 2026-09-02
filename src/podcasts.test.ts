@@ -535,3 +535,13 @@ describe("asciiHeaderSafe", () => {
     expect(_test.asciiHeaderSafe('a"b\\c')).toBe("abc");
   });
 });
+
+describe("episodeFilename", () => {
+  test("is unique per job and stable for the same job", async () => {
+    const { episodeFilename } = await import("./podcasts");
+    const a = episodeFilename("2026-09-02", "Nordspanien 2026", "c2e279c6-b004-49cd-91b7-89d969856bf8");
+    const b = episodeFilename("2026-09-02", "Nordspanien 2026", "13f825b0-034e-4856-8bbb-64e6f4f01c3c");
+    expect(a).toBe("2026-09-02 Nordspanien 2026 [c2e279c6].mp3");
+    expect(a).not.toBe(b);
+  });
+});

@@ -304,6 +304,17 @@ export function slugifyFilename(title: string): string {
 }
 
 /** 1-indexed track number for a new episode, given how many prior episodes in the same series are `done`. */
+/**
+ * The file name inside the show folder. ABS's upload MOVES the file onto
+ * `<show>/<filename>` without checking for an existing one, so a second
+ * episode with the same date and title silently replaced the first
+ * (2026-09-02, v1 → v2 of the Spain briefing). The job id makes the name
+ * unique per job while a re-publish of the SAME job still overwrites its own file.
+ */
+export function episodeFilename(date: string, title: string, jobId: string): string {
+  return `${date} ${slugifyFilename(title)} [${jobId.slice(0, 8)}].mp3`;
+}
+
 export function trackNumberFor(previousDoneCountInSeries: number): number {
   return previousDoneCountInSeries + 1;
 }
@@ -543,7 +554,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       log.warn("publish skipped: audiobookshelf not configured", { id: job.id });
     } else {
       store.update(job.id, { status: "publishing" });
-      const filename = `${today} ${slugifyFilename(script.title)}.mp3`;
+      const filename = episodeFilename(today, script.title, job.id);
       const published = await publishToAudiobookshelf({
         series: request.series,
         author: config.podcastAuthor,
@@ -632,7 +643,7 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
           const title = job.title ?? job.request.title ?? job.request.series;
           const description = job.description ?? "";
           const today = new Date().toISOString().slice(0, 10);
-          const filename = `${today} ${slugifyFilename(title)}.mp3`;
+          const filename = episodeFilename(today, title, job.id);
 
           const published = await publishToAudiobookshelf({
             series: job.request.series,
