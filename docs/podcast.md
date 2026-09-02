@@ -113,3 +113,30 @@ row.
 | `PODCAST_AUTHOR` | `Hermes` | Author/artist tag on published episodes. |
 | `ABS_URL` / `ABS_API_KEY` / `ABS_LIBRARY` | unset / unset / `Podcasts` | Audiobookshelf base URL, API key, and target podcast library — unset disables publishing entirely. |
 | `IMAGE_GEN_URL` / `IMAGE_GEN_API_KEY` | unset / unset | image-gen gateway for cover art — unset disables covers entirely. |
+
+## Tuning after the first episode (2026-09-02)
+
+Findings from the 22-minute Spain episode, checked against the ElevenLabs v3
+docs and a research pass on production practice:
+
+- **Tags read aloud.** v3 only reliably interprets the cues its docs list;
+  `[thoughtful]`, `[emphasized]`, `[hesitates]` were spoken as words. The
+  allowed set is now the official examples only, tags are dropped from turns
+  under twelve words, and the writer is told "one tag every six turns, most
+  turns none".
+- **Ping-pong.** Median turn was 13 words, max 40 — mechanical alternation.
+  The writer now targets half of all turns at 40–120 words plus two 100–160
+  word passages per segment, interjections at most one in five.
+- **Loudness.** Sarah's voice measured −17.6 LUFS against Mark's −24.8 on the
+  same line. `matchHostLoudness` now levels each host to −20 LUFS (one gain per
+  host over all their turns) before concatenation; the global loudnorm then
+  lifts the programme to −16.
+- **Stability.** v3 has three presets (0 Creative, 0.5 Natural, 1 Robust);
+  `PODCAST_STABILITY` defaults to 0.5. `similarity_boost`/`style` have no
+  documented effect on v3 and are passed through only because the Replicate
+  schema accepts them.
+- **Pace.** `PODCAST_SPEEDS` (default `0.94,1`) slows host A a notch; v3's
+  documented range is 0.7–1.2.
+- **Cost.** ElevenLabs lists v3 at $0.10 per 1k characters; a 22-minute
+  episode is ~20k characters (~$2) plus roughly $0.50 of writer-model tokens
+  and $0.05 for the cover.

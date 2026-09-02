@@ -151,3 +151,43 @@ describe.skipIf(!hasFfmpeg)("masterPodcastMp3 (real ffmpeg)", () => {
     expect(mp3.byteLength).toBeGreaterThan(0);
   });
 });
+
+describe("host loudness matching", () => {
+  const sine = (amplitude: number, seconds: number, sampleRate = 24000): Uint8Array => {
+    const n = Math.round(seconds * sampleRate);
+    const out = new Int16Array(n);
+    for (let i = 0; i < n; i++) out[i] = Math.round(Math.sin((2 * Math.PI * 440 * i) / sampleRate) * 32767 * amplitude);
+    return new Uint8Array(out.buffer);
+  };
+
+  test("applyGainDb scales samples and clips at full scale", async () => {
+    const { applyGainDb } = await import("./podcast-mux");
+    const quiet = sine(0.1, 0.01);
+    const louder = applyGainDb(quiet, 6);
+    const q = new Int16Array(quiet.buffer, quiet.byteOffset, quiet.byteLength / 2);
+    const l = new Int16Array(louder.buffer, louder.byteOffset, louder.byteLength / 2);
+    const iq = q.findIndex((v) => v > 1000);
+    expect(l[iq]! / q[iq]!).toBeCloseTo(1.995, 1);
+    const hot = applyGainDb(sine(0.9, 0.01), 12);
+    const h = new Int16Array(hot.buffer, hot.byteOffset, hot.byteLength / 2);
+    expect(Math.max(...h)).toBe(32767);
+    expect(applyGainDb(quiet, 0)).toBe(quiet);
+  });
+
+  test("matchHostLoudness levels a loud and a quiet host onto the same target", async () => {
+    if (!Bun.which("ffmpeg")) return;
+    const { matchHostLoudness, measureLoudnessLufs } = await import("./podcast-mux");
+    const turns = [
+      { speaker: "A", pcm: sine(0.05, 2), sampleRate: 24000 },
+      { speaker: "B", pcm: sine(0.5, 2), sampleRate: 24000 },
+    ];
+    const before = await Promise.all(turns.map((t) => measureLoudnessLufs(t.pcm, t.sampleRate)));
+    expect(before[1]! - before[0]!).toBeGreaterThan(15);
+    const { turns: levelled, gainsDb } = await matchHostLoudness(turns, -20);
+    expect(gainsDb["A"]).toBeGreaterThan(0);
+    expect(gainsDb["B"]).toBeLessThan(0);
+    const after = await Promise.all(levelled.map((t) => measureLoudnessLufs(t.pcm, t.sampleRate)));
+    expect(Math.abs(after[0]! - after[1]!)).toBeLessThan(1.5);
+    expect(Math.abs(after[0]! - -20)).toBeLessThan(1.5);
+  });
+});

@@ -213,8 +213,12 @@ const RATES: Record<string, Rate> = {
   // Not published as a separate line item by Replicate — assumed identical to
   // flash-v2.5 pending a dedicated rate. Re-check if turbo spend matters.
   "turbo-v2.5": { perInputChars1k: 0.05 }, // unverified
-  // Deliberately absent: "v3". No published per-char or per-token rate found;
-  // reports as cost_source: 'none' rather than inventing a number.
+  // ElevenLabs' own API list price for Eleven v3 (elevenlabs.io/pricing/api,
+  // verified 2026-09-02): $0.10 per 1,000 characters. Replicate publishes no
+  // separate line for elevenlabs/v3, so this is the upstream price, not a
+  // measured Replicate invoice — good enough to stop podcast episodes
+  // reporting cost_usd = null.
+  "v3": { perInputChars1k: 0.1 },
 };
 
 interface CostInputs {

@@ -174,3 +174,78 @@ export async function masterPodcastMp3(pcm: Uint8Array, sampleRate: number, opts
     await rm(dir, { recursive: true, force: true });
   }
 }
+
+// ---------------------------------------------------------------------------
+// Per-host loudness matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Integrated loudness (EBU R128 "I", LUFS) of raw s16le mono PCM via ffmpeg's
+ * ebur128 filter. Returns null for (near-)silence, where ffmpeg reports -70.
+ */
+export async function measureLoudnessLufs(pcm: Uint8Array, sampleRate: number): Promise<number | null> {
+  const proc = Bun.spawn(
+    ["ffmpeg", "-hide_banner", "-nostats", "-f", "s16le", "-ar", String(sampleRate), "-ac", "1", "-i", "pipe:0", "-af", "ebur128", "-f", "null", "-"],
+    { stdin: "pipe", stdout: "ignore", stderr: "pipe" },
+  );
+  const writer = proc.stdin;
+  writer.write(pcm);
+  await writer.end();
+  const stderr = await new Response(proc.stderr).text();
+  await proc.exited;
+  // The summary block ends with "I:  -24.8 LUFS"; take the last occurrence.
+  const matches = [...stderr.matchAll(/I:\s+(-?[\d.]+)\s+LUFS/g)];
+  const last = matches[matches.length - 1];
+  if (!last?.[1]) return null;
+  const lufs = Number(last[1]);
+  if (!Number.isFinite(lufs) || lufs < -50) return null;
+  return lufs;
+}
+
+/** Scale s16le samples by `db` (pure, clipping at full scale). Exported for tests. */
+export function applyGainDb(pcm: Uint8Array, db: number): Uint8Array {
+  if (db === 0) return pcm;
+  const factor = 10 ** (db / 20);
+  const src = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / BYTES_PER_SAMPLE);
+  const out = new Int16Array(src.length);
+  for (let i = 0; i < src.length; i++) {
+    const v = Math.round((src[i] ?? 0) * factor);
+    out[i] = v > 32767 ? 32767 : v < -32768 ? -32768 : v;
+  }
+  return new Uint8Array(out.buffer);
+}
+
+/** Never boost/cut a voice by more than this — a bigger gap means a broken take, not a level mismatch. */
+const MAX_HOST_GAIN_DB = 12;
+
+/**
+ * Bring every host onto the same integrated loudness BEFORE the turns are
+ * concatenated. Voices differ by several dB at the source (Sarah measured
+ * -17.6 LUFS against Mark's -24.8 on the same line, 2026-09-02) and the
+ * global loudnorm at mastering can't fix a per-speaker imbalance — it only
+ * evens the programme as a whole. One gain per host (measured over ALL of that
+ * host's turns joined together) keeps the host's own dynamics intact; the
+ * per-host gains are returned for the logs.
+ */
+export async function matchHostLoudness<T extends { pcm: Uint8Array; sampleRate: number; speaker: string }>(
+  turns: T[],
+  targetLufs: number,
+): Promise<{ turns: T[]; gainsDb: Record<string, number> }> {
+  const bySpeaker = new Map<string, T[]>();
+  for (const t of turns) bySpeaker.set(t.speaker, [...(bySpeaker.get(t.speaker) ?? []), t]);
+
+  const gainsDb: Record<string, number> = {};
+  const gainOf = new Map<T, number>();
+  for (const [speaker, group] of bySpeaker) {
+    const joined = concatWithGaps(group.map((t) => ({ pcm: t.pcm, sampleRate: t.sampleRate, gapMsAfter: 0 })));
+    const measured = await measureLoudnessLufs(joined.pcm, joined.sampleRate);
+    const gain = measured === null ? 0 : Math.max(-MAX_HOST_GAIN_DB, Math.min(MAX_HOST_GAIN_DB, targetLufs - measured));
+    gainsDb[speaker] = Number(gain.toFixed(2));
+    for (const t of group) gainOf.set(t, gain);
+  }
+
+  return {
+    turns: turns.map((t) => ({ ...t, pcm: applyGainDb(t.pcm, gainOf.get(t) ?? 0) })),
+    gainsDb,
+  };
+}

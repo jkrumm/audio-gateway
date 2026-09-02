@@ -290,7 +290,22 @@ export const config = {
   /** Default episode length when a request doesn't specify one. */
   podcastDefaultMinutes: num("PODCAST_DEFAULT_MINUTES", 20),
   /** ElevenLabs v3 stability — lower is more tag-responsive ("Natural-ish"). */
-  podcastStability: num("PODCAST_STABILITY", 0.45),
+  /**
+   * v3 knows three presets — 0.0 Creative, 0.5 Natural, 1.0 Robust — and the
+   * docs say tags respond on Creative/Natural. Natural is the podcast default;
+   * an in-between value like 0.45 is not a documented setting.
+   */
+  podcastStability: num("PODCAST_STABILITY", 0.5),
+  /**
+   * Per-host ElevenLabs `speed` (0.7–1.2), same order as `podcastVoices`. Mark
+   * measured ~151 wpm against Sarah's ~138 on the same line (2026-09-02), and
+   * the listener heard it — a notch under 1 evens the pair out.
+   */
+  podcastSpeeds: pairOf2("PODCAST_SPEEDS", "0.94,1").map((raw) => {
+    const v = Number(raw);
+    if (!Number.isFinite(v)) throw new Error(`Invalid PODCAST_SPEEDS entry: "${raw}"`);
+    return Math.min(1.2, Math.max(0.7, v));
+  }) as [number, number],
   /** Mono speech at 44.1 kHz doesn't need music-grade bitrate. */
   podcastBitrateKbps: num("PODCAST_MP3_BITRATE", 64),
   /** Silence inserted between turns. */
@@ -302,7 +317,7 @@ export const config = {
   /** SQLite DB tracking podcast episode generation state. */
   podcastDb: process.env["PODCAST_DB"] ?? "./data/podcasts.db",
   /** Default Audiobookshelf podcast (show) name new episodes are filed under. */
-  podcastSeries: process.env["PODCAST_SERIES"] ?? "Hermes Briefings",
+  podcastSeries: process.env["PODCAST_SERIES"] ?? "Brain Sonderausgabe",
   podcastAuthor: process.env["PODCAST_AUTHOR"] ?? "Hermes",
   /** Audiobookshelf base URL; empty disables publishing entirely (see audiobookshelf.ts). */
   absUrl: withHttpsScheme((process.env["ABS_URL"] ?? "").replace(/\/+$/, "")),

@@ -15,6 +15,8 @@ export interface PodcastHost {
   id: "A" | "B";
   name: string;
   voice: string;
+  /** ElevenLabs speed (0.7–1.2); omitted = the model's own pace. Lets a fast host be slowed a notch. */
+  speed?: number;
 }
 
 export interface PodcastScriptRequest {
@@ -83,12 +85,19 @@ export interface Outline {
   segments: OutlineSegmentSpec[];
 }
 
-/** Allowed ElevenLabs v3 audio tags — inline, English-only, at most one per turn. */
+/**
+ * Allowed ElevenLabs v3 audio tags — only cues that appear as examples in the
+ * official v3 docs. Anything outside that set ([thoughtful], [emphasized],
+ * [hesitates] …) is not reliably interpreted and tends to be READ ALOUD as
+ * text, which is exactly what the first episode did (2026-09-02).
+ */
 export const V3_PODCAST_TAGS = [
-  "[laughs]", "[chuckles]", "[sighs]", "[pause]", "[short pause]", "[excited]",
-  "[curious]", "[thoughtful]", "[whispers]", "[clears throat]", "[exhales]",
-  "[hesitates]", "[deliberate]", "[emphasized]",
+  "[laughs]", "[chuckles]", "[sighs]", "[exhales]", "[whispers]", "[excited]",
+  "[curious]", "[clears throat]", "[pause]", "[short pause]",
 ] as const;
+
+/** Below this many words a tag is the whole delivery — v3 then tends to speak it; strip instead. */
+const TAG_MIN_TURN_WORDS = 12;
 
 const ALLOWED_TAG_SET = new Set<string>(V3_PODCAST_TAGS.map((t) => t.toLowerCase()));
 
@@ -96,7 +105,7 @@ const WORDS_PER_MINUTE = 150;
 const MIN_SEGMENTS = 3;
 const MAX_SEGMENTS = 9;
 const MINUTES_PER_SEGMENT = 4;
-const DEFAULT_SPLIT_MAX_CHARS = 900;
+const DEFAULT_SPLIT_MAX_CHARS = 1400;
 /** A turn shorter than this is a fragment ("Echt?", "Mhm.") worth folding into its neighbour. */
 const MERGE_SHORT_TURN_CHARS = 40;
 
@@ -196,6 +205,13 @@ function stripDisallowedTags(text: string): string {
   return text.replace(/\[[^\]\n]+\]/g, (m) => (ALLOWED_TAG_SET.has(m.toLowerCase()) ? m : ""));
 }
 
+/** A tag on a short line ("[laughs] Da ist sie.") is what v3 reads aloud most often — drop every tag below the word floor. */
+function stripTagsOnShortTurn(text: string): string {
+  const words = text.replace(/\[[^\]\n]+\]/g, "").trim().split(/\s+/).filter(Boolean).length;
+  if (words >= TAG_MIN_TURN_WORDS) return text;
+  return collapseWhitespace(text.replace(/\[[^\]\n]+\]/g, ""));
+}
+
 /** Strip markdown decoration, bullets and emoji left over from the LLM's reply — numbers/digits are left alone. */
 function stripMarkdown(text: string): string {
   return text
@@ -261,6 +277,7 @@ function mergeShortAdjacent(turns: ScriptTurn[], maxChars: number): ScriptTurn[]
 export function sanitizeTurns(turns: ScriptTurn[], maxChars = DEFAULT_SPLIT_MAX_CHARS): ScriptTurn[] {
   const cleaned = turns
     .map((t) => ({ speaker: t.speaker, text: collapseWhitespace(stripMarkdown(stripDisallowedTags(t.text))) }))
+    .map((t) => ({ speaker: t.speaker, text: stripTagsOnShortTurn(t.text) }))
     .filter((t) => t.text.length > 0);
   const split = cleaned.flatMap((t) => splitLongTurn(t, maxChars));
   return mergeShortAdjacent(split, maxChars);
@@ -285,9 +302,9 @@ Hosts: A = ${hostA.name} — has studied the SOURCE inside out (the notes belong
 Non-negotiables:
 1. Every fact, number, place name, price, date and rule comes from the SOURCE. Never invent. If the source flags something as open/unverified, the hosts say so ("das ist noch offen"). You may add widely-known general context only when it helps understanding and is clearly framed as general ("grundsätzlich…").
 2. Real-podcast texture: cold open with a concrete hook (a striking number or a scene), a short natural intro, signposting between topics, callbacks to earlier points, at least one genuine disagreement or "wait, really?" moment per segment, one running joke or motif across the episode, and a wrap-up with three concrete takeaways plus the open questions. Banter is fine but never filler — every exchange moves a fact or a decision forward.
-3. It is a CONVERSATION: turns are short (mostly 15-50 words, hard max 80), with interjections ("Echt?", "Moment.", "Mhm."), half-finished sentences, questions answered by the other host. No monologues longer than 3 sentences. No lists read aloud — turn any list into back-and-forth.
+3. It is a CONVERSATION with real weight, not ping-pong. Give the explaining host room: about half of all turns are 40-120 words (a complete thought, two to five sentences), and every segment contains at least two longer passages of 100-160 words where one host walks something through end to end while the other only reacts afterwards. Short interjections ("Echt?", "Moment.", "Mhm.") are the exception — at most one turn in five, never two in a row. Never alternate one sentence each; that rhythm sounds synthetic. Host A carries roughly 60% of the words. Hard max 180 words per turn. No lists read aloud — turn any list into back-and-forth or a walked-through explanation.
 4. Written for the EAR in ${languageLabel}: numbers, prices, times, units, dates and abbreviations fully spelled out as spoken (German: "dreihundertdreißig Euro", "hundertfünf Stundenkilometer", "elfter September", "zwei Meter fünfzig"); no digits, no symbols, no URLs, no markdown, no emoji, no parentheses. Place names in their local form. Expand every acronym once.
-5. Expressiveness via ElevenLabs v3 audio tags ONLY from this list: ${V3_PODCAST_TAGS.join(" ")}. Sparse: at most one tag per turn and at most one tag every four turns; put it at the start of the sentence it colours; never translate a tag. Use punctuation and ellipses for rhythm.
+5. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. ElevenLabs v3 audio tags ONLY from this list: ${V3_PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, placed at the start of a sentence in the middle of the turn — never as the first word of a short line, never translated, never invented. Most turns carry NO tag.
 6. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
 7. Output STRICT JSON only, no commentary, no code fences.`;
 }

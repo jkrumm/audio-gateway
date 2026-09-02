@@ -14,7 +14,10 @@ const CONTEXT_MAX_CHARS = 600;
 
 export interface SynthTurnInput {
   text: string;
+  /** Which host speaks — the mux matches loudness per host, so the grouping key travels with the turn. */
+  speaker: "A" | "B";
   voice: string;
+  speed?: number;
   languageCode: string;
   previousText?: string;
   nextText?: string;
@@ -51,7 +54,7 @@ export function turnsForSynthesis(
   hosts: [PodcastHost, PodcastHost],
   languageCode: string,
 ): SynthTurnInput[] {
-  const voiceById = new Map<"A" | "B", string>(hosts.map((h) => [h.id, h.voice] as const));
+  const hostById = new Map<"A" | "B", PodcastHost>(hosts.map((h) => [h.id, h] as const));
   const flat = segments.flatMap((segment) => segment.turns);
 
   const lastTextBySpeaker = new Map<"A" | "B", string>();
@@ -68,9 +71,12 @@ export function turnsForSynthesis(
     if (!turn) continue; // required by noUncheckedIndexedAccess
     const nextText = nextTextBySpeaker.get(turn.speaker);
     nextTextBySpeaker.set(turn.speaker, turn.text);
+    const host = hostById.get(turn.speaker) ?? hosts[0];
     out[i] = {
       text: turn.text,
-      voice: voiceById.get(turn.speaker) ?? hosts[0].voice,
+      speaker: turn.speaker,
+      voice: host.voice,
+      ...(host.speed !== undefined && { speed: host.speed }),
       languageCode,
       previousText: cap(previousTextByIndex[i]),
       nextText: cap(nextText),
@@ -99,6 +105,7 @@ export async function synthesizeTurns(turns: SynthTurnInput[], opts: SynthTurnsO
       stability: opts.stability,
       style: opts.style,
       similarityBoost: opts.similarityBoost,
+      ...(turn.speed !== undefined && { speed: turn.speed }),
     };
     const result = await synthReplicateChunk(params);
     completed++;

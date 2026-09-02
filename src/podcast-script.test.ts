@@ -118,10 +118,10 @@ describe("sanitizeTurns", () => {
   test("removes a disallowed tag but keeps an allowed one", () => {
     const [t1, t2] = sanitizeTurns([
       { speaker: "A", text: "[not-a-real-tag] Hallo da." },
-      { speaker: "B", text: `${V3_PODCAST_TAGS[0]} Na klar.` },
+      { speaker: "B", text: `Na klar, das ist genau der Punkt. ${V3_PODCAST_TAGS[0]} Und deshalb rechnen wir das jetzt einmal komplett durch, Schritt für Schritt.` },
     ]);
     expect(t1?.text).toBe("Hallo da.");
-    expect(t2?.text).toBe(`${V3_PODCAST_TAGS[0]} Na klar.`);
+    expect(t2?.text).toContain(V3_PODCAST_TAGS[0]);
   });
 
   test("strips markdown and bullets, leaves digits untouched", () => {
@@ -265,5 +265,16 @@ describe("parseChatCompletionStream", () => {
     const parsed = parseChatCompletionStream(JSON.stringify({ choices: [{ message: { content: "hi" } }], usage: { completion_tokens: 1 } }));
     expect(parsed.content).toBe("hi");
     expect(parsed.usage?.completion_tokens).toBe(1);
+  });
+});
+
+describe("tags on short turns", () => {
+  test("a tag on a short interjection is dropped, on a long turn it stays", () => {
+    const short = sanitizeTurns([{ speaker: "B", text: "[laughs] Da ist sie." }]);
+    expect(short[0]?.text).toBe("Da ist sie.");
+    const long = sanitizeTurns([
+      { speaker: "A", text: "Das ist der Punkt, den fast jeder übersieht. [sighs] Diesel kostet ungefähr das Dreifache von dem, was du an Maut zahlst, und genau das dreht die Planung um." },
+    ]);
+    expect(long[0]?.text).toContain("[sighs]");
   });
 });

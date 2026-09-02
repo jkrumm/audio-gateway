@@ -8,7 +8,7 @@ import { type Span, traceIdFromRequestId, withRootSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
 import { type SynthTurnOutput, synthesizeTurns, turnsForSynthesis } from "./podcast-synth";
-import { type Chapter, concatWithGaps, masterPodcastMp3, type MuxTurn } from "./podcast-mux";
+import { type Chapter, concatWithGaps, masterPodcastMp3, type MuxTurn, matchHostLoudness } from "./podcast-mux";
 import { coverConfigured, generateCover } from "./cover";
 import { absConfigured, publishToAudiobookshelf } from "./audiobookshelf";
 
@@ -256,6 +256,8 @@ function getStore(): PodcastStore {
 
 /** A turn this short is an interjection ("Echt?", "Mhm.") — it gets a shorter lead-in gap. */
 const SHORT_INTERJECTION_MAX_WORDS = 6;
+/** Per-host level before mastering; loudnorm lifts the programme to -16 LUFS afterwards. */
+const PRE_MASTER_HOST_LUFS = -20;
 const countWords = (text: string): number => (text.match(/\S+/g) ?? []).length;
 
 /**
@@ -382,8 +384,8 @@ const MAX_MINUTES = 60;
 
 function jobHosts(): [PodcastHost, PodcastHost] {
   return [
-    { id: "A", name: config.podcastHostNames[0], voice: config.podcastVoices[0] },
-    { id: "B", name: config.podcastHostNames[1], voice: config.podcastVoices[1] },
+    { id: "A", name: config.podcastHostNames[0], voice: config.podcastVoices[0], speed: config.podcastSpeeds[0] },
+    { id: "B", name: config.podcastHostNames[1], voice: config.podcastVoices[1], speed: config.podcastSpeeds[1] },
   ];
 }
 
@@ -488,10 +490,16 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     }
   }
 
-  // 3b. mastering
+  // 3b. mastering — first level the two voices against each other (one gain
+  // per host), then gap/concat, then the global loudnorm inside masterPodcastMp3.
   store.update(job.id, { status: "mastering" });
+  const levelled = await matchHostLoudness(
+    synthOutputs.map((o, i) => ({ ...o, speaker: turns[i]?.speaker ?? "A" })),
+    PRE_MASTER_HOST_LUFS,
+  );
+  log.info("podcast host loudness matched", { id: job.id, gainsDb: levelled.gainsDb });
   const muxTurns = buildMuxTurns({
-    synthOutputs,
+    synthOutputs: levelled.turns,
     turnTexts: turns.map((t) => t.text),
     gapMs: config.podcastGapMs,
     shortGapMs: config.podcastShortGapMs,
