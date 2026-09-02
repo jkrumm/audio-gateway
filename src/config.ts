@@ -254,13 +254,20 @@ export const config = {
   /** Bearer secret for the Argo usage endpoint (HTTP sink). Unset → HTTP sink is a no-op. */
   argoApiSecret: process.env["ARGO_API_SECRET"] ?? "",
   /**
-   * Where to announce a finished (or failed) podcast job: an Argo Slack
-   * messages endpoint (`.../api/slack/channels/<id>/messages`), authenticated
-   * with `argoApiSecret`. Hermes cannot wait 20 minutes for a job — its
-   * terminal tool stops at 180 s — so the gateway tells the channel itself,
+   * Argo base for everything that is not the usage sink — derived from
+   * USAGE_HTTP_URL (`…/usage/records` → `…`) unless ARGO_BASE_URL says
+   * otherwise. In prod that is the in-cluster `http://argo-api:4000`.
+   */
+  argoBaseUrl: (process.env["ARGO_BASE_URL"] ?? (process.env["USAGE_HTTP_URL"] ?? "").replace(/\/usage\/records\/?$/, "")).replace(/\/+$/, ""),
+  /**
+   * Slack channel to announce a finished (or failed) podcast job in — by NAME
+   * (`media`) or id. The gateway resolves a name through Argo's channel list
+   * with the Argo secret it already holds, so no channel id ever needs to sit
+   * in a vault or a compose file. Hermes cannot wait 20 minutes for a job (its
+   * terminal tool stops at 180 s), so the gateway tells the channel itself,
    * with the Audiobookshelf link. Unset = no announcement.
    */
-  podcastNotifyUrl: process.env["PODCAST_NOTIFY_URL"] ?? "",
+  podcastNotifyChannel: process.env["PODCAST_NOTIFY_CHANNEL"] ?? "",
   /**
    * Host label stamped on Argo usage rows (part of Argo's idempotency triple and a
    * dashboard breakdown dimension). This service runs both on the VPS (prod) and

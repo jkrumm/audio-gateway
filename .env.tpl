@@ -77,5 +77,7 @@ ARGO_API_SECRET=op://common/api/SECRET
 # IMAGE_GEN_URL=https://<image-gen-gateway>
 # IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET
 
-# Announce finished/failed podcast jobs in Slack via Argo (Bearer = ARGO_API_SECRET):
-# PODCAST_NOTIFY_URL=https://<argo-host>/api/slack/channels/<channel-id>/messages
+# Announce finished/failed podcast jobs in a Slack channel via Argo (Bearer = ARGO_API_SECRET;
+# the channel NAME is resolved through Argo's channel list, so no id needs storing):
+# PODCAST_NOTIFY_CHANNEL=media
+# ARGO_BASE_URL=   # defaults to USAGE_HTTP_URL without /usage/records

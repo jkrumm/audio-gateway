@@ -652,15 +652,47 @@ export function podcastDoneMessage(params: { title: string; durationSeconds: num
   return lines.filter(Boolean).join("\n");
 }
 
+/** Slack ids look like `C0AS5GUH5U4`; anything else is a channel name to resolve. */
+const SLACK_ID_RE = /^[CGD][A-Z0-9]{8,}$/;
+let resolvedNotifyChannelId: string | null = null;
+
 /**
- * Announce a job's outcome via Argo's Slack endpoint. Best effort: a failed
- * announcement is logged and never fails the job, and nothing happens at all
- * when `PODCAST_NOTIFY_URL` is unset.
+ * Turn `config.podcastNotifyChannel` into a channel id via Argo's channel
+ * list (`GET /slack/channels` → `[{ id, name }]`), once per process.
+ * Exported for tests.
+ */
+export async function resolveNotifyChannel(fetchImpl: typeof fetch = fetch): Promise<string | null> {
+  const wanted = config.podcastNotifyChannel.trim().replace(/^#/, "");
+  if (!wanted) return null;
+  if (SLACK_ID_RE.test(wanted)) return wanted;
+  if (resolvedNotifyChannelId) return resolvedNotifyChannelId;
+  if (!config.argoBaseUrl) {
+    log.warn("podcast notify: channel is a name but no Argo base URL is configured", { channel: wanted });
+    return null;
+  }
+  const res = await fetchImpl(`${config.argoBaseUrl}/slack/channels`, {
+    headers: { Authorization: `Bearer ${config.argoApiSecret}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) throw new Error(`Argo channel list failed: HTTP ${res.status}`);
+  const channels = (await res.json()) as Array<{ id?: string; name?: string }>;
+  const match = channels.find((c) => (c.name ?? "").toLowerCase() === wanted.toLowerCase());
+  if (!match?.id) throw new Error(`Argo knows no Slack channel named "${wanted}"`);
+  resolvedNotifyChannelId = match.id;
+  return match.id;
+}
+
+/**
+ * Announce a job's outcome in the configured Slack channel via Argo. Best
+ * effort: a failed announcement is logged and never fails the job, and
+ * nothing happens at all when `PODCAST_NOTIFY_CHANNEL` is unset.
  */
 async function notifyPodcastResult(params: { text: string }): Promise<void> {
-  if (!config.podcastNotifyUrl) return;
+  if (!config.podcastNotifyChannel) return;
   try {
-    const res = await fetch(config.podcastNotifyUrl, {
+    const channelId = await resolveNotifyChannel();
+    if (!channelId) return;
+    const res = await fetch(`${config.argoBaseUrl}/slack/channels/${channelId}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${config.argoApiSecret}` },
       body: JSON.stringify({ text: params.text }),

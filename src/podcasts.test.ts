@@ -614,3 +614,29 @@ describe("POST /v1/podcasts/:id/retry", () => {
     expect(refused.status).toBe(409);
   });
 });
+
+describe("resolveNotifyChannel", () => {
+  test("resolves a channel name through Argo's list and accepts an id as-is", async () => {
+    const { resolveNotifyChannel } = await import("./podcasts");
+    const cfg = config as unknown as { podcastNotifyChannel: string; argoBaseUrl: string; argoApiSecret: string };
+    const saved = { ...cfg };
+    cfg.argoBaseUrl = "http://argo.test";
+    cfg.argoApiSecret = "s";
+    try {
+      cfg.podcastNotifyChannel = "C0AS5GUH5U4";
+      expect(await resolveNotifyChannel()).toBe("C0AS5GUH5U4");
+      cfg.podcastNotifyChannel = "#Media";
+      const calls: string[] = [];
+      const fakeFetch = (async (url: string | URL | Request) => {
+        calls.push(String(url));
+        return Response.json([{ id: "C1", name: "hermes" }, { id: "C2", name: "media" }]);
+      }) as unknown as typeof fetch;
+      expect(await resolveNotifyChannel(fakeFetch)).toBe("C2");
+      expect(calls[0]).toBe("http://argo.test/slack/channels");
+      expect(await resolveNotifyChannel(fakeFetch)).toBe("C2");
+      expect(calls.length).toBe(1);
+    } finally {
+      Object.assign(cfg, { podcastNotifyChannel: saved.podcastNotifyChannel, argoBaseUrl: saved.argoBaseUrl, argoApiSecret: saved.argoApiSecret });
+    }
+  });
+});

@@ -299,3 +299,13 @@ retries once on a `ReplicateSynthError`; writer calls retry once on
 unparseable JSON with a doubled budget. `POST /v1/podcasts/:id/retry`
 re-queues a *failed* job as a new job with the identical request, so a caller
 that lost its source (Hermes after a long wait) can retry without re-uploading.
+
+## Slack announcement (2026-09-02)
+
+`PODCAST_NOTIFY_CHANNEL` (a channel name such as `media`, or an id) makes the
+gateway post every finished or failed job — title, chapters, Audiobookshelf
+link — through Argo's Slack API (`ARGO_BASE_URL`, derived from the usage sink
+URL; Bearer = the Argo secret the gateway already holds). The name is
+resolved once per process via Argo's channel list, so no Slack id lives in a
+vault or a compose file. Hermes cannot wait out a 20-minute job (180 s
+terminal cap), so this is how the listener gets the link.
