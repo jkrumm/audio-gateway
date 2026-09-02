@@ -145,3 +145,14 @@ describe("request-correlation context", () => {
     });
   });
 });
+
+describe("podcast model rates", () => {
+  test("prices the writers' room models and passes the cover's own cost through", async () => {
+    const { computeCost } = await import("./usage");
+    const opus = computeCost("claude-opus-4-6", { inputTokens: 1_000_000, outputTokens: 100_000, audioTokens: null, audioSeconds: null, inputChars: null });
+    expect(opus.costUsd).toBeCloseTo(7.5, 6);
+    expect(computeCost("gpt-5.6-luna", { inputTokens: 1_000_000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(0.2, 6);
+    expect(computeCost("gemini-3.1-pro-preview", { inputTokens: 0, outputTokens: 1_000_000, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(12, 6);
+    expect(computeCost("claude-opus-4-6-eu".replace(/-eu$/, ""), { inputTokens: 1000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costSource).toBe("estimated");
+  });
+});

@@ -221,6 +221,29 @@ const RATES: Record<string, Rate> = {
   // measured Replicate invoice — good enough to stop podcast episodes
   // reporting cost_usd = null.
   "v3": { perInputChars1k: 0.1 },
+  // Podcast writers' room + TTS prep/summary models — list prices read off the
+  // vendor pricing pages on 2026-09-02 (platform.claude.com/docs/en/about-claude/
+  // pricing, developers.openai.com/api/docs/pricing, ai.google.dev/gemini-api/docs/
+  // pricing), USD per 1M tokens, standard tier, short context. Hidden reasoning
+  // tokens are billed as output and arrive inside completion_tokens, so they are
+  // covered. `-eu` variants normalise onto the same key.
+  "claude-opus-5": { input: 5, output: 25 },
+  "claude-opus-4-8": { input: 5, output: 25 },
+  "claude-opus-4-7": { input: 5, output: 25 },
+  "claude-opus-4-6": { input: 5, output: 25 },
+  "claude-sonnet-5": { input: 2, output: 10 },
+  "claude-sonnet-4-6": { input: 3, output: 15 },
+  "claude-haiku-4-5": { input: 1, output: 5 },
+  "claude-fable-5-1": { input: 10, output: 50 },
+  "claude-fable-5": { input: 10, output: 50 },
+  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  "gpt-5.6-terra": { input: 2, output: 12 },
+  "gpt-5.6-sol": { input: 4, output: 20 },
+  "gpt-5.5": { input: 5, output: 30 },
+  "gemini-3.1-pro-preview": { input: 2, output: 12 },
+  "gemini-3.5-flash": { input: 1.5, output: 9 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
+  "gemini-3.7-flash": { input: 0.75, output: 3.75 }, // introductory through 2026-12-31, then 1.5 / 7.5
 };
 
 interface CostInputs {
@@ -231,7 +254,7 @@ interface CostInputs {
   inputChars: number | null;
 }
 
-function computeCost(
+export function computeCost(
   modelNorm: string,
   c: CostInputs,
 ): { costUsd: number | null; costSource: string } {
@@ -270,6 +293,12 @@ function computeCost(
  * and the root-span attributes always report the same number.
  */
 function costForRow(row: UsageRow): { costUsd: number | null; costSource: string } {
+  // The image-gen gateway prices its own call (cost.usd in its response, carried
+  // here as usage_json.cost_usd) — take it as-is rather than re-deriving it.
+  const reported = (row.usageJson ?? {}) as Record<string, unknown>;
+  if (typeof reported["cost_usd"] === "number" && Number.isFinite(reported["cost_usd"]) && row.endpoint === "podcast-cover") {
+    return { costUsd: reported["cost_usd"], costSource: "computed" };
+  }
   const t = tokens(row.usageJson);
   return computeCost(normalizeModel(row.model), {
     inputTokens: row.inputTokens ?? t.input,
