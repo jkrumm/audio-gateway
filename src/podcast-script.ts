@@ -157,7 +157,8 @@ const TAG_MIN_TURN_WORDS = 12;
 
 const ALLOWED_TAG_SET = new Set<string>(V3_PODCAST_TAGS.map((t) => t.toLowerCase()));
 
-const WORDS_PER_MINUTE = 150;
+/** Planning rate. Measured on five produced episodes (ElevenLabs v3, German, two hosts, gaps included): 135–149 wpm; 150 planned 22 minutes and delivered 25–36. */
+const WORDS_PER_MINUTE = 140;
 const MIN_SEGMENTS = 3;
 const MAX_SEGMENTS = 9;
 const MINUTES_PER_SEGMENT = 4;

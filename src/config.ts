@@ -354,6 +354,14 @@ export const config = {
   /** Default Audiobookshelf podcast (show) name new episodes are filed under. */
   podcastSeries: process.env["PODCAST_SERIES"] ?? "Brain Sonderausgabe",
   podcastAuthor: process.env["PODCAST_AUTHOR"] ?? "Hermes",
+  /**
+   * The SHOW's description in Audiobookshelf (one show, many episodes). The
+   * first episode used to write its own show notes here, which reads wrong
+   * as soon as episode two exists. Episodes keep their own descriptions.
+   */
+  podcastSeriesDescription:
+    process.env["PODCAST_SERIES_DESCRIPTION"] ??
+    "Zwei Hosts nehmen Notizen aus dem Brain auseinander: Pläne, Recherchen, Entscheidungen — als Gespräch zum Anhören, mit Kapiteln.",
   /** Audiobookshelf base URL; empty disables publishing entirely (see audiobookshelf.ts). */
   absUrl: withHttpsScheme((process.env["ABS_URL"] ?? "").replace(/\/+$/, "")),
   absApiKey: process.env["ABS_API_KEY"] ?? "",

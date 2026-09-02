@@ -13,6 +13,7 @@ Span model:
 | `audio.synth.chunk` | client | `audio.chunk_index` · `replicate.predict_time_s` · `replicate.polls` · `audio.audio_seconds` |
 | `audio.delivery.fetch` · `audio.decode` · `audio.concat` · `audio.transcode` | internal | — |
 | `audio.podcast` (root, one per job; trace id = job id) | server | `audio.podcast.title` · `audio.podcast.turns` · `audio.podcast.chapters` · `audio.audio_seconds` · `audio.bytes_out` · `audio.cost_usd` · `audio.podcast.published` · `audio.caller` |
+| `audio.podcast.stage` | internal | `audio.podcast.stage` synth/master · `audio.podcast.turns` · `audio.audio_seconds` · `audio.bytes_out` — the wall-clock between the LLM calls and the publish |
 | `audio.podcast.llm` | client | `llm.model` · `audio.podcast.stage` outline/segment/review/revise · `llm.output_tokens` · `llm.finish_reason` · `http.status_code` |
 | `audio.cover` · `audio.publish.abs` | client | `http.status_code` · `abs.library_id` · `abs.item_id` · `abs.episode_id` · `abs.created` |
 | `audio.transcription` (root) | server | `audio.model` · `audio.fallback` · `audio.text.output` (transcript) |

@@ -5,7 +5,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "./config";
 import { log } from "./log";
-import { type Span, traceIdFromRequestId, withRootSpan } from "./otel";
+import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
 import { type SynthTurnOutput, synthesizeTurns, turnsForSynthesis } from "./podcast-synth";
@@ -497,14 +497,16 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   // 2. synthesizing
   store.update(job.id, { status: "synthesizing", progress: { stage: "synth", done: 0, total: 0 } });
   const turns = turnsForSynthesis(script.segments, hosts, request.language);
-  const synthOutputs = await synthesizeTurns(turns, {
+  const synthOutputs = await withSpan("audio.podcast.stage", { "audio.podcast.stage": "synth", "audio.podcast.turns": turns.length }, () =>
+    synthesizeTurns(turns, {
     model: config.podcastTtsModel,
     concurrency: config.ttsConcurrency,
     stability: config.podcastStability,
     similarityBoost: config.ttsElevenLabsSimilarity,
     style: config.ttsElevenLabsStyle,
     onProgress: (done, total) => store.update(job.id, { progress: { stage: "synth", done, total } }),
-  });
+    }),
+  );
 
   // 3a. cover (before mastering — it must be embedded in the mp3). A missing
   // cover must never fail the episode, so any error here is swallowed.
@@ -524,6 +526,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   // 3b. mastering — first level the two voices against each other (one gain
   // per host), then gap/concat, then the global loudnorm inside masterPodcastMp3.
   store.update(job.id, { status: "mastering" });
+  const masterSpan = startSpan("audio.podcast.stage", { "audio.podcast.stage": "master" });
   const levelled = await matchHostLoudness(
     synthOutputs.map((o, i) => ({ ...o, speaker: turns[i]?.speaker ?? "A" })),
     PRE_MASTER_HOST_LUFS,
@@ -557,6 +560,9 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     bitrateKbps: config.podcastBitrateKbps,
   });
 
+  masterSpan.setAttributes({ "audio.bytes_out": mp3.byteLength, "audio.audio_seconds": mux.totalMs / 1000 });
+  masterSpan.end();
+
   files.audio = join(dir, "episode.mp3");
   await writeFile(files.audio, mp3);
   if (coverPng) {
@@ -578,7 +584,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       const published = await publishToAudiobookshelf({
         series: request.series,
         author: config.podcastAuthor,
-        description: script.description,
+        description: config.podcastSeriesDescription,
         language: request.language,
         genres: script.genres,
         episode: { title: script.title, description: script.description, filename, file: mp3 },
@@ -668,7 +674,7 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
           const published = await publishToAudiobookshelf({
             series: job.request.series,
             author: config.podcastAuthor,
-            description,
+            description: config.podcastSeriesDescription,
             language: job.request.language,
             genres,
             episode: { title, description, filename, file: mp3 },
