@@ -142,6 +142,20 @@ interface FoundItem {
   episode: AbsEpisodeItem | null;
 }
 
+/**
+ * ABS sanitizes the uploaded name on its own terms (whitespace, odd
+ * characters), so an exact comparison is brittle. The job-id token that
+ * `episodeFilename` embeds (`[c2e279c6]`) survives any sanitizer and is
+ * unique per job — match on it when present, exact name otherwise.
+ * Exported for tests.
+ */
+export function filenameMatches(stored: string | undefined, wanted: string): boolean {
+  if (!stored) return false;
+  const token = /\[[0-9a-f]{8}\]/.exec(wanted)?.[0];
+  if (token) return stored.includes(token);
+  return stored === wanted;
+}
+
 /** One poll attempt: list the library, find the show by title, expand it, and look for the uploaded filename. */
 async function pollOnce(libraryId: string, filename: string, series: string): Promise<FoundItem | null> {
   const target = series.trim().toLowerCase();
@@ -152,7 +166,7 @@ async function pollOnce(libraryId: string, filename: string, series: string): Pr
   if (!minified) return null;
 
   const expanded = await absJson<AbsLibraryItemExpanded>(`/api/items/${minified.id}?expanded=1`);
-  const episode = expanded.media?.episodes?.find((ep) => ep.audioFile?.metadata?.filename === filename) ?? null;
+  const episode = expanded.media?.episodes?.find((ep) => filenameMatches(ep.audioFile?.metadata?.filename, filename)) ?? null;
   if (!episode) return null;
 
   return { item: expanded, episode };

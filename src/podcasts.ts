@@ -310,7 +310,10 @@ const SLUG_MAX_CHARS = 80;
 
 /** Sanitize a title into a filesystem/URL-safe slug — `[A-Za-z0-9äöüÄÖÜß ._-]`, capped at 80 chars. */
 export function slugifyFilename(title: string): string {
-  const cleaned = title.replace(SLUG_DISALLOWED, "").trim();
+  // Collapse runs of whitespace too: Audiobookshelf's own sanitizer does, and
+  // the scan poll matches on the stored name — "Camper  die Zahl" (after an
+  // en dash was stripped) never matched "Camper die Zahl" (2026-09-02).
+  const cleaned = title.replace(SLUG_DISALLOWED, "").replace(/\s+/g, " ").trim();
   return cleaned.length > SLUG_MAX_CHARS ? cleaned.slice(0, SLUG_MAX_CHARS).trim() : cleaned;
 }
 

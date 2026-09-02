@@ -251,3 +251,13 @@ describe("publishToAudiobookshelf — unconfigured", () => {
     expect(fetchCalled).toBe(false);
   });
 });
+
+describe("filenameMatches", () => {
+  test("matches on the job-id token regardless of how ABS sanitized the rest", async () => {
+    const { filenameMatches } = await import("./audiobookshelf");
+    expect(filenameMatches("2026-09-02 Camper die Zahl [3965afde].mp3", "2026-09-02 Camper  die Zahl [3965afde].mp3")).toBe(true);
+    expect(filenameMatches("2026-09-02 Camper [c2e279c6].mp3", "2026-09-02 Camper [3965afde].mp3")).toBe(false);
+    expect(filenameMatches("plain.mp3", "plain.mp3")).toBe(true);
+    expect(filenameMatches(undefined, "plain.mp3")).toBe(false);
+  });
+});

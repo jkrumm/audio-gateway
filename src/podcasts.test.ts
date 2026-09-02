@@ -570,5 +570,6 @@ describe("episodeFilename", () => {
     const b = episodeFilename("2026-09-02", "Nordspanien 2026", "13f825b0-034e-4856-8bbb-64e6f4f01c3c");
     expect(a).toBe("2026-09-02 Nordspanien 2026 [c2e279c6].mp3");
     expect(a).not.toBe(b);
+    expect(episodeFilename("2026-09-02", "Camper – die Zahl, die zählt", "3965afde-0000")).toBe("2026-09-02 Camper die Zahl die zählt [3965afde].mp3");
   });
 });
