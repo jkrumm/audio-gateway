@@ -214,10 +214,12 @@ takes new traffic while the old one finishes.
 
 ## Model choice (2026-09-02)
 
-Writer `claude-opus-5`, reviewers `claude-fable-5-1` (`PODCAST_SCRIPT_MODEL` /
-`PODCAST_REVIEW_MODEL`). Rationale and the leaderboard snapshot live in
-modelpick `docs/decisions/podcast-writer.md`; the short version: an episode
-is not latency-bound, the script is the product, and Opus 5 leads EQ-Bench
-Creative Writing v3 while Sonnet 5 is outside the top ten. Expect roughly
-$4 of writer tokens plus $1 of reviewer tokens per 22-minute episode on top of
-~$2 of ElevenLabs characters.
+Writer and reviewers: `claude-opus-4-6` (`PODCAST_SCRIPT_MODEL` /
+`PODCAST_REVIEW_MODEL`). Rationale and evidence in modelpick
+`docs/decisions/podcast-writer.md`: Opus 5 leads the creative-writing
+leaderboards but writers consistently report it as over-written (metaphor,
+explained emotion, longer by default — Anthropic's own prompting guide says
+so), and name Opus 4.6 for organic voice and dialogue; Sonnet 5 is outside
+both boards' top ten; Fable 5.1 ($50/M output) buys nothing the reviewer seat
+needs. Expect roughly $3–4 of writer + reviewer tokens per 22-minute episode
+on top of ~$2 of ElevenLabs characters.

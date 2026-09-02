@@ -282,19 +282,20 @@ export const config = {
   /** OpenAI-dialect chat model (IU endpoint) that writes the podcast outline + dialogue. */
   /**
    * Writer for the story pass, segments and revisions. An episode is not
-   * latency-bound and the writing IS the product, so the pick is the strongest
-   * creative-writing model on the endpoint: claude-opus-5 leads EQ-Bench
-   * Creative Writing v3 (Elo 2116, snapshot 2026-09-01) and sits in LMArena's
-   * creative top ten; sonnet-5 is outside both. See modelpick
-   * docs/decisions/podcast-writer.md. ~$4 of writer tokens per 22-minute episode.
+   * latency-bound and the script is the product, so the pick follows what
+   * writers report, not leaderboard Elo: Opus 5 tops EQ-Bench but practitioners
+   * (and Anthropic's own prompting guide) describe it as longer, metaphor-heavy
+   * and over-explaining; Opus 4.6 is the version writers name for organic voice
+   * and dialogue. See modelpick docs/decisions/podcast-writer.md. `-eu` variant
+   * exists on the endpoint if residency matters.
    */
-  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-5",
+  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-4-6",
   /**
-   * The three reviewers read the whole draft and judge; judgement is where the
-   * Mythos-class model earns its price (LMArena creative #1 as claude-fable-5),
-   * and reviewer output is small (notes, not prose).
+   * The three reviewers (notes, not prose). Same model by default; Fable 5.1
+   * was tried and dropped — $50/M output plus hidden reasoning for a job where
+   * the practitioner evidence favours Claude's line-level judgement anyway.
    */
-  podcastReviewModel: process.env["PODCAST_REVIEW_MODEL"] ?? "claude-fable-5-1",
+  podcastReviewModel: process.env["PODCAST_REVIEW_MODEL"] ?? process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-4-6",
   /** Replicate model id used to synthesize each podcast turn. */
   podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
   /** The two ElevenLabs voices, one per host, in host order. */

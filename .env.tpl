@@ -50,8 +50,8 @@ ARGO_API_SECRET=op://common/api/SECRET
 
 # Long-form podcast pipeline — defaults live in config.ts. Only needed to
 # override the script/TTS models, voices, host names, timing, or storage paths.
-# PODCAST_SCRIPT_MODEL=claude-opus-5
-# PODCAST_REVIEW_MODEL=claude-fable-5-1
+# PODCAST_SCRIPT_MODEL=claude-opus-4-6   # or claude-opus-4-6-eu
+# PODCAST_REVIEW_MODEL=claude-opus-4-6
 # PODCAST_TTS_MODEL=elevenlabs/v3
 # PODCAST_VOICES=Mark,Sarah
 # PODCAST_HOST_NAMES=Jonas,Lena
