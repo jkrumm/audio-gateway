@@ -442,6 +442,7 @@ export async function runPodcastJob(job: PodcastJob): Promise<void> {
           const current = store.update(job.id, { status: "failed", error: message, progress: null });
           span.setStatus("error", message);
           log.error("podcast.failed", { id: job.id, error: message });
+          await notifyPodcastResult({ text: `Podcast-Job ${job.id.slice(0, 8)} ist fehlgeschlagen: ${message}` });
           recordUsage({
             endpoint: "podcast-request",
             model: config.podcastTtsModel,
@@ -616,6 +617,9 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     costUsd,
     published: absResult !== null,
   });
+  await notifyPodcastResult({
+    text: podcastDoneMessage({ title: script.title, durationSeconds, chapters: chapters.map((c) => c.title), absUrl: absResult?.url ?? null, costUsd }),
+  });
 
   recordUsage({
     endpoint: "podcast-request",
@@ -634,6 +638,38 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       cost_usd: costUsd,
     },
   });
+}
+
+/** The Slack line for a finished episode — the listener wants the link, not the JSON. Exported for tests. */
+export function podcastDoneMessage(params: { title: string; durationSeconds: number; chapters: string[]; absUrl: string | null; costUsd: number | null }): string {
+  const minutes = Math.round(params.durationSeconds / 60);
+  const lines = [
+    `Podcast fertig: *${params.title}* (${minutes} min, ${params.chapters.length} Kapitel)`,
+    ...params.chapters.map((c) => `• ${c}`),
+    params.absUrl ? `Anhören in Audiobookshelf: ${params.absUrl}` : "Nicht veröffentlicht (Audiobookshelf nicht konfiguriert).",
+    params.costUsd != null ? `ElevenLabs-Kosten: ${params.costUsd.toFixed(2)} USD` : "",
+  ];
+  return lines.filter(Boolean).join("\n");
+}
+
+/**
+ * Announce a job's outcome via Argo's Slack endpoint. Best effort: a failed
+ * announcement is logged and never fails the job, and nothing happens at all
+ * when `PODCAST_NOTIFY_URL` is unset.
+ */
+async function notifyPodcastResult(params: { text: string }): Promise<void> {
+  if (!config.podcastNotifyUrl) return;
+  try {
+    const res = await fetch(config.podcastNotifyUrl, {
+      method: "POST",
+      headers: { "content-type": "application/json", Authorization: `Bearer ${config.argoApiSecret}` },
+      body: JSON.stringify({ text: params.text }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) log.warn("podcast notify failed", { status: res.status, body: (await res.text()).slice(0, 200) });
+  } catch (err) {
+    log.warn("podcast notify failed", { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /** Job ledger is small (a personal show) — scanning the whole thing for a per-series count is simpler than a second query shape. */

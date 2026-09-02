@@ -584,3 +584,14 @@ describe("episodeFilename", () => {
     expect(episodeFilename("2026-09-02", "Camper – die Zahl, die zählt", "3965afde-0000")).toBe("2026-09-02 Camper die Zahl die zählt [3965afde].mp3");
   });
 });
+
+describe("podcastDoneMessage", () => {
+  test("carries title, minutes, chapters and the Audiobookshelf link", async () => {
+    const { podcastDoneMessage } = await import("./podcasts");
+    const msg = podcastDoneMessage({ title: "T", durationSeconds: 1536, chapters: ["A", "B"], absUrl: "https://abs.example/item/1", costUsd: 2.257 });
+    expect(msg).toContain("*T* (26 min, 2 Kapitel)");
+    expect(msg).toContain("• B");
+    expect(msg).toContain("https://abs.example/item/1");
+    expect(msg).toContain("2.26 USD");
+  });
+});

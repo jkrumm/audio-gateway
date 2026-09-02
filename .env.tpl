@@ -76,3 +76,6 @@ ARGO_API_SECRET=op://common/api/SECRET
 # image-gen gateway (episode cover art). Unset IMAGE_GEN_URL disables covers entirely.
 # IMAGE_GEN_URL=https://<image-gen-gateway>
 # IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET
+
+# Announce finished/failed podcast jobs in Slack via Argo (Bearer = ARGO_API_SECRET):
+# PODCAST_NOTIFY_URL=https://<argo-host>/api/slack/channels/<channel-id>/messages

@@ -254,6 +254,14 @@ export const config = {
   /** Bearer secret for the Argo usage endpoint (HTTP sink). Unset → HTTP sink is a no-op. */
   argoApiSecret: process.env["ARGO_API_SECRET"] ?? "",
   /**
+   * Where to announce a finished (or failed) podcast job: an Argo Slack
+   * messages endpoint (`.../api/slack/channels/<id>/messages`), authenticated
+   * with `argoApiSecret`. Hermes cannot wait 20 minutes for a job — its
+   * terminal tool stops at 180 s — so the gateway tells the channel itself,
+   * with the Audiobookshelf link. Unset = no announcement.
+   */
+  podcastNotifyUrl: process.env["PODCAST_NOTIFY_URL"] ?? "",
+  /**
    * Host label stamped on Argo usage rows (part of Argo's idempotency triple and a
    * dashboard breakdown dimension). This service runs both on the VPS (prod) and
    * locally (serving MacWhisper), so it must NOT be hardcoded — defaults to the OS
