@@ -49,6 +49,21 @@ const oneOf = <T extends string>(name: string, allowed: readonly T[], fallback: 
 };
 
 /**
+ * Parse a comma-separated 2-entry env var — the podcast's two ElevenLabs
+ * voices / two host display names. Fails fast at boot on anything other than
+ * exactly 2 non-empty entries, since the script writer and turn synthesizer
+ * both assume a two-speaker show with no third slot to fall back to.
+ */
+const pairOf2 = (name: string, fallback: string): [string, string] => {
+  const raw = process.env[name] ?? fallback;
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length !== 2) {
+    throw new Error(`Invalid env var ${name}: expected exactly 2 comma-separated entries, got "${raw}"`);
+  }
+  return [parts[0] as string, parts[1] as string];
+};
+
+/**
  * Map `NODE_ENV` to the OTel `deployment.environment` resource attribute —
  * `production` only for an exact `NODE_ENV=production`, `development`
  * otherwise (unset, `dev`, `test`, anything else). Exported (pure, no env
@@ -252,4 +267,42 @@ export const config = {
   otelEndpoint: (process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "").replace(/\/+$/, ""),
   /** OTel resource `service.name` / scope name stamped on every span and log record. */
   otelServiceName: process.env["OTEL_SERVICE_NAME"] ?? "audio-gateway",
+
+  // ---------------------------------------------------------------------------
+  // Long-form podcast pipeline (script → per-turn TTS → mux → publish)
+  // ---------------------------------------------------------------------------
+
+  /** OpenAI-dialect chat model (IU endpoint) that writes the podcast outline + dialogue. */
+  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-sonnet-5",
+  /** Replicate model id used to synthesize each podcast turn. */
+  podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
+  /** The two ElevenLabs voices, one per host, in host order. */
+  podcastVoices: pairOf2("PODCAST_VOICES", "Mark,Sarah"),
+  /** Display names for the two hosts, in the same order as `podcastVoices`. */
+  podcastHostNames: pairOf2("PODCAST_HOST_NAMES", "Jonas,Lena"),
+  /** Default episode length when a request doesn't specify one. */
+  podcastDefaultMinutes: num("PODCAST_DEFAULT_MINUTES", 20),
+  /** ElevenLabs v3 stability — lower is more tag-responsive ("Natural-ish"). */
+  podcastStability: num("PODCAST_STABILITY", 0.45),
+  /** Mono speech at 44.1 kHz doesn't need music-grade bitrate. */
+  podcastBitrateKbps: num("PODCAST_MP3_BITRATE", 64),
+  /** Silence inserted between turns. */
+  podcastGapMs: num("PODCAST_GAP_MS", 380),
+  /** Shorter silence before a short interjection turn. */
+  podcastShortGapMs: num("PODCAST_SHORT_GAP_MS", 160),
+  /** Where generated episode artifacts (scripts, audio) are staged before publish. */
+  podcastDataDir: process.env["PODCAST_DATA_DIR"] ?? "./data/podcasts",
+  /** SQLite DB tracking podcast episode generation state. */
+  podcastDb: process.env["PODCAST_DB"] ?? "./data/podcasts.db",
+  /** Default Audiobookshelf podcast (show) name new episodes are filed under. */
+  podcastSeries: process.env["PODCAST_SERIES"] ?? "Hermes Briefings",
+  podcastAuthor: process.env["PODCAST_AUTHOR"] ?? "Hermes",
+  /** Audiobookshelf base URL; empty disables publishing entirely (see audiobookshelf.ts). */
+  absUrl: (process.env["ABS_URL"] ?? "").replace(/\/+$/, ""),
+  absApiKey: process.env["ABS_API_KEY"] ?? "",
+  /** Podcast library NAME or id in Audiobookshelf that new episodes are uploaded into. */
+  absLibrary: process.env["ABS_LIBRARY"] ?? "Podcasts",
+  /** image-gen gateway base URL; empty disables cover generation entirely (see cover.ts). */
+  imageGenUrl: (process.env["IMAGE_GEN_URL"] ?? "").replace(/\/+$/, ""),
+  imageGenApiKey: process.env["IMAGE_GEN_API_KEY"] ?? "",
 } as const;

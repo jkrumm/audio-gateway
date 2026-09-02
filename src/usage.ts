@@ -16,7 +16,11 @@ export interface UsageRow {
     | "speech-prep"
     | "speech-summary"
     | "speech-request"
-    | "transcription-request";
+    | "transcription-request"
+    | "podcast-cover"
+    | "podcast-outline"
+    | "podcast-segment"
+    | "podcast-request";
   model: string;
   status: number;
   latencyMs: number;
@@ -276,7 +280,7 @@ function costForRow(row: UsageRow): { costUsd: number | null; costSource: string
  * per-chunk rows they summarize (mirrors the HTTP sink's `isRequestSummary` gate).
  */
 const isRequestSummaryEndpoint = (endpoint: UsageRow["endpoint"]): boolean =>
-  endpoint === "speech-request" || endpoint === "transcription-request";
+  endpoint === "speech-request" || endpoint === "transcription-request" || endpoint === "podcast-request";
 
 /**
  * Fold one row's cost into the active request's running total (`RequestMeta.costUsd`/

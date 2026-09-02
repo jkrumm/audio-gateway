@@ -2,6 +2,7 @@ import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { flushOtel } from "./otel";
+import { handlePodcasts, isPodcastPath, podcastRunning, recoverPodcastJobs } from "./podcasts";
 import { handleSpeech } from "./speech";
 import { handleTranscriptions } from "./transcriptions";
 
@@ -88,6 +89,7 @@ export async function handleRequest(req: Request): Promise<Response> {
     }
     if (req.method === "POST" && path.endsWith("/audio/speech")) return await handleSpeech(req, callerFromToken(req));
     if (req.method === "GET" && path.endsWith("/models")) return await handleModels();
+    if (isPodcastPath(path)) return await handlePodcasts(req, path, callerFromToken(req));
   } catch (err) {
     const message = err instanceof Error ? err.message : "internal error";
     return Response.json({ error: { message, type: "proxy_error" } }, { status: 500 });
@@ -104,6 +106,8 @@ export async function handleRequest(req: Request): Promise<Response> {
 // ---------------------------------------------------------------------------
 
 if (import.meta.main) {
+  recoverPodcastJobs();
+
   const server = Bun.serve({
     port: config.port,
     idleTimeout: 255, // transcription of longer clips can take a while
@@ -120,13 +124,16 @@ if (import.meta.main) {
     log.info(`audio-gateway received ${signal}, starting graceful shutdown`, { signal });
     setDraining(true);
 
-    // Wait for in-flight requests to complete, up to shutdownDrainMs.
+    // Wait for in-flight requests (and a running podcast job) to complete, up to shutdownDrainMs.
     const deadline = Date.now() + config.shutdownDrainMs;
-    while (inFlight > 0 && Date.now() < deadline) {
+    while ((inFlight > 0 || podcastRunning()) && Date.now() < deadline) {
       await Bun.sleep(50);
     }
-    if (inFlight > 0) {
-      log.warn(`audio-gateway shutdown: ${inFlight} request(s) still in flight after drain timeout`, { inFlight });
+    if (inFlight > 0 || podcastRunning()) {
+      log.warn(`audio-gateway shutdown: ${inFlight} request(s) (podcast job running: ${podcastRunning()}) still in flight after drain timeout`, {
+        inFlight,
+        podcastRunning: podcastRunning(),
+      });
     }
 
     await flushOtel();

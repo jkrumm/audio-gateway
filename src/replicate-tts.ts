@@ -273,7 +273,7 @@ function clampSpeed(speed: number | undefined): number | undefined {
   return clamped === 1 ? undefined : clamped;
 }
 
-interface ReplicateChunkParams {
+export interface ReplicateChunkParams {
   model: string;
   chunk: PrepChunk;
   index: number;
@@ -287,7 +287,7 @@ interface ReplicateChunkParams {
   speed?: number;
 }
 
-interface ReplicateChunkResult {
+export interface ReplicateChunkResult {
   mp3: Uint8Array;
   /** The chunk decoded to s16le mono 24 kHz — the shape the shared concat/transcode stage consumes. */
   pcm: Uint8Array;
@@ -306,7 +306,7 @@ interface ReplicateChunkResult {
  * `ReplicateSynthError` to a 502. Decoding inside this stage also keeps the
  * ffmpeg fan-out bounded by `config.ttsConcurrency`.
  */
-async function synthReplicateChunk(params: ReplicateChunkParams): Promise<ReplicateChunkResult> {
+export async function synthReplicateChunk(params: ReplicateChunkParams): Promise<ReplicateChunkResult> {
   return withSpan(
     "audio.synth.chunk",
     { "audio.chunk_index": params.index, "audio.input_chars": params.chunk.text.length },

@@ -47,3 +47,28 @@ ARGO_API_SECRET=op://common/api/SECRET
 # collector). Unset (default) disables the exporter entirely — see otel.ts.
 # OTEL_EXPORTER_OTLP_ENDPOINT=http://clickstack:4319
 # OTEL_SERVICE_NAME=audio-gateway
+
+# Long-form podcast pipeline — defaults live in config.ts. Only needed to
+# override the script/TTS models, voices, host names, timing, or storage paths.
+# PODCAST_SCRIPT_MODEL=claude-sonnet-5
+# PODCAST_TTS_MODEL=elevenlabs/v3
+# PODCAST_VOICES=Mark,Sarah
+# PODCAST_HOST_NAMES=Jonas,Lena
+# PODCAST_DEFAULT_MINUTES=20
+# PODCAST_STABILITY=0.45
+# PODCAST_MP3_BITRATE=64
+# PODCAST_GAP_MS=380
+# PODCAST_SHORT_GAP_MS=160
+# PODCAST_DATA_DIR=./data/podcasts
+# PODCAST_DB=./data/podcasts.db
+# PODCAST_SERIES=Hermes Briefings
+# PODCAST_AUTHOR=Hermes
+
+# Audiobookshelf publish target. Unset ABS_URL disables publishing entirely.
+# ABS_URL=https://<your-audiobookshelf-host>
+# ABS_API_KEY=op://<vault>/audiobookshelf/API_KEY
+# ABS_LIBRARY=Podcasts
+
+# image-gen gateway (episode cover art). Unset IMAGE_GEN_URL disables covers entirely.
+# IMAGE_GEN_URL=https://<image-gen-gateway>
+# IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET

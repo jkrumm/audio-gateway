@@ -40,6 +40,17 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 - `src/audio.ts` — the ffmpeg/ffprobe process boundary: PCM/WAV framing, chunk concatenation,
   `transcode` (between raw PCM / auto-detected containers and mp3/opus/wav/pcm output), and
   `audioDuration`. Shared by both TTS lanes and STT duration probing.
+- `src/podcasts.ts` — long-form podcast orchestrator: job ledger (`bun:sqlite`), the one-job-at-a-time
+  queue, the `runPodcastJob` pipeline (script → synth → mux/master → cover → publish), and the
+  `/v1/podcasts*` HTTP handlers (`handlePodcasts`/`isPodcastPath`, mounted from `index.ts`).
+- `src/podcast-script.ts` — two-pass podcast script writer: one outline call decides the episode's
+  shape (incl. a running `motif`), then every segment is written in parallel against it.
+- `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes each on the
+  Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode.
+- `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
+  (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
+- `src/cover.ts` — episode cover art via the image-gen gateway; best-effort, never fails a job.
+- `src/audiobookshelf.ts` — Audiobookshelf publish client: upload → scan → poll → patch metadata/cover/episode.
 - `src/otel.ts` — hand-rolled OpenTelemetry exporter (no SDK, `fetch` only) to an OTLP/HTTP JSON
   collector. One root span per request (`audio.speech`/`audio.transcription`, kind SERVER) with
   child spans per pipeline stage (`audio.prep`, `audio.synth.chunk`, `audio.decode`,
@@ -55,7 +66,11 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
   `audio.cost_source` (summed across every billed `recordUsage` call in the request, via `usage.ts`'s
   `computeCost`), `audio.chars_billed` (ElevenLabs lane only), `audio.requested_model`/`audio.fallback`,
   `audio.retries` (rawFetch 503/429 backoff attempts), and `audio.inflight` (concurrent-request gauge,
-  also on the `tts.done`/`stt.done` logs).
+  also on the `tts.done`/`stt.done` logs). The podcast pipeline gets its own root span
+  (`audio.podcast`, kind SERVER, trace id derived from the job id) wrapping the whole
+  `runPodcastJob` run, with child spans `audio.podcast.llm` (outline/segment writer calls),
+  `audio.cover` (cover generation), and `audio.publish.abs` (Audiobookshelf upload/scan/poll) —
+  same join-on-id story as a regular request.
 
 ## Conventions
 - Deep modules, **ports & adapters** (the usage sink is the canonical example), early returns, no `any`.
@@ -65,6 +80,8 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 ## Run
 - Dev: `bun run dev` (`secrets-run` injects secrets from `.env.tpl` — drop-in op shim: live `op` on the MacBook, encrypted cache on the mini; listens on `:7714`).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime.
+- `bun run podcast -- --source <file.md|-> [--minutes N] [--publish] [...]` — CLI for the long-form
+  podcast pipeline (submit, poll progress, download the finished episode); see `docs/podcast.md`.
 - `bun run usage:tail [--db <path>] [--prod] [--since 30m|2h|1d|<ISO>] [--limit N] [--json]` — a
   readable per-request usage timeline (mode, stage timings, text snippets) for reviewing TTS/STT
   quality; `--prod` scp's the VPS SQLite file (+ WAL/SHM) to a temp dir first.

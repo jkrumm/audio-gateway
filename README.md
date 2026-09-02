@@ -59,6 +59,43 @@ trace and its usage rows correlate with no extra column. Unset (default), the ex
 complete no-op. Request/response texts on spans are gated by `USAGE_KEEP_TEXT` exactly like the
 usage sink.
 
+## Podcasts
+
+Long-form pipeline: notes in, a two-host episode out. `POST /v1/podcasts` kicks off a background job
+— outline → per-segment dialogue (`PODCAST_SCRIPT_MODEL`) → per-turn ElevenLabs synthesis
+(`PODCAST_TTS_MODEL`, one voice per host) → gapped concat → loudness-normalised, chaptered MP3 →
+optional cover art (image-gen gateway) → optional Audiobookshelf publish. Only one job's pipeline
+runs at a time (bounds Replicate fan-out/memory); design + cost expectations + every knob are in
+`docs/podcast.md`.
+
+```
+POST   /v1/podcasts                  {source, brief?, title?, language?, minutes?, series?, publish?, cover?} → 202 {id, status}
+GET    /v1/podcasts                  → {jobs: [...]}  (latest 50)
+GET    /v1/podcasts/:id              → the job's public JSON (status, live progress, title, chapters, cost_usd, abs, links, ...)
+GET    /v1/podcasts/:id/audio        → the mp3 (attachment)
+GET    /v1/podcasts/:id/cover        → the cover PNG
+GET    /v1/podcasts/:id/script       → script.json, or a Markdown transcript with ?format=md
+POST   /v1/podcasts/:id/publish      → re-run just the Audiobookshelf publish stage (mp3 stays on disk on failure)
+DELETE /v1/podcasts/:id              → remove the job + its artifacts (409 while running)
+```
+
+CLI (`bun run podcast`):
+```bash
+bun run podcast -- --source notes.md --minutes 15 --series "Spain Trip" --publish
+bun run podcast -- status <id>
+bun run podcast -- list
+bun run podcast -- publish <id>
+```
+Base URL: `--base-url` → `$PODCAST_BASE_URL` → `http://localhost:7714`. Auth:
+`Authorization: Bearer $AUDIO_TOKEN` (defaults to `claude-code`) — same optional `PROXY_API_KEY`
+gate as everything else.
+
+Audiobookshelf model: one SHOW = one library item (folder), one EPISODE = one uploaded audio file
+inside it — chapters and cover art are embedded directly in the MP3 (ABS reads them from the file,
+not from its own metadata), so a single upload + scan carries everything. `ABS_URL`/`ABS_API_KEY`
+unset disables publishing entirely (the job still completes, just without an `abs` link);
+`IMAGE_GEN_URL`/`IMAGE_GEN_API_KEY` unset disables cover art the same way.
+
 ## Develop
 ```bash
 bun install
