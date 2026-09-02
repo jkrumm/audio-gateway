@@ -86,6 +86,13 @@ const iuReplicateBaseUrl = (
   process.env["IU_REPLICATE_BASE_URL"] ?? iuBaseUrl.replace(/\/openai\/v1$/, "/replicate/v1")
 ).replace(/\/+$/, "");
 
+/**
+ * A bare host (`audiobooks.example.com`) is what ends up in a 1Password URL
+ * field more often than not; the client builds `${absUrl}/api/...` from it, so
+ * default the scheme to https rather than fail with an invalid URL at publish time.
+ */
+const withHttpsScheme = (url: string): string => (url === "" || /^https?:\/\//.test(url) ? url : `https://${url}`);
+
 export const config = {
   port: num("PORT", 7714),
   iuApiKey: required("IU_API_KEY"),
@@ -298,7 +305,7 @@ export const config = {
   podcastSeries: process.env["PODCAST_SERIES"] ?? "Hermes Briefings",
   podcastAuthor: process.env["PODCAST_AUTHOR"] ?? "Hermes",
   /** Audiobookshelf base URL; empty disables publishing entirely (see audiobookshelf.ts). */
-  absUrl: (process.env["ABS_URL"] ?? "").replace(/\/+$/, ""),
+  absUrl: withHttpsScheme((process.env["ABS_URL"] ?? "").replace(/\/+$/, "")),
   absApiKey: process.env["ABS_API_KEY"] ?? "",
   /** Podcast library NAME or id in Audiobookshelf that new episodes are uploaded into. */
   absLibrary: process.env["ABS_LIBRARY"] ?? "Podcasts",
