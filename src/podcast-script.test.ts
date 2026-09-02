@@ -430,3 +430,30 @@ describe("tags on short turns", () => {
     expect(long[0]?.text).toContain("[sighs]");
   });
 });
+
+describe("length governor", () => {
+  test("normalizeOutlineTargets scales segment targets to the episode budget", async () => {
+    const { normalizeOutlineTargets } = await import("./podcast-script");
+    const outline = { title: "t", description: "", coverPrompt: "", genres: [], motif: "", throughLine: "", hook: "", reveals: [], digressions: [], segments: [
+      { title: "a", goal: "", keyFacts: [], targetWords: 1000, tension: "" },
+      { title: "b", goal: "", keyFacts: [], targetWords: 3000, tension: "" },
+    ] } as unknown as Parameters<typeof normalizeOutlineTargets>[0];
+    const scaled = normalizeOutlineTargets(outline, 2000);
+    expect(scaled.segments.map((s) => s.targetWords)).toEqual([500, 1500]);
+  });
+
+  test("lengthNotes flags only segments more than 20% over target", async () => {
+    const { lengthNotes } = await import("./podcast-script");
+    const words = (n: number) => Array.from({ length: n }, () => "wort").join(" ");
+    const outline = { segments: [{ targetWords: 100 }, { targetWords: 100 }] } as unknown as Parameters<typeof lengthNotes>[1];
+    const notes = lengthNotes(
+      [
+        { title: "ok", turns: [{ speaker: "A", text: words(110) }] },
+        { title: "long", turns: [{ speaker: "A", text: words(90) }, { speaker: "B", text: words(60) }] },
+      ],
+      outline,
+    );
+    expect(notes.map((n) => n.segmentIndex)).toEqual([1]);
+    expect(notes[0]?.note).toContain("150 words against a target of 100");
+  });
+});

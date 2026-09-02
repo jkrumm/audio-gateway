@@ -584,7 +584,7 @@ function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; s
   const { req, outline, segment, index, total } = params;
   return `${baseSystemPrompt(req)}
 
-You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. Keep the segment's length within about fifteen percent of the current draft (target ${segment.targetWords} words) — revise, don't expand. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
+You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. The segment's target is ${segment.targetWords} words; a revision never grows the segment, and if a note asks for a cut, the cut is the priority. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
 Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/tension), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
 Segment goal: ${segment.goal}
 Central tension for this segment: ${segment.tension}
@@ -624,6 +624,45 @@ function buildRevisionUserContent(params: {
 }
 
 /** The notes a segment's revision call should see: its own notes, plus episode-wide notes (`segmentIndex: null`) — but ONLY if it has at least one note of its own, so an untouched segment is never rewritten just because of an episode-level remark. */
+/** Every version so far overshot its length (22 min asked, 27–36 min delivered); the writer models pad. This is the tolerance before the governor cuts. */
+const LENGTH_TOLERANCE = 0.2;
+
+/**
+ * Scale the outline's per-segment targets so they sum to the episode's
+ * budget. The story pass is asked for that, but the model's arithmetic drifts
+ * and the drift compounds through six segment writers. Exported for tests.
+ */
+export function normalizeOutlineTargets(outline: Outline, totalTargetWords: number): Outline {
+  const sum = outline.segments.reduce((n, seg) => n + seg.targetWords, 0);
+  if (sum <= 0) return outline;
+  const factor = totalTargetWords / sum;
+  return { ...outline, segments: outline.segments.map((seg) => ({ ...seg, targetWords: Math.max(80, Math.round(seg.targetWords * factor)) })) };
+}
+
+const segmentWords = (seg: ScriptSegment): number => seg.turns.reduce((n, t) => n + countWords(t.text), 0);
+
+/**
+ * Length governor: one editorial note per segment that runs more than
+ * LENGTH_TOLERANCE over its target, phrased as a cut with what to keep.
+ * Goes through the normal revision pass, so it costs nothing extra when the
+ * segment is already being revised. Exported for tests.
+ */
+export function lengthNotes(segments: ScriptSegment[], outline: Outline): ReviewNote[] {
+  const notes: ReviewNote[] = [];
+  segments.forEach((seg, index) => {
+    const target = outline.segments[index]?.targetWords;
+    if (!target) return;
+    const words = segmentWords(seg);
+    if (words <= target * (1 + LENGTH_TOLERANCE)) return;
+    notes.push({
+      segmentIndex: index,
+      turnIndex: null,
+      note: `This segment runs ${words} words against a target of ${target}. Cut it to about ${target} words: remove restatements, second examples and warm-up lines; keep every key fact, the strongest exchange and the bridge. Do not add anything.`,
+    });
+  });
+  return notes;
+}
+
 function segmentNotesFor(notes: ReviewNote[], index: number): ReviewNote[] {
   const own = notes.filter((n) => n.segmentIndex === index);
   if (own.length === 0) return [];
@@ -907,7 +946,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         stage: "outline",
         usageEndpoint: "podcast-outline",
       }),
-    parseOutline,
+    (raw) => normalizeOutlineTargets(parseOutline(raw), targetWords),
   );
   opts.onProgress?.("outline", 1, 1);
 
@@ -937,17 +976,19 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   });
 
   let finalSegments = segments;
-  if (review) {
-    const notes = await reviewEpisode({ req, outline, segments, model: opts.reviewModel ?? opts.model, onProgress: opts.onProgress });
-    finalSegments = await reviseSegments({
-      req,
-      outline,
-      segments,
-      notes,
-      model: opts.model,
-      concurrency: opts.concurrency,
-      onProgress: opts.onProgress,
-    });
+  const reviewNotes = review
+    ? await reviewEpisode({ req, outline, segments, model: opts.reviewModel ?? opts.model, onProgress: opts.onProgress })
+    : [];
+  const notes = [...reviewNotes, ...lengthNotes(segments, outline)];
+  if (notes.length > 0) {
+    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.model, concurrency: opts.concurrency, onProgress: opts.onProgress });
+  }
+  // A revision that was asked to cut and still didn't: one more pass on those
+  // segments only, with nothing but the cut on the table.
+  const stillLong = lengthNotes(finalSegments, outline);
+  if (stillLong.length > 0) {
+    log.warn("podcast segments still over length after revision, tightening", { segments: stillLong.map((n) => n.segmentIndex) });
+    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.model, concurrency: opts.concurrency, onProgress: opts.onProgress });
   }
 
   const wordCount = finalSegments.reduce((sum, seg) => sum + seg.turns.reduce((s, t) => s + countWords(t.text), 0), 0);
