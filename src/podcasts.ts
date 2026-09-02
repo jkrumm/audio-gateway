@@ -464,6 +464,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     },
     {
       model: config.podcastScriptModel,
+      reviewModel: config.podcastReviewModel,
       concurrency: 3,
       onProgress: (stage, done, total) => store.update(job.id, { progress: { stage, done, total } }),
     },

@@ -280,7 +280,21 @@ export const config = {
   // ---------------------------------------------------------------------------
 
   /** OpenAI-dialect chat model (IU endpoint) that writes the podcast outline + dialogue. */
-  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-sonnet-5",
+  /**
+   * Writer for the story pass, segments and revisions. An episode is not
+   * latency-bound and the writing IS the product, so the pick is the strongest
+   * creative-writing model on the endpoint: claude-opus-5 leads EQ-Bench
+   * Creative Writing v3 (Elo 2116, snapshot 2026-09-01) and sits in LMArena's
+   * creative top ten; sonnet-5 is outside both. See modelpick
+   * docs/decisions/podcast-writer.md. ~$4 of writer tokens per 22-minute episode.
+   */
+  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-5",
+  /**
+   * The three reviewers read the whole draft and judge; judgement is where the
+   * Mythos-class model earns its price (LMArena creative #1 as claude-fable-5),
+   * and reviewer output is small (notes, not prose).
+   */
+  podcastReviewModel: process.env["PODCAST_REVIEW_MODEL"] ?? "claude-fable-5-1",
   /** Replicate model id used to synthesize each podcast turn. */
   podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
   /** The two ElevenLabs voices, one per host, in host order. */

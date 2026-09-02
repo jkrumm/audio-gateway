@@ -64,8 +64,10 @@ export interface PodcastScript {
 }
 
 export interface ScriptWriterOptions {
-  /** OpenAI-dialect chat model id on the IU endpoint. */
+  /** OpenAI-dialect chat model id on the IU endpoint — story pass, segment writers, revisions. */
   model: string;
+  /** The three reviewers; defaults to `model`. A different (or stronger) editor is a legitimate choice. */
+  reviewModel?: string;
   /** Parallel segment writes. */
   concurrency: number;
   /** Run the multi-angle review + revision passes after the segments are written. Default true. */
@@ -668,8 +670,6 @@ export function parseChatCompletionStream(body: string): { content: string; usag
   return { content, usage, finishReason };
 }
 
-const WRITING_STAGES: ReadonlySet<string> = new Set(["segment", "revise"]);
-
 async function callWriterLlm(params: {
   model: string;
   systemPrompt: string;
@@ -693,11 +693,6 @@ async function callWriterLlm(params: {
             { role: "user", content: params.userContent },
           ],
           max_completion_tokens: params.maxCompletionTokens,
-          // Writing stages don't need the model's long deliberation — measured
-          // 2026-09-02 on a revision prompt: default 8.7k completion tokens vs
-          // 4.8k with reasoning_effort=low for the same-length text. Planning
-          // (outline) and reviewing keep the default; the proxy forwards the field.
-          ...(WRITING_STAGES.has(params.stage) && { reasoning_effort: "low" }),
           // Streamed on purpose: a 20-minute episode's outline over a 20k-char
           // source runs several minutes on the writer model, longer than the IU
           // proxy's non-streaming request timeout (observed as an HTML "500 - The
@@ -943,7 +938,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
 
   let finalSegments = segments;
   if (review) {
-    const notes = await reviewEpisode({ req, outline, segments, model: opts.model, onProgress: opts.onProgress });
+    const notes = await reviewEpisode({ req, outline, segments, model: opts.reviewModel ?? opts.model, onProgress: opts.onProgress });
     finalSegments = await reviseSegments({
       req,
       outline,

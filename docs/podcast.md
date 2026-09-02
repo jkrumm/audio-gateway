@@ -201,11 +201,23 @@ and that reasoning is invisible in the stream but counted against
 10.4k cap the reply came back empty with `finish_reason=length`). Budgets are
 therefore `writerBudget(visible, attempt)` = (visible text + 16k headroom) ×
 attempt, capped at 64k, so a parse-failure retry automatically doubles.
-Writing stages (`segment`, `revise`) send `reasoning_effort: low` (same text,
-~45 % fewer output tokens, faster); planning and reviewing keep the default.
+There is deliberately no `reasoning_effort` cap: an episode is not latency-
+bound, and the writer's deliberation is what the quality pays for (the proxy
+does honour `reasoning_effort: low` — measured ~45 % fewer output tokens for
+the same text — if speed ever matters more).
 `llm.finish_reason` is recorded on every writer span and usage row.
 Review and revision are polish: a reviewer that fails twice is skipped, a
 revision that fails keeps the draft segment. A running episode survives a
 deploy: the VPS compose gives the old container a long `stop_grace_period`
 and `SHUTDOWN_DRAIN_MS` covers a full job, so RollHook's replacement container
 takes new traffic while the old one finishes.
+
+## Model choice (2026-09-02)
+
+Writer `claude-opus-5`, reviewers `claude-fable-5-1` (`PODCAST_SCRIPT_MODEL` /
+`PODCAST_REVIEW_MODEL`). Rationale and the leaderboard snapshot live in
+modelpick `docs/decisions/podcast-writer.md`; the short version: an episode
+is not latency-bound, the script is the product, and Opus 5 leads EQ-Bench
+Creative Writing v3 while Sonnet 5 is outside the top ten. Expect roughly
+$4 of writer tokens plus $1 of reviewer tokens per 22-minute episode on top of
+~$2 of ElevenLabs characters.
