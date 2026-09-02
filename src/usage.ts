@@ -20,6 +20,7 @@ export interface UsageRow {
     | "podcast-cover"
     | "podcast-outline"
     | "podcast-segment"
+    | "podcast-review"
     | "podcast-request";
   model: string;
   status: number;

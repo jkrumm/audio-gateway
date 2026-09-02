@@ -19,12 +19,64 @@ The first segment opens cold + intros the show; the last wraps with three takeaw
 every other segment ends on a hand-off, never a conclusion.
 
 The system prompt is one shared contract (`baseSystemPrompt`): every fact must come from the source,
-turns are short (15–50 words, hard max 80) with interjections and half-finished sentences, numbers
-and abbreviations are spelled out for the ear, and ElevenLabs v3 audio tags are used sparingly from a
-fixed allow-list (`V3_PODCAST_TAGS`) — at most one per turn, one every four turns. `sanitizeTurns`
-then strips any tag outside that list, strips markdown/emoji, splits any turn over ~900 chars at
-sentence boundaries (same speaker), and folds a short leading fragment ("Echt?") into its
-same-speaker predecessor.
+numbers and abbreviations are spelled out for the ear, and ElevenLabs v3 audio tags are used sparingly
+from a fixed allow-list (`V3_PODCAST_TAGS`) — at most one every six turns, only inside turns of twelve
+words or more. Turn length and rhythm are NOT quota-driven — see "Writers' room" below for why.
+`sanitizeTurns` strips any tag outside the allow-list, strips markdown/emoji, splits any turn over
+~1400 chars OR ~180 words at sentence boundaries (same speaker), and folds a short leading fragment
+("Echt?") into its same-speaker predecessor.
+
+## Writers' room: dramaturgy, review and revision (`src/podcast-script.ts`)
+
+A two-pass writer (outline → parallel segments) reliably produces on-topic dialogue, but it reads like
+a report given quotas, not a conversation with a shape — the rhythm rules used to be numeric ("half of
+all turns 40–120 words", "Host A carries 60%"), which produces mechanically-varied but still
+structureless text. The writer is now a small "writers' room": the outline plans the story, not just
+the facts; segments are written with qualitative rather than numeric direction; and two further passes
+critique and repair the whole draft before it goes to synthesis. All of this is optional
+(`ScriptWriterOptions.review`, default `true`) — set it to `false` to fall back to the original
+outline-then-segments behavior (used by the test suite for cheap runs).
+
+**1. Story pass (outline).** Beyond title/description/genres/motif, the outline now plans dramaturgy:
+a `through_line` (the one question the episode is really answering, revealed progressively — the
+hosts circle it, they never state it up front), a `hook` (the concrete cold-open beat — a scene, a
+number, a live disagreement — that must NOT summarize the episode or preview the takeaways),
+`reveals` (2–4 facts/decisions/twists deliberately withheld, each pinned to the segment index where
+it lands), and `digressions` (2–4 planned side-trips — a joke, an anecdote, an example, a "what if" —
+each pinned to a segment index plus a one-line `return_hook` back to the thread). All four fields
+default to blank/empty when a reply omits them, so older fixtures and outlines still parse.
+
+**2. Segment pass.** The rhythm rule in `baseSystemPrompt` is qualitative, not numeric: whoever is
+explaining gets the floor for as long as the thought needs, the other host reacts with weight rather
+than a one-liner, and the rhythm is varied on purpose — a long stretch, a quick exchange, a pause, a
+digression that returns. The only hard limit left (~180 words / ~1400 chars per turn) is enforced in
+code by `sanitizeTurns`, not preached in the prompt — the model decides pacing, the code only stops
+pathological output. Each segment call is fed just its own assigned reveals/digressions plus the
+through-line, and an explicit list of reveals assigned to a LATER segment ("do not mention X yet — it
+lands in segment N") so segments don't spoil each other despite being written in parallel.
+
+**3. Review pass (multi-angle, parallel).** Three reviewer calls run over the whole draft at once, each
+a distinct angle: the **dramaturge** (red thread, hook without spoilers, reveals landing on schedule,
+digressions that return, pacing across the whole episode, an ending that earns its takeaways), the
+**conversation coach** (does it sound like two people talking — real floor time, substantive reactions,
+no mechanical alternation, distinct voices, humor that lands), and the **fact & speech editor** (every
+fact traceable to the source, nothing from `key_facts` missing, numbers spelled out as spoken, one
+breath per sentence, audio tags only from the allow-list and not overused). Each reviewer returns at
+most ~12 specific, actionable notes plus a one-line verdict; a note targets a segment/turn index or the
+whole episode (`segment: null`).
+
+**4. Revision pass.** Only segments that received at least one note of their own are rewritten — an
+episode-wide note alone does not trigger a rewrite, but once a segment IS being revised it also sees
+every episode-wide note as extra context. Each revision call gets the segment's current turns, its
+notes, and a few turns from each neighboring segment for the seams, and returns the segment's full
+turns again (not a diff). Segments with no notes are left untouched and cost no extra call.
+`sanitizeTurns` runs a second time after revision.
+
+**Cost/time trade.** The review + revision passes roughly double the writer-model token spend (three
+whole-draft reviewer calls plus one revision call per segment that needed one) — still small in
+absolute terms since the writer model is cheap and TTS synthesis dominates cost — and add roughly
+1–2 minutes of wall-clock time to a job, mostly the three parallel reviewer calls plus whichever
+revisions run (also parallel, bounded by the writer's `concurrency`).
 
 ## Per-turn synthesis (`src/podcast-synth.ts`)
 

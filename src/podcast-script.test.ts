@@ -92,6 +92,64 @@ describe("parseOutline", () => {
   test("throws when segments are missing", () => {
     expect(() => parseOutline(JSON.stringify({ title: "T" }))).toThrow();
   });
+
+  test("parses the dramaturgy fields when present", () => {
+    const outline = parseOutline(
+      JSON.stringify({
+        title: "The Plan",
+        description: "A short description.",
+        cover_prompt: "A van at sunset",
+        genres: ["Travel"],
+        motif: "the broken coffee machine",
+        through_line: "Will the van actually make the mountain pass?",
+        hook: "The mechanic just said the word 'maybe'.",
+        reveals: [{ text: "The pass has a weight limit.", segment: 1 }],
+        digressions: [{ beat: "A story about a flat tyre in Portugal.", segment: 0, return_hook: "Anyway, back to the van." }],
+        segments: [
+          { title: "Cold open", goal: "hook", key_facts: ["fact one"], target_words: 200, tension: "will it work" },
+          { title: "Middle", goal: "explain", key_facts: [], target_words: 200, tension: "is it enough" },
+        ],
+      }),
+    );
+    expect(outline.throughLine).toBe("Will the van actually make the mountain pass?");
+    expect(outline.hook).toBe("The mechanic just said the word 'maybe'.");
+    expect(outline.reveals).toEqual([{ text: "The pass has a weight limit.", segmentIndex: 1 }]);
+    expect(outline.digressions).toEqual([
+      { beat: "A story about a flat tyre in Portugal.", segmentIndex: 0, returnHook: "Anyway, back to the van." },
+    ]);
+  });
+
+  test("defaults the dramaturgy fields to empty/blank when absent (older fixtures still parse)", () => {
+    const outline = parseOutline(
+      JSON.stringify({
+        title: "T",
+        description: "D",
+        cover_prompt: "P",
+        genres: [],
+        segments: [{ title: "S1", goal: "g", key_facts: [], target_words: 100, tension: "t" }],
+      }),
+    );
+    expect(outline.throughLine).toBe("");
+    expect(outline.hook).toBe("");
+    expect(outline.reveals).toEqual([]);
+    expect(outline.digressions).toEqual([]);
+  });
+
+  test("clamps a reveal/digression segment index onto a real segment", () => {
+    const outline = parseOutline(
+      JSON.stringify({
+        title: "T",
+        description: "D",
+        cover_prompt: "P",
+        genres: [],
+        reveals: [{ text: "Out of range reveal", segment: 99 }],
+        digressions: [{ beat: "Out of range digression", segment: -5, return_hook: "back" }],
+        segments: [{ title: "S1", goal: "g", key_facts: [], target_words: 100, tension: "t" }],
+      }),
+    );
+    expect(outline.reveals).toEqual([{ text: "Out of range reveal", segmentIndex: 0 }]);
+    expect(outline.digressions).toEqual([{ beat: "Out of range digression", segmentIndex: 0, returnHook: "back" }]);
+  });
 });
 
 describe("parseSegmentTurns", () => {
@@ -182,52 +240,63 @@ describe("sanitizeTurns", () => {
   });
 });
 
-describe("writePodcastScript", () => {
-  test("writes an outline then every segment in parallel, preserving order and summing wordCount", async () => {
-    const outlineSegments = [
-      { title: "Cold open", goal: "hook the listener", key_facts: ["fact A"], target_words: 100, tension: "will it work" },
-      { title: "Middle", goal: "explain the plan", key_facts: ["fact B"], target_words: 100, tension: "is it enough time" },
-      { title: "Wrap-up", goal: "close the episode", key_facts: ["fact C"], target_words: 100, tension: "what's left open" },
-    ];
+const OUTLINE_SEGMENTS = [
+  { title: "Cold open", goal: "hook the listener", key_facts: ["fact A"], target_words: 100, tension: "will it work" },
+  { title: "Middle", goal: "explain the plan", key_facts: ["fact B"], target_words: 100, tension: "is it enough time" },
+  { title: "Wrap-up", goal: "close the episode", key_facts: ["fact C"], target_words: 100, tension: "what's left open" },
+];
 
+function outlineResponse(extra: Record<string, unknown> = {}): Response {
+  return chatCompletion(
+    JSON.stringify({
+      title: "Der Roadtrip-Plan",
+      description: "Eine kurze Beschreibung.",
+      cover_prompt: "A camper van on a coastal road at golden hour",
+      genres: ["Travel"],
+      segments: OUTLINE_SEGMENTS,
+      ...extra,
+    }),
+  );
+}
+
+function segmentResponse(index: number): Response {
+  return chatCompletion(
+    JSON.stringify({
+      turns: [
+        { speaker: "A", text: `Segment ${index} Zeile eins von Lena.` },
+        { speaker: "B", text: `Segment ${index} Zeile zwei von Marco.` },
+      ],
+    }),
+  );
+}
+
+const BASE_REQUEST = {
+  source: "Der Van kostet dreihundert Euro pro Nacht.",
+  brief: "Für einen Freund, der einen Roadtrip plant.",
+  language: "de" as const,
+  minutes: 12,
+  hosts: HOSTS,
+  series: "Roadtrip Radio",
+};
+
+describe("writePodcastScript", () => {
+  test("review: false writes an outline then every segment in parallel, preserving order and summing wordCount, with no review/revision calls", async () => {
+    const calls: string[] = [];
     setFetch(async (_url, init) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
       const systemPrompt = body.messages[0]?.content ?? "";
       if (systemPrompt.includes("You are writing the OUTLINE")) {
-        return chatCompletion(
-          JSON.stringify({
-            title: "Der Roadtrip-Plan",
-            description: "Eine kurze Beschreibung.",
-            cover_prompt: "A camper van on a coastal road at golden hour",
-            genres: ["Travel"],
-            segments: outlineSegments,
-          }),
-        );
+        calls.push("outline");
+        return outlineResponse();
       }
       const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
       if (!match) throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 100)}`);
+      calls.push("segment");
       const index = Number(match[1]) - 1;
-      return chatCompletion(
-        JSON.stringify({
-          turns: [
-            { speaker: "A", text: `Segment ${index} Zeile eins von Lena.` },
-            { speaker: "B", text: `Segment ${index} Zeile zwei von Marco.` },
-          ],
-        }),
-      );
+      return segmentResponse(index);
     });
 
-    const script = await writePodcastScript(
-      {
-        source: "Der Van kostet dreihundert Euro pro Nacht.",
-        brief: "Für einen Freund, der einen Roadtrip plant.",
-        language: "de",
-        minutes: 12,
-        hosts: HOSTS,
-        series: "Roadtrip Radio",
-      },
-      { model: "claude-sonnet-5", concurrency: 2 },
-    );
+    const script = await writePodcastScript(BASE_REQUEST, { model: "claude-sonnet-5", concurrency: 2, review: false });
 
     expect(script.title).toBe("Der Roadtrip-Plan");
     expect(script.language).toBe("de");
@@ -244,6 +313,89 @@ describe("writePodcastScript", () => {
     );
     expect(script.wordCount).toBe(expectedWordCount);
     expect(script.wordCount).toBeGreaterThan(0);
+    // Old behaviour: exactly one outline call + one call per segment, nothing else.
+    expect(calls).toEqual(["outline", "segment", "segment", "segment"]);
+  });
+
+  test("review: true runs outline, segments, three parallel reviews, then revises only the segments with notes", async () => {
+    const calls: string[] = [];
+    let reviseCalls = 0;
+
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        calls.push("outline");
+        return outlineResponse();
+      }
+
+      if (systemPrompt.startsWith("You are the DRAMATURGE")) {
+        calls.push("review-dramaturge");
+        return chatCompletion(
+          JSON.stringify({
+            notes: [{ segment: 0, turn: 0, note: "Open with the hook, not a summary." }],
+            verdict: "Needs one fix in the cold open.",
+          }),
+        );
+      }
+      if (systemPrompt.startsWith("You are the CONVERSATION COACH")) {
+        calls.push("review-coach");
+        return chatCompletion(JSON.stringify({ notes: [], verdict: "Sounds natural." }));
+      }
+      if (systemPrompt.startsWith("You are the FACT & SPEECH EDITOR")) {
+        calls.push("review-fact-editor");
+        return chatCompletion(
+          JSON.stringify({
+            notes: [{ segment: null, turn: null, note: "Spell out all currency amounts." }],
+            verdict: "One episode-wide fix needed.",
+          }),
+        );
+      }
+
+      if (systemPrompt.includes("You are REVISING ONE SEGMENT")) {
+        calls.push("revise");
+        reviseCalls++;
+        const match = /"([^"]+)" — based on editorial notes/.exec(systemPrompt);
+        return chatCompletion(
+          JSON.stringify({
+            turns: [
+              { speaker: "A", text: `Revised ${match?.[1] ?? "?"} Zeile eins.` },
+              { speaker: "B", text: "Revised Zeile zwei." },
+            ],
+          }),
+        );
+      }
+
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      if (!match) throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 100)}`);
+      calls.push("segment");
+      const index = Number(match[1]) - 1;
+      return segmentResponse(index);
+    });
+
+    const script = await writePodcastScript(BASE_REQUEST, { model: "claude-sonnet-5", concurrency: 2, review: true });
+
+    // outline, 3 segments, 3 reviews, 1 revision (only segment 0 had a targeted note).
+    expect(calls.filter((c) => c === "outline")).toHaveLength(1);
+    expect(calls.filter((c) => c === "segment")).toHaveLength(3);
+    expect(calls.filter((c) => c.startsWith("review-"))).toHaveLength(3);
+    expect(calls.filter((c) => c === "revise")).toHaveLength(1);
+    expect(reviseCalls).toBe(1);
+
+    // Revision happened strictly after all reviews, which happened after all segments.
+    const lastSegmentIdx = calls.lastIndexOf("segment");
+    const firstReviewIdx = calls.findIndex((c) => c.startsWith("review-"));
+    const reviseIdx = calls.indexOf("revise");
+    expect(firstReviewIdx).toBeGreaterThan(lastSegmentIdx);
+    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-dramaturge"));
+    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-coach"));
+    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-fact-editor"));
+
+    // Segment 0 carries the revised turns; segments 1 and 2 are untouched.
+    expect(script.segments[0]?.turns[0]?.text).toContain("Revised Cold open");
+    expect(script.segments[1]?.turns[0]?.text).toBe("Segment 1 Zeile eins von Lena.");
+    expect(script.segments[2]?.turns[0]?.text).toBe("Segment 2 Zeile eins von Lena.");
   });
 });
 
