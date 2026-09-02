@@ -193,9 +193,23 @@ function printProgressLine(job: PodcastJobPublic): void {
   }
 }
 
+/** A rolling deploy answers 503 for a few seconds; a job runs for minutes — don't abandon it over one bad poll. */
+const POLL_TRANSIENT_MAX = 12;
+
 async function pollUntilDone(baseUrl: string, id: string): Promise<PodcastJobPublic> {
+  let transientFailures = 0;
   for (;;) {
-    const job = await apiFetch<PodcastJobPublic>(baseUrl, `/v1/podcasts/${id}`);
+    let job: PodcastJobPublic;
+    try {
+      job = await apiFetch<PodcastJobPublic>(baseUrl, `/v1/podcasts/${id}`);
+      transientFailures = 0;
+    } catch (err) {
+      transientFailures++;
+      if (transientFailures > POLL_TRANSIENT_MAX) throw err;
+      console.error(`poll failed (${transientFailures}/${POLL_TRANSIENT_MAX}), retrying: ${err instanceof Error ? err.message : String(err)}`);
+      await Bun.sleep(POLL_INTERVAL_MS);
+      continue;
+    }
     printProgressLine(job);
     if (TERMINAL_STATUSES.has(job.status)) {
       if (process.stdout.isTTY) process.stdout.write("\n");
