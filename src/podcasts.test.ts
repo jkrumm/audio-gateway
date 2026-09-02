@@ -109,6 +109,7 @@ function seedDoneJob(overrides: Partial<PodcastJobRequest> = {}): PodcastJob {
     turns: 2,
     chapters: [{ title: "Cold open", startMs: 0 }],
     files: { audio: audioPath, cover: coverPath, script: scriptPath },
+      runner: null,
   });
 }
 
@@ -231,6 +232,7 @@ describe("toPublicJob", () => {
       error: null,
       abs: { url: "https://abs.example.com/item/1", libraryItemId: "item-1", episodeId: "ep-1" },
       files: { audio: "/tmp/a/episode.mp3", cover: "/tmp/a/cover.png", script: "/tmp/a/script.json" },
+      runner: null,
     };
 
     const pub = toPublicJob(job);
@@ -517,16 +519,41 @@ describe("claimJob/releaseJob", () => {
 });
 
 describe("recoverPodcastJobs", () => {
-  test("marks a job left in a non-terminal status as failed, interrupted by restart", () => {
+  test("fails a non-terminal job this runner owned (same hostname) as interrupted by restart", async () => {
+    const { hostname } = await import("node:os");
     const store = _test.getStore();
     const job = store.create({ caller: "t", request: makeRequest() });
-    store.update(job.id, { status: "scripting" });
+    store.update(job.id, { status: "scripting", runner: `${hostname()}:99999` });
 
     recoverPodcastJobs();
 
     const recovered = store.get(job.id);
     expect(recovered?.status).toBe("failed");
     expect(recovered?.error).toBe("interrupted by restart");
+  });
+
+  test("leaves a fresh job owned by another runner alone (rolling deploy)", () => {
+    const store = _test.getStore();
+    const job = store.create({ caller: "t", request: makeRequest() });
+    store.update(job.id, { status: "cover", runner: "other-container:1" });
+
+    recoverPodcastJobs();
+
+    expect(store.get(job.id)?.status).toBe("cover");
+  });
+
+  test("fails a job from another runner once it has gone stale", () => {
+    const store = _test.getStore();
+    const job = store.create({ caller: "t", request: makeRequest() });
+    store.update(job.id, { status: "synthesizing", runner: "other-container:1" });
+    const db = (store as unknown as { db: { run: (sql: string, ...args: unknown[]) => unknown } }).db;
+    db.run("UPDATE podcast_job SET updated_at = ? WHERE id = ?", new Date(Date.now() - 45 * 60 * 1000).toISOString(), job.id);
+
+    recoverPodcastJobs();
+
+    const recovered = store.get(job.id);
+    expect(recovered?.status).toBe("failed");
+    expect(recovered?.error).toContain("no progress");
   });
 });
 

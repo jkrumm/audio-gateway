@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "./config";
 import { log } from "./log";
@@ -64,6 +65,12 @@ export interface PodcastJob {
   abs: { url: string; libraryItemId: string; episodeId: string | null } | null;
   /** Absolute paths under `config.podcastDataDir/<id>/`. */
   files: { audio: string | null; cover: string | null; script: string | null };
+  /**
+   * Which process is running the job (`hostname:pid`), set when the queue
+   * claims it. A rolling deploy briefly runs two containers on the same
+   * ledger; the new one must not declare the old one's live job dead.
+   */
+  runner: string | null;
 }
 
 const NON_TERMINAL_STATUSES: PodcastStatus[] = [
@@ -104,6 +111,7 @@ interface PodcastJobState {
   error: PodcastJob["error"];
   abs: PodcastJob["abs"];
   files: PodcastJob["files"];
+  runner?: PodcastJob["runner"];
 }
 
 function jobToState(job: PodcastJob): PodcastJobState {
@@ -118,6 +126,7 @@ function jobToState(job: PodcastJob): PodcastJobState {
     error: job.error,
     abs: job.abs,
     files: job.files,
+    runner: job.runner,
   };
 }
 
@@ -131,6 +140,7 @@ function rowToJob(row: PodcastJobRow): PodcastJob {
     updatedAt: row.updated_at,
     caller: row.caller,
     request,
+    runner: null,
     ...state,
   };
 }
@@ -204,6 +214,7 @@ export class PodcastStore {
       error: null,
       abs: null,
       files: { audio: null, cover: null, script: null },
+      runner: null,
     };
     this.write(job);
     return job;
@@ -726,6 +737,7 @@ async function processQueue(): Promise<void> {
       if (!job) continue;
       if (!claimJob(id)) continue;
       try {
+        getStore().update(id, { runner: RUNNER_ID });
         await runPodcastJob(job);
       } finally {
         releaseJob(id);
@@ -741,13 +753,59 @@ async function processQueue(): Promise<void> {
  * restart — its partial artifacts are discarded (no resume). Called from
  * `index.ts`'s `import.meta.main` block, before the server starts listening.
  */
+/** Identity of this process on the shared ledger — a restarted container keeps its hostname, a rolling-deploy sibling has another. */
+const RUNNER_ID = `${hostname()}:${process.pid}`;
+/** A live job updates the ledger at every stage and every synthesized turn; this long without a write means its runner is gone. */
+const STALE_JOB_MS = 30 * 60 * 1000;
+const STALE_SWEEP_MS = 60 * 1000;
+
+/**
+ * Boot-time recovery. Only jobs this runner owned (same hostname, i.e. the
+ * container restarted) are failed outright — a rolling deploy runs the
+ * replacement container next to the old one for a while, and the old one is
+ * still working on its job (2026-09-02: the new container marked a job
+ * "interrupted by restart" while the old container went on to master and
+ * publish it). Jobs owned by another runner, or by nobody (rows from before
+ * this field existed), are left alone unless they have gone stale.
+ */
 export function recoverPodcastJobs(): void {
   const store = getStore();
   for (const job of store.list(LEDGER_SCAN_LIMIT)) {
     if (!NON_TERMINAL_STATUSES.includes(job.status)) continue;
-    store.update(job.id, { status: "failed", error: "interrupted by restart", progress: null });
-    log.warn("podcast job interrupted by restart", { id: job.id, previousStatus: job.status });
+    const ownedHere = job.runner !== null && job.runner.split(":")[0] === RUNNER_ID.split(":")[0];
+    if (ownedHere) {
+      store.update(job.id, { status: "failed", error: "interrupted by restart", progress: null });
+      log.warn("podcast job interrupted by restart", { id: job.id, previousStatus: job.status, runner: job.runner });
+      continue;
+    }
+    if (isStale(job)) {
+      failStale(store, job);
+      continue;
+    }
+    log.info("podcast job owned by another runner, leaving it", { id: job.id, status: job.status, runner: job.runner });
   }
+}
+
+function isStale(job: PodcastJob): boolean {
+  return Date.now() - Date.parse(job.updatedAt) > STALE_JOB_MS;
+}
+
+function failStale(store: PodcastStore, job: PodcastJob): void {
+  store.update(job.id, { status: "failed", error: `no progress for ${Math.round(STALE_JOB_MS / 60000)} minutes — runner gone`, progress: null });
+  log.warn("podcast job stale, marked failed", { id: job.id, previousStatus: job.status, runner: job.runner, updatedAt: job.updatedAt });
+}
+
+/** Periodic sweep for jobs whose runner died without a restart of this process (e.g. the old deploy container was killed). */
+export function startStaleJobSweep(): ReturnType<typeof setInterval> {
+  const timer = setInterval(() => {
+    const store = getStore();
+    for (const job of store.list(LEDGER_SCAN_LIMIT)) {
+      if (!NON_TERMINAL_STATUSES.includes(job.status) || activeJobIds.has(job.id)) continue;
+      if (isStale(job)) failStale(store, job);
+    }
+  }, STALE_SWEEP_MS);
+  timer.unref();
+  return timer;
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { flushOtel } from "./otel";
-import { handlePodcasts, isPodcastPath, podcastRunning, recoverPodcastJobs } from "./podcasts";
+import { handlePodcasts, isPodcastPath, podcastRunning, recoverPodcastJobs, startStaleJobSweep } from "./podcasts";
 import { handleSpeech } from "./speech";
 import { handleTranscriptions } from "./transcriptions";
 
@@ -107,6 +107,7 @@ export async function handleRequest(req: Request): Promise<Response> {
 
 if (import.meta.main) {
   recoverPodcastJobs();
+  startStaleJobSweep();
 
   const server = Bun.serve({
     port: config.port,
