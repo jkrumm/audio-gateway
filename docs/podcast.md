@@ -223,3 +223,13 @@ so), and name Opus 4.6 for organic voice and dialogue; Sonnet 5 is outside
 both boards' top ten; Fable 5.1 ($50/M output) buys nothing the reviewer seat
 needs. Expect roughly $3–4 of writer + reviewer tokens per 22-minute episode
 on top of ~$2 of ElevenLabs characters.
+
+## Length governor (2026-09-02)
+
+Fassung 3–5 ran 27–36 minutes against a 22-minute ask: the story pass's word
+budgets drift and the writers pad. `normalizeOutlineTargets` scales the
+segment targets to `minutes × 150` in code; `lengthNotes` adds a cut note for
+any segment more than 20 % over its target, which rides the normal revision
+pass; if a segment is still over afterwards, one tightening pass runs on those
+segments alone. Measured speaking rate is 142–149 words per minute, so the
+150 wpm planning constant is right — the words were the problem.
