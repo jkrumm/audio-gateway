@@ -588,7 +588,9 @@ describe("episodeFilename", () => {
 describe("podcastDoneMessage", () => {
   test("carries title, minutes, chapters and the Audiobookshelf link", async () => {
     const { podcastDoneMessage } = await import("./podcasts");
-    const msg = podcastDoneMessage({ title: "T", durationSeconds: 1536, chapters: ["A", "B"], absUrl: "https://abs.example/item/1", costUsd: 2.257 });
+    const msg = podcastDoneMessage({ title: "T", durationSeconds: 1536, chapters: ["A", "B"], absUrl: "https://abs.example/item/1", costUsd: 2.257, publishRequested: true });
+    const unpublished = podcastDoneMessage({ title: "T", durationSeconds: 60, chapters: [], absUrl: null, costUsd: null, publishRequested: false });
+    expect(unpublished).toContain("nicht angefordert");
     expect(msg).toContain("*T* (26 min, 2 Kapitel)");
     expect(msg).toContain("• B");
     expect(msg).toContain("https://abs.example/item/1");

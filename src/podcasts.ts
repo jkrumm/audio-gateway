@@ -618,7 +618,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     published: absResult !== null,
   });
   await notifyPodcastResult({
-    text: podcastDoneMessage({ title: script.title, durationSeconds, chapters: chapters.map((c) => c.title), absUrl: absResult?.url ?? null, costUsd }),
+    text: podcastDoneMessage({ title: script.title, durationSeconds, chapters: chapters.map((c) => c.title), absUrl: absResult?.url ?? null, costUsd, publishRequested: request.publish }),
   });
 
   recordUsage({
@@ -641,12 +641,16 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
 }
 
 /** The Slack line for a finished episode — the listener wants the link, not the JSON. Exported for tests. */
-export function podcastDoneMessage(params: { title: string; durationSeconds: number; chapters: string[]; absUrl: string | null; costUsd: number | null }): string {
+export function podcastDoneMessage(params: { title: string; durationSeconds: number; chapters: string[]; absUrl: string | null; costUsd: number | null; publishRequested: boolean }): string {
   const minutes = Math.round(params.durationSeconds / 60);
   const lines = [
     `Podcast fertig: *${params.title}* (${minutes} min, ${params.chapters.length} Kapitel)`,
     ...params.chapters.map((c) => `• ${c}`),
-    params.absUrl ? `Anhören in Audiobookshelf: ${params.absUrl}` : "Nicht veröffentlicht (Audiobookshelf nicht konfiguriert).",
+    params.absUrl
+      ? `Anhören in Audiobookshelf: ${params.absUrl}`
+      : params.publishRequested
+        ? "Nicht veröffentlicht: Audiobookshelf ist auf diesem Gateway nicht konfiguriert."
+        : "Nicht veröffentlicht (nicht angefordert) — die Datei liegt auf dem Gateway.",
     params.costUsd != null ? `ElevenLabs-Kosten: ${params.costUsd.toFixed(2)} USD` : "",
   ];
   return lines.filter(Boolean).join("\n");
