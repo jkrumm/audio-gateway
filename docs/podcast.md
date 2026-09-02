@@ -233,3 +233,19 @@ any segment more than 20 % over its target, which rides the normal revision
 pass; if a segment is still over afterwards, one tightening pass runs on those
 segments alone. Measured speaking rate is 142–149 words per minute, so the
 150 wpm planning constant is right — the words were the problem.
+
+## What Audiobookshelf can show (researched 2026-09-02, ABS 2.36)
+
+- **One cover per show.** The episode's embedded APIC is probed (`audioFile.embeddedCoverArt`)
+  but never used as episode art; per-episode artwork is an open request (#1573) with an
+  unmerged PR (#4806). The pipeline therefore uploads the cover once, when the show item is
+  created, and keeps embedding it in the MP3 for every other player.
+- **No chapter images.** Chapters are timing + title only (`parseChapters` drops pictures);
+  ID3 CHAP pictures and M4B chapter art are not retained (#3129, #2660 open).
+- **PDF next to an audiobook works.** In a *book* library a PDF in the item folder becomes a
+  supplementary ebook, readable in the web reader and by clients that expose ebooks (Voca does;
+  the official app, Plappa and Prologue are not documented to). Plain images in the folder are
+  listed as library files but not viewable. Nothing of this applies to podcast items, so a
+  route map for this show is a link in the description, not an attachment.
+- **Descriptions.** HTML from the UI editor and ID3 is kept; OPF/sidecar HTML is stripped;
+  images in descriptions are unsupported.

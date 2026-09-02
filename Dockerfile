@@ -25,6 +25,8 @@ RUN --mount=type=cache,target=/root/.bun/install/cache \
 
 COPY src/ ./src/
 COPY tsconfig.json ./
+# The podcast writers' style anchor, injected into every writer prompt (PODCAST_SHOW_BIBLE).
+COPY docs/show-bible.md ./docs/show-bible.md
 
 EXPOSE 7714
 
