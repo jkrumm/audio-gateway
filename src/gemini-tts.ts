@@ -96,13 +96,24 @@ export interface RawResponse {
  */
 export async function rawFetch(url: string, init: RequestInit, attempts = 3): Promise<RawResponse> {
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    const res = await fetch(url, init);
-    if ((res.status === 503 || res.status === 429) && attempt < attempts) {
+    try {
+      const res = await fetch(url, init);
+      if ((res.status === 503 || res.status === 429) && attempt < attempts) {
+        recordRetry();
+        await Bun.sleep(500 * attempt);
+        continue;
+      }
+      return { status: res.status, body: await res.text() };
+    } catch (err) {
+      // A transport failure — connection refused, reset, or the socket closed
+      // in the middle of a streamed body ("The socket connection was closed
+      // unexpectedly", which cost a 23-minute podcast job on 2026-09-02) — is
+      // as transient as a 503 and gets the same backoff. The last attempt's
+      // error propagates unchanged.
+      if (attempt >= attempts) throw err;
       recordRetry();
-      await Bun.sleep(500 * attempt);
-      continue;
+      await Bun.sleep(1000 * attempt);
     }
-    return { status: res.status, body: await res.text() };
   }
   throw new Error("unreachable");
 }

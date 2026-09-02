@@ -595,3 +595,22 @@ describe("podcastDoneMessage", () => {
     expect(msg).toContain("2.26 USD");
   });
 });
+
+describe("POST /v1/podcasts/:id/retry", () => {
+  test("re-queues a failed job as a new job with the same request; refuses a done job", async () => {
+    const store = _test.getStore();
+    const failed = store.create({ caller: "t", request: makeRequest({ source: "SECRET SOURCE" }) });
+    store.update(failed.id, { status: "failed", error: "socket closed" });
+    const res = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${failed.id}/retry`, { method: "POST" })));
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as { id: string; status: string; retry_of: string };
+    expect(body.retry_of).toBe(failed.id);
+    expect(body.id).not.toBe(failed.id);
+    expect(store.get(body.id)?.request.source).toBe("SECRET SOURCE");
+    expect(JSON.stringify(body)).not.toContain("SECRET SOURCE");
+
+    const done = seedDoneJob();
+    const refused = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${done.id}/retry`, { method: "POST" })));
+    expect(refused.status).toBe(409);
+  });
+});

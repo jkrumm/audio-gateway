@@ -78,3 +78,24 @@ describe("synthChunksConcurrent", () => {
     await expect(synthChunksConcurrent("gemini-tts", "Charon", chunks(3))).rejects.toThrow(/Gemini TTS failed/);
   });
 });
+
+describe("rawFetch transport retry", () => {
+  test("retries once when fetch throws (socket closed mid-stream) and returns the next reply", async () => {
+    const { rawFetch } = await import("./gemini-tts");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("The socket connection was closed unexpectedly.");
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const res = await rawFetch("https://example.test/x", { method: "GET" }, 3);
+      expect(res.status).toBe(200);
+      expect(res.body).toBe("ok");
+      expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

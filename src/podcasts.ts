@@ -862,7 +862,7 @@ export function startStaleJobSweep(): ReturnType<typeof setInterval> {
 // HTTP
 // ---------------------------------------------------------------------------
 
-const PODCAST_PATH_RE = /^(?:\/v1)?(?:\/audio)?\/podcasts(?:\/([^/]+))?(?:\/(audio|cover|script|publish))?$/;
+const PODCAST_PATH_RE = /^(?:\/v1)?(?:\/audio)?\/podcasts(?:\/([^/]+))?(?:\/(audio|cover|script|publish|retry))?$/;
 
 /** Whether `path` is any podcast route (with or without a `/v1`/`/audio` prefix) — the gate `index.ts` uses to dispatch here. */
 export function isPodcastPath(path: string): boolean {
@@ -962,6 +962,23 @@ async function servePodcastScript(id: string, format: string | null): Promise<Re
   return new Response(raw, { headers: { "content-type": "application/json" } });
 }
 
+/**
+ * Re-queue a failed job as a NEW job with the same request. The source text
+ * never leaves the gateway (the API deliberately hides it), so a caller that
+ * lost its copy — Hermes after a 20-minute wait — can still retry without
+ * re-uploading. Only failed jobs; a running or finished one is not a retry.
+ */
+function retryPodcast(id: string, tokenCaller: string | undefined): Response {
+  const store = getStore();
+  const previous = store.get(id);
+  if (!previous) return notFound(`no podcast job ${id}`);
+  if (previous.status !== "failed") return errorResponse(409, `podcast job is ${previous.status}, only a failed job can be retried`);
+  const job = store.create({ caller: tokenCaller ?? previous.caller, request: previous.request });
+  enqueue(job.id);
+  log.info("podcast job retried", { id: job.id, retryOf: previous.id });
+  return Response.json({ id: job.id, status: job.status, retry_of: previous.id }, { status: 202 });
+}
+
 async function republishPodcast(id: string): Promise<Response> {
   const job = getStore().get(id);
   if (!job) return notFound(`podcast job not found: ${id}`);
@@ -1013,6 +1030,7 @@ export async function handlePodcasts(req: Request, path: string, tokenCaller?: s
     return await servePodcastScript(id, new URL(req.url).searchParams.get("format"));
   }
   if (method === "POST" && id && sub === "publish") return await republishPodcast(id);
+  if (method === "POST" && id && sub === "retry") return retryPodcast(id, tokenCaller);
   if (method === "DELETE" && id && !sub) return await deletePodcastJob(id);
 
   return notFound(`no route for ${method} ${path}`);

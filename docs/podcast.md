@@ -289,3 +289,13 @@ segments alone. Measured speaking rate is 142–149 words per minute, so the
   route map for this show is a link in the description, not an attachment.
 - **Descriptions.** HTML from the UI editor and ID3 is kept; OPF/sidecar HTML is stripped;
   images in descriptions are unsupported.
+
+## Retries (2026-09-02)
+
+`rawFetch` retries thrown transport errors (connection reset, socket closed
+mid-stream) with the same backoff as 503/429 — a 23-minute job died on one
+closed socket during a streamed writer call before this. Each Replicate turn
+retries once on a `ReplicateSynthError`; writer calls retry once on
+unparseable JSON with a doubled budget. `POST /v1/podcasts/:id/retry`
+re-queues a *failed* job as a new job with the identical request, so a caller
+that lost its source (Hermes after a long wait) can retry without re-uploading.
