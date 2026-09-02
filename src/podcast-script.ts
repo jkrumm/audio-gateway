@@ -6,16 +6,21 @@ import { withSpan } from "./otel";
 import { recordUsage } from "./usage";
 
 // Podcast script writer: turns a person's research notes into a two-host
-// podcast episode, run as a "writers' room" — outline, segments, multi-angle
-// review, then targeted revision. One outline call decides the shape of the
-// episode (incl. its dramaturgy: a through-line, a cold-open hook, planned
-// reveals and digressions); every segment is then written by its own parallel
-// call against that plan; three reviewer calls (dramaturge, conversation
-// coach, fact & speech editor) critique the whole draft; segments with notes
-// are rewritten once more, in parallel, against just those notes. The review
-// and revision passes are optional (`ScriptWriterOptions.review`, default
-// on) so a cheap/test run can stop after the segment pass.
-// Pure, config-free otherwise: every knob (model, concurrency, language,
+// podcast episode, run as a "writers' room" with a role split and one voice
+// owner. The OUTLINE model plans the story (through-line, cold-open hook,
+// reveals, digressions, segments); the WRITE model is the sole voice owner —
+// it writes every segment AND every revision/tightening pass, so the whole
+// episode reads as one voice; every reviewer role (dramaturge, conversation
+// coach, fact & speech editor) runs on EVERY listed review model, in
+// parallel, advisory notes only — they point, they never draft; segments
+// with notes are rewritten once more, by the write model, against just those
+// notes; a final METADATA model writes the locked episode's title/
+// description/cover prompt/genres/chapter titles once the script is done.
+// The review and metadata passes are optional (`ScriptWriterOptions.review`/
+// `metadata`, default on) so a cheap/test run can stop after the segment
+// pass. A show bible (house style) is injected verbatim into the outline/
+// segment/revision/review prompts when configured.
+// Pure, config-free otherwise: every knob (models, concurrency, language,
 // hosts, ...) is an explicit parameter — the orchestrator wires config in.
 
 export interface PodcastHost {
@@ -64,14 +69,23 @@ export interface PodcastScript {
 }
 
 export interface ScriptWriterOptions {
-  /** OpenAI-dialect chat model id on the IU endpoint — story pass, segment writers, revisions. */
-  model: string;
-  /** The three reviewers; defaults to `model`. A different (or stronger) editor is a legitimate choice. */
-  reviewModel?: string;
+  /**
+   * OpenAI-dialect chat model ids on the IU endpoint, one per role:
+   * `outline` plans the story; `write` is the VOICE OWNER — it writes every
+   * segment AND every revision/tightening pass, so the whole episode reads
+   * as one voice; `review` is the reviewer roster (every role runs on every
+   * listed model, in parallel); `metadata` writes the final title/
+   * description/cover prompt/genres/chapter titles after the script locks.
+   */
+  models: { outline: string; write: string; review: string[]; metadata: string };
   /** Parallel segment writes. */
   concurrency: number;
   /** Run the multi-angle review + revision passes after the segments are written. Default true. */
   review?: boolean;
+  /** Run the final metadata pass after the script is final. Default true. */
+  metadata?: boolean;
+  /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Path to a file; missing → no section, logged once. */
+  showBiblePath?: string;
   onProgress?: (stage: string, done: number, total: number) => void;
 }
 
@@ -122,6 +136,8 @@ export interface Outline {
 export interface ReviewNote {
   segmentIndex: number | null;
   turnIndex: number | null;
+  /** `<role>@<model>` — who said this, so the writer (and the reader of a log) can weigh it. */
+  reviewer: string;
   note: string;
 }
 
@@ -158,6 +174,30 @@ const MERGE_SHORT_TURN_CHARS = 40;
 /** ~4 minutes per segment, clamped to a sane 3..9 range regardless of episode length. */
 export function planSegmentCount(minutes: number): number {
   return Math.min(MAX_SEGMENTS, Math.max(MIN_SEGMENTS, Math.round(minutes / MINUTES_PER_SEGMENT)));
+}
+
+/** One in-flight/loaded read per path — a missing file logs its warning exactly once, not once per prompt. */
+/**
+ * Load the show bible (house style, binding) from disk. Read on every call —
+ * it is a few KB, a job builds a dozen prompts, and not caching keeps this
+ * module free of process-wide state (a test or a mounted volume can change
+ * the file between jobs). A missing file is not fatal — the show bible is
+ * polish, not the episode — so it resolves to an empty string with a warning.
+ * Exported for tests.
+ */
+export async function loadShowBible(path: string): Promise<string> {
+  try {
+    return await Bun.file(path).text();
+  } catch (err) {
+    log.warn("podcast show bible not found, continuing without it", { path, error: err instanceof Error ? err.message : String(err) });
+    return "";
+  }
+}
+
+/** Render the show bible as a binding section appended to a system prompt; omitted entirely when blank. */
+function showBibleSection(showBible: string): string {
+  if (!showBible.trim()) return "";
+  return `\n\nSHOW BIBLE (house style — binding):\n${showBible.trim()}`;
 }
 
 /** Strip ```json fences and leading/trailing prose, returning the first balanced-looking `{...}` slice. */
@@ -261,9 +301,11 @@ export function parseOutline(raw: string): Outline {
 /**
  * Parse a reviewer LLM's reply into its notes + one-line verdict. Same
  * fence/prose tolerance as {@link parseOutline}; a note missing its `note`
- * text is dropped, `segment`/`turn` default to `null` (episode-wide).
+ * text is dropped, `segment`/`turn` default to `null` (episode-wide). Every
+ * note is stamped with `reviewer` (`<role>@<model>`) so the revision pass
+ * (and the logs) can see who said what.
  */
-export function parseReviewNotes(raw: string): { notes: ReviewNote[]; verdict: string } {
+export function parseReviewNotes(raw: string, reviewer: string): { notes: ReviewNote[]; verdict: string } {
   const parsed = JSON.parse(extractJsonObject(raw)) as { notes?: unknown; verdict?: unknown };
   const notesRaw = Array.isArray(parsed.notes) ? parsed.notes : [];
   const notes: ReviewNote[] = [];
@@ -274,6 +316,7 @@ export function parseReviewNotes(raw: string): { notes: ReviewNote[]; verdict: s
     notes.push({
       segmentIndex: typeof obj["segment"] === "number" ? Math.round(obj["segment"]) : null,
       turnIndex: typeof obj["turn"] === "number" ? Math.round(obj["turn"]) : null,
+      reviewer,
       note,
     });
   }
@@ -403,7 +446,7 @@ const countWords = (text: string): number => (text.match(/\S+/g) ?? []).length;
 const LANGUAGE_LABEL: Record<"de" | "en", string> = { de: "German", en: "English" };
 
 /** The shared, non-negotiable rules — identical for the outline and every segment call. */
-function baseSystemPrompt(req: PodcastScriptRequest): string {
+function baseSystemPrompt(req: PodcastScriptRequest, showBible: string): string {
   const [hostA, hostB] = req.hosts;
   const languageLabel = LANGUAGE_LABEL[req.language];
   return `You are the head writer of "${req.series}", a two-host podcast that turns one person's research notes into an episode that sounds like a real, well-produced show — not a read-aloud summary.
@@ -417,12 +460,12 @@ Non-negotiables:
 4. Written for the EAR in ${languageLabel}: numbers, prices, times, units, dates and abbreviations fully spelled out as spoken (German: "dreihundertdreißig Euro", "hundertfünf Stundenkilometer", "elfter September", "zwei Meter fünfzig"); no digits, no symbols, no URLs, no markdown, no emoji, no parentheses. Place names in their local form. Expand every acronym once.
 5. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. ElevenLabs v3 audio tags ONLY from this list: ${V3_PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, placed at the start of a sentence in the middle of the turn — never as the first word of a short line, never translated, never invented. Most turns carry NO tag.
 6. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
-7. Output STRICT JSON only, no commentary, no code fences.`;
+7. Output STRICT JSON only, no commentary, no code fences.${showBibleSection(showBible)}`;
 }
 
-function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number): string {
+function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string): string {
   const languageLabel = LANGUAGE_LABEL[req.language];
-  return `${baseSystemPrompt(req)}
+  return `${baseSystemPrompt(req, showBible)}
 
 You are writing the OUTLINE for this episode — decide its shape AND its dramaturgy, like a writers' room breaking a story before anyone drafts a line.
 - Produce exactly ${segmentCount} segments. The first segment is the cold open plus a short intro to the show and its hosts; the last segment is the wrap-up (three concrete takeaways, the open questions, and a sign-off).
@@ -447,8 +490,9 @@ function segmentPrompt(params: {
   index: number;
   total: number;
   previous?: OutlineSegmentSpec;
+  showBible: string;
 }): string {
-  const { req, outline, segment, index, total, previous } = params;
+  const { req, outline, segment, index, total, previous, showBible } = params;
   const bridgeInstruction = index === 0
     ? "This is the FIRST segment — open with the episode's HOOK (given in the user message) as the cold open, before anything else, then a short natural intro to the show and its two hosts. The hook must not summarize what the episode covers."
     : `The previous segment ended aiming at: "${previous?.goal ?? ""}". Open with a natural bridge from that into this segment — never re-introduce the show.`;
@@ -456,7 +500,7 @@ function segmentPrompt(params: {
     ? "This is the LAST segment — end with three concrete takeaways, the open questions, and a warm sign-off."
     : "End this segment with a hand-off / teaser into the next topic — never a final sign-off.";
 
-  return `${baseSystemPrompt(req)}
+  return `${baseSystemPrompt(req, showBible)}
 
 You are writing ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}".
 Write ONLY this segment: "${segment.title}". Target about ${segment.targetWords} words — a soft budget for the whole segment, not a per-turn quota.
@@ -528,19 +572,21 @@ const REVIEWER_INSTRUCTIONS: Record<ReviewerRole, (languageLabel: string) => str
   dramaturge: () =>
     `You are the DRAMATURGE reviewing a finished two-host podcast draft for its story shape, not its prose. Check: is there a red thread running through the whole episode; does the hook land without spoiling anything; do the planned reveals arrive in the segment they were assigned to (not earlier, not late, not skipped); do the planned digressions actually return to the point; is the pacing varied across the whole episode, not just within one segment; does the ending earn its takeaways rather than announcing them out of nowhere.`,
   "conversation-coach": () =>
-    `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment.`,
+    `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment. Also flag written-language constructs and AI-isms: essay sentences, hedges like "es ist erwähnenswert" or "worth stating plainly", tidy triads, over-explained emotion, a character explaining what they feel instead of just feeling it, filler, and repeated setups.`,
   "fact-editor": (languageLabel) =>
     `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${languageLabel}, never digits or symbols; every sentence is speakable in one breath; ElevenLabs v3 audio tags are only from the allowed list (${V3_PODCAST_TAGS.join(" ")}) and only where they earn their place — flag over-use; no markdown, no emoji, nothing that isn't spoken text.`,
 };
 
-function reviewPrompt(params: { req: PodcastScriptRequest; outline: Outline; role: ReviewerRole }): string {
-  const { req, outline, role } = params;
+function reviewPrompt(params: { req: PodcastScriptRequest; outline: Outline; role: ReviewerRole; showBible: string }): string {
+  const { req, outline, role, showBible } = params;
   const languageLabel = LANGUAGE_LABEL[req.language];
-  return `${REVIEWER_INSTRUCTIONS[role](languageLabel)}
+  return `You are a reviewer from a different model family than the writer; your notes are advisory. You never rewrite lines — you point, you do not draft. Prefer few, specific, high-value notes over many.
+
+${REVIEWER_INSTRUCTIONS[role](languageLabel)}
 
 You are reviewing one finished episode draft of "${outline.title}", written in ${languageLabel}. You get the SOURCE, the full outline (with its dramaturgy), and the full draft script rendered as one line per turn: "[seg i][turn j] Name: text" (both indices 0-based).
 
-Give at most 12 notes. Every note must be specific and actionable — name the segment/turn it is about and say exactly what to change, not just what is wrong. If something is fine, do not write a note about it.
+Give at most 12 notes. Every note must be specific and actionable — name the segment/turn it is about and say exactly what to change, not just what is wrong. If something is fine, do not write a note about it.${showBibleSection(showBible)}
 
 Return STRICT JSON only, no markdown, no commentary:
 {"notes":[{"segment":<0-based segment index>,"turn":<0-based turn index within that segment, or null for a segment-wide or episode-wide note>,"note":"<specific, actionable note>"}],"verdict":"<one line: is this draft ready to publish, and why>"}`;
@@ -580,9 +626,9 @@ function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Ou
 // Revision prompts (per segment, targeted)
 // ---------------------------------------------------------------------------
 
-function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number }): string {
-  const { req, outline, segment, index, total } = params;
-  return `${baseSystemPrompt(req)}
+function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number; showBible: string }): string {
+  const { req, outline, segment, index, total, showBible } = params;
+  return `${baseSystemPrompt(req, showBible)}
 
 You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. The segment's target is ${segment.targetWords} words; a revision never grows the segment, and if a note asks for a cut, the cut is the priority. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
 Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/tension), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
@@ -616,7 +662,7 @@ function buildRevisionUserContent(params: {
   const parts = [
     `SOURCE (verbatim; every fact must come from here):\n${req.source}`,
     `CURRENT TURNS FOR THIS SEGMENT:\n${renderTurns(current.turns)}`,
-    `EDITORIAL NOTES FOR THIS SEGMENT:\n${notes.map((n) => `- ${n.note}`).join("\n")}`,
+    `EDITORIAL NOTES FOR THIS SEGMENT:\n${notes.map((n) => `- [${n.reviewer}] ${n.note}`).join("\n")}`,
     previousDraft ? `END OF PREVIOUS SEGMENT (for the seam — do not repeat it):\n${renderTurns(previousDraft.turns.slice(-3))}` : undefined,
     nextDraft ? `START OF NEXT SEGMENT (for the seam — hand off toward it):\n${renderTurns(nextDraft.turns.slice(0, 2))}` : undefined,
   ].filter((p): p is string => Boolean(p));
@@ -657,6 +703,7 @@ export function lengthNotes(segments: ScriptSegment[], outline: Outline): Review
     notes.push({
       segmentIndex: index,
       turnIndex: null,
+      reviewer: "length-governor",
       note: `This segment runs ${words} words against a target of ${target}. Cut it to about ${target} words: remove restatements, second examples and warm-up lines; keep every key fact, the strongest exchange and the bridge. Do not add anything.`,
     });
   });
@@ -714,12 +761,18 @@ async function callWriterLlm(params: {
   systemPrompt: string;
   userContent: string;
   maxCompletionTokens: number;
-  stage: "outline" | "segment" | "review" | "revise";
-  usageEndpoint: "podcast-outline" | "podcast-segment" | "podcast-review";
+  stage: "outline" | "segment" | "review" | "revise" | "metadata";
+  usageEndpoint: "podcast-outline" | "podcast-segment" | "podcast-review" | "podcast-metadata";
+  /** `<role>@<model>` — set only for review calls, so the span carries who reviewed. */
+  reviewer?: string;
 }): Promise<string> {
   return withSpan(
     "audio.podcast.llm",
-    { "llm.model": params.model, "audio.podcast.stage": params.stage },
+    {
+      "llm.model": params.model,
+      "audio.podcast.stage": params.stage,
+      ...(params.reviewer && { "audio.podcast.reviewer": params.reviewer }),
+    },
     async (span) => {
       const start = Date.now();
       const res = await rawFetch(iuUrl("/chat/completions"), {
@@ -821,29 +874,33 @@ async function callAndParse<T>(stage: string, call: (attempt: number) => Promise
 }
 
 /**
- * Run the three reviewer calls (dramaturge, conversation coach, fact & speech
- * editor) over the whole draft in parallel and flatten their notes. Each
- * reviewer's one-line verdict is logged for visibility even though it isn't
- * otherwise consumed.
+ * Run every reviewer role (dramaturge, conversation coach, fact & speech
+ * editor) on EVERY listed review model, all in parallel — one call per
+ * role×model combo — and flatten their notes, each tagged with its
+ * `reviewer` (`<role>@<model>`). Each reviewer's one-line verdict is logged
+ * for visibility even though it isn't otherwise consumed.
  */
 async function reviewEpisode(params: {
   req: PodcastScriptRequest;
   outline: Outline;
   segments: ScriptSegment[];
-  model: string;
+  reviewModels: string[];
+  showBible: string;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ReviewNote[]> {
-  const { req, outline, segments, model, onProgress } = params;
+  const { req, outline, segments, reviewModels, showBible, onProgress } = params;
+  const combos = REVIEWER_ROLES.flatMap((role) => reviewModels.map((model) => ({ role, model })));
   let done = 0;
-  const perRole = await synthConcurrent(REVIEWER_ROLES.length, REVIEWER_ROLES, async (role) => {
+  const perCombo = await synthConcurrent(combos.length, combos, async ({ role, model }) => {
+    const reviewer = `${role}@${model}`;
     let notes: ReviewNote[] = [];
     try {
       const result = await callAndParse(
-        `review ${role}`,
+        `review ${reviewer}`,
         (attempt) =>
           callWriterLlm({
             model,
-            systemPrompt: reviewPrompt({ req, outline, role }),
+            systemPrompt: reviewPrompt({ req, outline, role, showBible }),
             userContent: buildReviewUserContent({ req, outline, segments }),
             // Reviewers read source + outline + the whole draft and the writer
             // model reasons before it answers; at 6000 all three came back with
@@ -851,22 +908,23 @@ async function reviewEpisode(params: {
             maxCompletionTokens: writerBudget(4000, attempt),
             stage: "review",
             usageEndpoint: "podcast-review",
+            reviewer,
           }),
-        parseReviewNotes,
+        (raw) => parseReviewNotes(raw, reviewer),
       );
       notes = result.notes;
-      log.info("podcast review verdict", { role, verdict: result.verdict, notes: notes.length });
+      log.info("podcast review verdict", { reviewer, verdict: result.verdict, notes: notes.length });
     } catch (err) {
       // A review is polish, not the episode: a reviewer that fails twice is
       // skipped and the draft stands, rather than failing a job whose script
       // and outline already exist.
-      log.warn("podcast reviewer skipped", { role, error: err instanceof Error ? err.message : String(err) });
+      log.warn("podcast reviewer skipped", { reviewer, error: err instanceof Error ? err.message : String(err) });
     }
     done++;
-    onProgress?.("review", done, REVIEWER_ROLES.length);
+    onProgress?.("review", done, combos.length);
     return notes;
   });
-  return perRole.flat();
+  return perCombo.flat();
 }
 
 /**
@@ -881,9 +939,10 @@ async function reviseSegments(params: {
   notes: ReviewNote[];
   model: string;
   concurrency: number;
+  showBible: string;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ScriptSegment[]> {
-  const { req, outline, segments, notes, model, concurrency, onProgress } = params;
+  const { req, outline, segments, notes, model, concurrency, showBible, onProgress } = params;
   const total = segments.length;
   const toRevise = segments.map((_, index) => index).filter((index) => segmentNotesFor(notes, index).length > 0);
   onProgress?.("revise", 0, toRevise.length);
@@ -901,7 +960,7 @@ async function reviseSegments(params: {
         (attempt) =>
           callWriterLlm({
             model,
-            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total }),
+            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total, showBible }),
             userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
             maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
             stage: "revise",
@@ -925,18 +984,115 @@ async function reviseSegments(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Metadata pass (final title/description/cover prompt/genres/chapter titles)
+// ---------------------------------------------------------------------------
+
+/** A chapter title from the metadata pass, replacing the outline's working segment title. */
+interface EpisodeChapter {
+  segmentIndex: number;
+  title: string;
+}
+
+interface EpisodeMetadata {
+  title: string;
+  description: string;
+  coverPrompt: string;
+  genres: string[];
+  chapters: EpisodeChapter[];
+}
+
+function metadataPrompt(req: PodcastScriptRequest): string {
+  const languageLabel = LANGUAGE_LABEL[req.language];
+  return `You are the final METADATA EDITOR for "${req.series}", writing publish-ready metadata for one finished, locked two-host podcast episode. You get the finished script, the story outline's draft title/description/cover prompt, and the listener brief. Your job is to sharpen the drafts into what actually ships — reflecting what the FINISHED episode delivers, not what was planned — and to write one chapter title per segment for the episode's audio chapter markers.
+- title: punchy, accurate to the finished episode, in ${languageLabel}.
+- description: 2 to 4 sentences, show-notes style, in ${languageLabel}, written for someone deciding whether to press play.
+- cover_prompt: a concrete, painterly, text-free square podcast-cover brief in English, for a German travel/knowledge show — the concrete subject and the mood.
+- genres: 1 to 3 short English genre labels.
+- chapters: exactly one entry per segment, in order, each a short chapter title (max 6 words) in ${languageLabel} that reflects what actually happens in that segment.
+You never rewrite the script — you only produce metadata about it.
+
+Return STRICT JSON only, no markdown, no commentary:
+{"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"chapters":[{"segment":<0-based segment index>,"title":"<chapter title, max 6 words>"}]}`;
+}
+
+function buildMetadataUserContent(params: { req: PodcastScriptRequest; outline: Outline; segments: ScriptSegment[] }): string {
+  const { req, outline, segments } = params;
+  const parts = [
+    req.brief ? `BRIEF (who the listener is / what they want from this episode): ${req.brief}` : undefined,
+    `OUTLINE DRAFTS (for reference only — the finished episode may have moved beyond these):\nTitle: ${outline.title}\nDescription: ${outline.description}\nCover prompt: ${outline.coverPrompt}`,
+    `FINISHED SCRIPT (final, as spoken):\n${renderDraftForReview(segments, req.hosts)}`,
+  ].filter((p): p is string => Boolean(p));
+  return parts.join("\n\n");
+}
+
+/**
+ * Parse the metadata LLM's reply. Same fence/prose tolerance as
+ * {@link parseOutline}; a chapter missing its title or segment index is
+ * dropped, `segment` is clamped onto a real segment.
+ */
+export function parseEpisodeMetadata(raw: string, segmentCount: number): EpisodeMetadata {
+  const parsed = JSON.parse(extractJsonObject(raw)) as {
+    title?: unknown;
+    description?: unknown;
+    cover_prompt?: unknown;
+    genres?: unknown;
+    chapters?: unknown;
+  };
+  const chaptersRaw = Array.isArray(parsed.chapters) ? parsed.chapters : [];
+  const chapters: EpisodeChapter[] = [];
+  for (const item of chaptersRaw) {
+    const obj = (item ?? {}) as Record<string, unknown>;
+    const title = typeof obj["title"] === "string" ? obj["title"].trim() : "";
+    if (!title || typeof obj["segment"] !== "number") continue;
+    chapters.push({ segmentIndex: clampSegmentIndex(obj["segment"], segmentCount), title });
+  }
+  return {
+    title: typeof parsed.title === "string" ? parsed.title.trim() : "",
+    description: typeof parsed.description === "string" ? parsed.description.trim() : "",
+    coverPrompt: typeof parsed.cover_prompt === "string" ? parsed.cover_prompt.trim() : "",
+    genres: Array.isArray(parsed.genres) ? parsed.genres.filter((g): g is string => typeof g === "string") : [],
+    chapters,
+  };
+}
+
+/**
+ * Write the episode's final title/description/cover prompt/genres/chapter
+ * titles from the LOCKED script. Metadata is polish, not the episode: on
+ * failure (after the usual retry) the caller falls back to the outline's
+ * drafts and logs a warning rather than failing the job.
+ */
+async function writeEpisodeMetadata(params: { req: PodcastScriptRequest; outline: Outline; segments: ScriptSegment[]; model: string }): Promise<EpisodeMetadata> {
+  const { req, outline, segments, model } = params;
+  return callAndParse(
+    "metadata",
+    (attempt) =>
+      callWriterLlm({
+        model,
+        systemPrompt: metadataPrompt(req),
+        userContent: buildMetadataUserContent({ req, outline, segments }),
+        maxCompletionTokens: writerBudget(4000, attempt),
+        stage: "metadata",
+        usageEndpoint: "podcast-metadata",
+      }),
+    (raw) => parseEpisodeMetadata(raw, segments.length),
+  );
+}
+
 export async function writePodcastScript(req: PodcastScriptRequest, opts: ScriptWriterOptions): Promise<PodcastScript> {
   const segmentCount = planSegmentCount(req.minutes);
   const targetWords = Math.round(req.minutes * WORDS_PER_MINUTE);
   const review = opts.review ?? true;
+  const metadataEnabled = opts.metadata ?? true;
+  const showBible = opts.showBiblePath ? await loadShowBible(opts.showBiblePath) : "";
 
   opts.onProgress?.("outline", 0, 1);
   const outline = await callAndParse(
     "outline",
     (attempt) =>
       callWriterLlm({
-        model: opts.model,
-        systemPrompt: outlinePrompt(req, segmentCount, targetWords),
+        model: opts.models.outline,
+        systemPrompt: outlinePrompt(req, segmentCount, targetWords, showBible),
         userContent: buildOutlineUserContent(req),
         // The outline for a 20-minute episode over a 20k-char source is several
         // thousand tokens of verbatim key_facts, and the writer model's reasoning
@@ -957,8 +1113,8 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
       `segment ${index + 1}`,
       (attempt) =>
         callWriterLlm({
-          model: opts.model,
-          systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1] }),
+          model: opts.models.write,
+          systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1], showBible }),
           userContent: buildSegmentUserContent({ req, outline, index }),
           // Generous headroom (not just words*4): claude-sonnet-5 was observed truncating a
           // segment reply mid-array under the tighter budget (words*4 + 1500), producing an
@@ -977,29 +1133,60 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
 
   let finalSegments = segments;
   const reviewNotes = review
-    ? await reviewEpisode({ req, outline, segments, model: opts.reviewModel ?? opts.model, onProgress: opts.onProgress })
+    ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, showBible, onProgress: opts.onProgress })
     : [];
   const notes = [...reviewNotes, ...lengthNotes(segments, outline)];
   if (notes.length > 0) {
-    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.model, concurrency: opts.concurrency, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, onProgress: opts.onProgress });
   }
   // A revision that was asked to cut and still didn't: one more pass on those
   // segments only, with nothing but the cut on the table.
   const stillLong = lengthNotes(finalSegments, outline);
   if (stillLong.length > 0) {
     log.warn("podcast segments still over length after revision, tightening", { segments: stillLong.map((n) => n.segmentIndex) });
-    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.model, concurrency: opts.concurrency, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.models.write, concurrency: opts.concurrency, showBible, onProgress: opts.onProgress });
   }
 
   const wordCount = finalSegments.reduce((sum, seg) => sum + seg.turns.reduce((s, t) => s + countWords(t.text), 0), 0);
 
+  let title = outline.title || req.title || req.series;
+  let description = outline.description;
+  let coverPrompt = outline.coverPrompt;
+  let genres = outline.genres;
+  let publishedSegments = finalSegments;
+
+  if (metadataEnabled) {
+    opts.onProgress?.("metadata", 0, 1);
+    try {
+      const metadata = await writeEpisodeMetadata({ req, outline, segments: finalSegments, model: opts.models.metadata });
+      // Field by field: a structurally valid reply with a blank field must
+      // not blank the episode — the outline's draft stands for that field.
+      title = metadata.title || title;
+      description = metadata.description || description;
+      coverPrompt = metadata.coverPrompt || coverPrompt;
+      genres = metadata.genres.length > 0 ? metadata.genres : genres;
+      if (metadata.chapters.length > 0) {
+        const chapterTitleByIndex = new Map(metadata.chapters.map((c) => [c.segmentIndex, c.title]));
+        publishedSegments = finalSegments.map((seg, index) => {
+          const chapterTitle = chapterTitleByIndex.get(index);
+          return chapterTitle ? { ...seg, title: chapterTitle } : seg;
+        });
+      }
+    } catch (err) {
+      // Metadata is polish, not the episode: fall back to the outline's own
+      // drafts (still shipped in `outline`) rather than failing the job.
+      log.warn("podcast metadata pass failed, falling back to outline values", { error: err instanceof Error ? err.message : String(err) });
+    }
+    opts.onProgress?.("metadata", 1, 1);
+  }
+
   return {
-    title: outline.title || req.title || req.series,
-    description: outline.description,
-    coverPrompt: outline.coverPrompt,
-    genres: outline.genres,
+    title,
+    description,
+    coverPrompt,
+    genres,
     language: req.language,
-    segments: finalSegments,
+    segments: publishedSegments,
     wordCount,
   };
 }

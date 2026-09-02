@@ -31,11 +31,13 @@ words or more. Turn length and rhythm are NOT quota-driven — see "Writers' roo
 A two-pass writer (outline → parallel segments) reliably produces on-topic dialogue, but it reads like
 a report given quotas, not a conversation with a shape — the rhythm rules used to be numeric ("half of
 all turns 40–120 words", "Host A carries 60%"), which produces mechanically-varied but still
-structureless text. The writer is now a small "writers' room": the outline plans the story, not just
-the facts; segments are written with qualitative rather than numeric direction; and two further passes
-critique and repair the whole draft before it goes to synthesis. All of this is optional
-(`ScriptWriterOptions.review`, default `true`) — set it to `false` to fall back to the original
-outline-then-segments behavior (used by the test suite for cheap runs).
+structureless text. The writer is now a small "writers' room" with a **role split and one voice owner**
+(see [Writer roles](#writer-roles-2026-09-02)): the outline plans the story, not just the facts;
+segments — and every revision — are written by ONE model with qualitative rather than numeric
+direction; a roster of other models critiques the whole draft; and a final model polishes the
+locked script's metadata. Review is optional (`ScriptWriterOptions.review`, default `true`) — set it
+to `false` to fall back to outline-then-segments (used by the test suite for cheap runs); metadata is
+separately optional (`ScriptWriterOptions.metadata`, default `true`).
 
 **1. Story pass (outline).** Beyond title/description/genres/motif, the outline now plans dramaturgy:
 a `through_line` (the one question the episode is really answering, revealed progressively — the
@@ -55,27 +57,42 @@ pathological output. Each segment call is fed just its own assigned reveals/digr
 through-line, and an explicit list of reveals assigned to a LATER segment ("do not mention X yet — it
 lands in segment N") so segments don't spoil each other despite being written in parallel.
 
-**3. Review pass (multi-angle, parallel).** Three reviewer calls run over the whole draft at once, each
-a distinct angle: the **dramaturge** (red thread, hook without spoilers, reveals landing on schedule,
-digressions that return, pacing across the whole episode, an ending that earns its takeaways), the
-**conversation coach** (does it sound like two people talking — real floor time, substantive reactions,
-no mechanical alternation, distinct voices, humor that lands), and the **fact & speech editor** (every
-fact traceable to the source, nothing from `key_facts` missing, numbers spelled out as spoken, one
-breath per sentence, audio tags only from the allow-list and not overused). Each reviewer returns at
-most ~12 specific, actionable notes plus a one-line verdict; a note targets a segment/turn index or the
-whole episode (`segment: null`).
+**3. Review pass (every role × every review model, parallel).** Three reviewer ROLES run over the
+whole draft, each a distinct angle: the **dramaturge** (red thread, hook without spoilers, reveals
+landing on schedule, digressions that return, pacing across the whole episode, an ending that earns
+its takeaways), the **conversation coach** (does it sound like two people talking — real floor time,
+substantive reactions, no mechanical alternation, distinct voices, humor that lands, and — since
+this is the angle most sensitive to it — written-language constructs and AI-isms: essay sentences,
+hedge phrases, tidy triads, over-explained emotion, filler, repeated setups), and the **fact & speech
+editor** (every fact traceable to the source, nothing from `key_facts` missing, numbers spelled out
+as spoken, one breath per sentence, audio tags only from the allow-list and not overused). EVERY role
+runs on EVERY model in `PODCAST_REVIEW_MODELS` (default 2 models → 6 calls, all in parallel) — each
+reviewer prompt states explicitly that it is advisory and from a different model family than the
+writer, and that it points rather than drafts. Each call returns at most ~12 specific, actionable
+notes plus a one-line verdict; a note targets a segment/turn index or the whole episode
+(`segment: null`) and is tagged `reviewer: "<role>@<model>"` so the revision pass (and the logs) can
+see who said what.
 
-**4. Revision pass.** Only segments that received at least one note of their own are rewritten — an
-episode-wide note alone does not trigger a rewrite, but once a segment IS being revised it also sees
-every episode-wide note as extra context. Each revision call gets the segment's current turns, its
-notes, and a few turns from each neighboring segment for the seams, and returns the segment's full
-turns again (not a diff). Segments with no notes are left untouched and cost no extra call.
-`sanitizeTurns` runs a second time after revision.
+**4. Revision pass (voice owner only).** Only segments that received at least one note of their own
+are rewritten — an episode-wide note alone does not trigger a rewrite, but once a segment IS being
+revised it also sees every episode-wide note as extra context. Every revision call runs on
+`PODCAST_WRITE_MODEL`, the same model that wrote the segment, never a reviewer model. Each revision
+call gets the segment's current turns, its notes (each still tagged with its reviewer), and a few
+turns from each neighboring segment for the seams, and returns the segment's full turns again (not a
+diff). Segments with no notes are left untouched and cost no extra call. `sanitizeTurns` runs a
+second time after revision.
 
-**Cost/time trade.** The review + revision passes roughly double the writer-model token spend (three
-whole-draft reviewer calls plus one revision call per segment that needed one) — still small in
-absolute terms since the writer model is cheap and TTS synthesis dominates cost — and add roughly
-1–2 minutes of wall-clock time to a job, mostly the three parallel reviewer calls plus whichever
+**5. Metadata pass (once, on the locked script).** After the script is final, `PODCAST_METADATA_MODEL`
+gets the finished script plus the outline's draft title/description/cover prompt/genres and the
+brief, and returns the shipped title, a show-notes description, an English cover-art prompt, 1–3
+genre labels, and one chapter title per segment (replacing the outline's working segment titles —
+these become the MP3's CHAP markers). Metadata is polish: a failure (after the usual retry) falls back
+to the outline's own drafts, logs a warning, and the job still succeeds.
+
+**Cost/time trade.** The review + revision + metadata passes roughly double the writer-model token
+spend (six whole-draft reviewer calls, one revision call per segment that needed one, one metadata
+call) — still small in absolute terms since the writer models are cheap and TTS synthesis dominates
+cost — and add roughly 1–2 minutes of wall-clock time to a job, mostly the parallel reviewer calls plus whichever
 revisions run (also parallel, bounded by the writer's `concurrency`).
 
 ## Per-turn synthesis (`src/podcast-synth.ts`)
@@ -138,8 +155,10 @@ left in place but orphaned; re-submit the source to generate a fresh episode. Gr
 
 ## Cost expectations
 
-A ~20-minute episode is roughly: one outline call + 5–9 segment calls on `PODCAST_SCRIPT_MODEL`
-(cheap — a few cents), ~60–120 ElevenLabs v3 turn syntheses (the dominant cost — v3 has no published
+A ~20-minute episode is roughly: one outline call (`PODCAST_OUTLINE_MODEL`) + 5–9 segment calls on
+`PODCAST_WRITE_MODEL` + up to 6 reviewer calls + one metadata call (see
+[Writer roles](#writer-roles-2026-09-02)) — cheap, a few dollars at most — plus ~60–120 ElevenLabs v3
+turn syntheses (the dominant cost — v3 has no published
 per-character rate, so this reports `cost_source: none` in the usage row even though it's the real
 spend), and one optional image-gen cover call. Expect low-single-digit USD per episode depending on
 length and host chattiness; review actual spend per job via the `cost_usd` field on
@@ -151,7 +170,11 @@ row.
 
 | Env var | Default | Effect |
 |-|-|-|
-| `PODCAST_SCRIPT_MODEL` | `claude-sonnet-5` | Outline + segment writer model (IU chat endpoint). |
+| `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
+| `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | The voice owner — segment writers and every revision/tightening pass. |
+| `PODCAST_REVIEW_MODELS` | `gemini-3.1-pro-preview,gpt-5.6-luna` | Comma list; every reviewer role runs on every listed model. |
+| `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | Final title/description/cover-prompt/genres/chapter-titles pass. |
+| `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
 | `PODCAST_TTS_MODEL` | `elevenlabs/v3` | Replicate model for per-turn synthesis. |
 | `PODCAST_VOICES` | `Mark,Sarah` | The two hosts' ElevenLabs voices, in host order. |
 | `PODCAST_HOST_NAMES` | `Jonas,Lena` | The two hosts' display names, same order. |
@@ -212,17 +235,34 @@ deploy: the VPS compose gives the old container a long `stop_grace_period`
 and `SHUTDOWN_DRAIN_MS` covers a full job, so RollHook's replacement container
 takes new traffic while the old one finishes.
 
-## Model choice (2026-09-02)
+## Writer roles (2026-09-02)
 
-Writer and reviewers: `claude-opus-4-6` (`PODCAST_SCRIPT_MODEL` /
-`PODCAST_REVIEW_MODEL`). Rationale and evidence in modelpick
-`docs/decisions/podcast-writer.md`: Opus 5 leads the creative-writing
-leaderboards but writers consistently report it as over-written (metaphor,
-explained emotion, longer by default — Anthropic's own prompting guide says
-so), and name Opus 4.6 for organic voice and dialogue; Sonnet 5 is outside
-both boards' top ten; Fable 5.1 ($50/M output) buys nothing the reviewer seat
-needs. Expect roughly $3–4 of writer + reviewer tokens per 22-minute episode
-on top of ~$2 of ElevenLabs characters.
+The single-model writers' room is now a role split with one voice owner —
+one model plans, one model writes, several models critique, one model
+polishes the metadata:
+
+| Role | Env var | Default | Why |
+|-|-|-|-|
+| Outline | `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering, which the outline pays for and nothing downstream needs to match. |
+| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue — practitioners (and Anthropic's own prompting guide) name this version for organic voice and dialogue, where Opus 5 runs longer and more metaphor-heavy by default. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. |
+| Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.1-pro-preview,gpt-5.6-luna` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. |
+| Metadata | `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. |
+
+**The voice-owner rule**: exactly one model (`PODCAST_WRITE_MODEL`) ever
+produces dialogue. Splitting the writer across models mid-episode would
+produce an audible seam every time a segment or revision landed on a
+different voice; a single writer model, revised by that SAME model against
+reviewer notes, is what keeps 20+ minutes of two hosts sounding like one
+show. Reviewers and the metadata pass read the script but never write it.
+
+A **show bible** (`PODCAST_SHOW_BIBLE`, default `./docs/show-bible.md`) is
+loaded once (lazily, cached, missing file → empty + one warning log) and
+injected verbatim into the outline/segment/revision/review prompts under a
+"SHOW BIBLE (house style — binding)" heading, so house style survives across
+every model in the roster rather than living only in one model's prompt.
+
+Expect roughly $3–4 of writer + reviewer + metadata tokens per 22-minute
+episode on top of ~$2 of ElevenLabs characters.
 
 ## Length governor (2026-09-02)
 

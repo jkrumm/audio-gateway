@@ -3,6 +3,9 @@
  * network, no creds. See replicate-tts.test.ts for the shared env baseline.
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // See audio.test.ts — config.ts is a process-wide singleton across bun test's
 // shared module registry; every config-touching file sets this SAME baseline.
@@ -23,6 +26,7 @@ const {
   parseSegmentTurns,
   sanitizeTurns,
   writePodcastScript,
+  loadShowBible,
   V3_PODCAST_TAGS,
 } = await import("./podcast-script");
 
@@ -270,6 +274,22 @@ function segmentResponse(index: number): Response {
   );
 }
 
+function metadataResponse(): Response {
+  return chatCompletion(
+    JSON.stringify({
+      title: "Der finale Titel",
+      description: "Die finale Beschreibung fürs Publikum.",
+      cover_prompt: "A painterly camper van on a coastal road at dusk",
+      genres: ["Travel", "Planning"],
+      chapters: [
+        { segment: 0, title: "Der Aufbruch" },
+        { segment: 1, title: "Die Route" },
+        { segment: 2, title: "Der Abschluss" },
+      ],
+    }),
+  );
+}
+
 const BASE_REQUEST = {
   source: "Der Van kostet dreihundert Euro pro Nacht.",
   brief: "Für einen Freund, der einen Roadtrip plant.",
@@ -279,8 +299,15 @@ const BASE_REQUEST = {
   series: "Roadtrip Radio",
 };
 
+const MODELS = {
+  outline: "outline-model",
+  write: "write-model",
+  review: ["review-model-1", "review-model-2"],
+  metadata: "metadata-model",
+};
+
 describe("writePodcastScript", () => {
-  test("review: false writes an outline then every segment in parallel, preserving order and summing wordCount, with no review/revision calls", async () => {
+  test("review: false, metadata: false writes an outline then every segment in parallel, preserving order and summing wordCount, with no review/revision/metadata calls", async () => {
     const calls: string[] = [];
     setFetch(async (_url, init) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
@@ -296,7 +323,7 @@ describe("writePodcastScript", () => {
       return segmentResponse(index);
     });
 
-    const script = await writePodcastScript(BASE_REQUEST, { model: "claude-sonnet-5", concurrency: 2, review: false });
+    const script = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: false, metadata: false });
 
     expect(script.title).toBe("Der Roadtrip-Plan");
     expect(script.language).toBe("de");
@@ -317,34 +344,39 @@ describe("writePodcastScript", () => {
     expect(calls).toEqual(["outline", "segment", "segment", "segment"]);
   });
 
-  test("review: true runs outline, segments, three parallel reviews, then revises only the segments with notes", async () => {
-    const calls: string[] = [];
-    let reviseCalls = 0;
+  test("review: true, metadata: true runs the full role split — outline on the outline model, segments and revisions on the write model, every reviewer role on every review model in parallel, then metadata", async () => {
+    const calls: Array<{ stage: string; model: string }> = [];
 
     setFetch(async (_url, init) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const body = JSON.parse(String(init?.body ?? "{}")) as { model: string; messages: Array<{ content: string }> };
       const systemPrompt = body.messages[0]?.content ?? "";
+      const model = body.model;
 
       if (systemPrompt.includes("You are writing the OUTLINE")) {
-        calls.push("outline");
+        calls.push({ stage: "outline", model });
         return outlineResponse();
       }
 
-      if (systemPrompt.startsWith("You are the DRAMATURGE")) {
-        calls.push("review-dramaturge");
-        return chatCompletion(
-          JSON.stringify({
-            notes: [{ segment: 0, turn: 0, note: "Open with the hook, not a summary." }],
-            verdict: "Needs one fix in the cold open.",
-          }),
-        );
+      if (systemPrompt.includes("You are the final METADATA EDITOR")) {
+        calls.push({ stage: "metadata", model });
+        return metadataResponse();
       }
-      if (systemPrompt.startsWith("You are the CONVERSATION COACH")) {
-        calls.push("review-coach");
-        return chatCompletion(JSON.stringify({ notes: [], verdict: "Sounds natural." }));
-      }
-      if (systemPrompt.startsWith("You are the FACT & SPEECH EDITOR")) {
-        calls.push("review-fact-editor");
+
+      if (systemPrompt.includes("You are a reviewer from a different model family")) {
+        if (systemPrompt.includes("You are the DRAMATURGE")) {
+          calls.push({ stage: "review-dramaturge", model });
+          return chatCompletion(
+            JSON.stringify({
+              notes: [{ segment: 0, turn: 0, note: "Open with the hook, not a summary." }],
+              verdict: "Needs one fix in the cold open.",
+            }),
+          );
+        }
+        if (systemPrompt.includes("You are the CONVERSATION COACH")) {
+          calls.push({ stage: "review-coach", model });
+          return chatCompletion(JSON.stringify({ notes: [], verdict: "Sounds natural." }));
+        }
+        calls.push({ stage: "review-fact-editor", model });
         return chatCompletion(
           JSON.stringify({
             notes: [{ segment: null, turn: null, note: "Spell out all currency amounts." }],
@@ -354,8 +386,7 @@ describe("writePodcastScript", () => {
       }
 
       if (systemPrompt.includes("You are REVISING ONE SEGMENT")) {
-        calls.push("revise");
-        reviseCalls++;
+        calls.push({ stage: "revise", model });
         const match = /"([^"]+)" — based on editorial notes/.exec(systemPrompt);
         return chatCompletion(
           JSON.stringify({
@@ -369,33 +400,136 @@ describe("writePodcastScript", () => {
 
       const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
       if (!match) throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 100)}`);
-      calls.push("segment");
+      calls.push({ stage: "segment", model });
       const index = Number(match[1]) - 1;
       return segmentResponse(index);
     });
 
-    const script = await writePodcastScript(BASE_REQUEST, { model: "claude-sonnet-5", concurrency: 2, review: true });
+    const script = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: true });
 
-    // outline, 3 segments, 3 reviews, 1 revision (only segment 0 had a targeted note).
-    expect(calls.filter((c) => c === "outline")).toHaveLength(1);
-    expect(calls.filter((c) => c === "segment")).toHaveLength(3);
-    expect(calls.filter((c) => c.startsWith("review-"))).toHaveLength(3);
-    expect(calls.filter((c) => c === "revise")).toHaveLength(1);
-    expect(reviseCalls).toBe(1);
+    // Exact call sequence: 1 outline, 3 segments, 3 roles x 2 review models = 6 reviews,
+    // 1 revision (only segment 0 had a targeted note), 1 metadata — each on the right model.
+    expect(calls.filter((c) => c.stage === "outline")).toEqual([{ stage: "outline", model: MODELS.outline }]);
+    const segmentCalls = calls.filter((c) => c.stage === "segment");
+    expect(segmentCalls).toHaveLength(3);
+    expect(segmentCalls.every((c) => c.model === MODELS.write)).toBe(true);
+    const reviewCalls = calls.filter((c) => c.stage.startsWith("review-"));
+    expect(reviewCalls).toHaveLength(6);
+    expect(reviewCalls.filter((c) => c.stage === "review-dramaturge")).toHaveLength(2);
+    expect(reviewCalls.filter((c) => c.stage === "review-coach")).toHaveLength(2);
+    expect(reviewCalls.filter((c) => c.stage === "review-fact-editor")).toHaveLength(2);
+    expect(reviewCalls.filter((c) => c.model === MODELS.review[0])).toHaveLength(3);
+    expect(reviewCalls.filter((c) => c.model === MODELS.review[1])).toHaveLength(3);
+    const reviseCalls = calls.filter((c) => c.stage === "revise");
+    expect(reviseCalls).toHaveLength(1);
+    expect(reviseCalls[0]?.model).toBe(MODELS.write);
+    expect(calls.filter((c) => c.stage === "metadata")).toEqual([{ stage: "metadata", model: MODELS.metadata }]);
 
-    // Revision happened strictly after all reviews, which happened after all segments.
-    const lastSegmentIdx = calls.lastIndexOf("segment");
-    const firstReviewIdx = calls.findIndex((c) => c.startsWith("review-"));
-    const reviseIdx = calls.indexOf("revise");
+    // Ordering across phases: reviews strictly after all segments, revision strictly after
+    // all reviews, metadata strictly after the revision.
+    const stages = calls.map((c) => c.stage);
+    const lastSegmentIdx = stages.lastIndexOf("segment");
+    const firstReviewIdx = stages.findIndex((s) => s.startsWith("review-"));
+    const reviseIdx = stages.indexOf("revise");
+    const metadataIdx = stages.indexOf("metadata");
     expect(firstReviewIdx).toBeGreaterThan(lastSegmentIdx);
-    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-dramaturge"));
-    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-coach"));
-    expect(reviseIdx).toBeGreaterThan(calls.lastIndexOf("review-fact-editor"));
+    expect(reviseIdx).toBeGreaterThan(stages.lastIndexOf("review-dramaturge"));
+    expect(reviseIdx).toBeGreaterThan(stages.lastIndexOf("review-coach"));
+    expect(reviseIdx).toBeGreaterThan(stages.lastIndexOf("review-fact-editor"));
+    expect(metadataIdx).toBeGreaterThan(reviseIdx);
 
     // Segment 0 carries the revised turns; segments 1 and 2 are untouched.
     expect(script.segments[0]?.turns[0]?.text).toContain("Revised Cold open");
     expect(script.segments[1]?.turns[0]?.text).toBe("Segment 1 Zeile eins von Lena.");
     expect(script.segments[2]?.turns[0]?.text).toBe("Segment 2 Zeile eins von Lena.");
+
+    // The metadata pass's chapter titles land on the segments; title/description/coverPrompt
+    // come from metadata, not from the outline drafts.
+    expect(script.title).toBe("Der finale Titel");
+    expect(script.description).toBe("Die finale Beschreibung fürs Publikum.");
+    expect(script.coverPrompt).toBe("A painterly camper van on a coastal road at dusk");
+    expect(script.genres).toEqual(["Travel", "Planning"]);
+    expect(script.segments.map((s) => s.title)).toEqual(["Der Aufbruch", "Die Route", "Der Abschluss"]);
+  });
+
+  test("metadata failure falls back to the outline's title/description/coverPrompt/genres and segment titles, job still succeeds", async () => {
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      if (systemPrompt.includes("You are the final METADATA EDITOR")) return chatCompletion("not JSON at all");
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      if (!match) throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 100)}`);
+      const index = Number(match[1]) - 1;
+      return segmentResponse(index);
+    });
+
+    const script = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: false });
+
+    expect(script.title).toBe("Der Roadtrip-Plan");
+    expect(script.description).toBe("Eine kurze Beschreibung.");
+    expect(script.coverPrompt).toBe("A camper van on a coastal road at golden hour");
+    expect(script.genres).toEqual(["Travel"]);
+    expect(script.segments.map((s) => s.title)).toEqual(["Cold open", "Middle", "Wrap-up"]);
+  });
+
+  test("show bible is loaded and injected verbatim into the outline system prompt", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-show-bible-test-"));
+    const showBiblePath = join(tmpRoot, "show-bible.md");
+    writeFileSync(showBiblePath, "# House Style\n\nHosts never say 'als KI'.");
+
+    let outlineSystemPrompt = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineSystemPrompt = systemPrompt;
+        return outlineResponse();
+      }
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: false, metadata: false, showBiblePath });
+
+    expect(outlineSystemPrompt).toContain("SHOW BIBLE (house style — binding)");
+    expect(outlineSystemPrompt).toContain("Hosts never say 'als KI'.");
+  });
+
+  test("a missing show bible file does not fail the outline prompt", async () => {
+    let outlineSystemPrompt = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineSystemPrompt = systemPrompt;
+        return outlineResponse();
+      }
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(BASE_REQUEST, {
+      models: MODELS,
+      concurrency: 2,
+      review: false,
+      metadata: false,
+      showBiblePath: join(tmpdir(), "audio-gateway-show-bible-test-does-not-exist", "show-bible.md"),
+    });
+
+    expect(outlineSystemPrompt).not.toContain("SHOW BIBLE");
+  });
+});
+
+describe("loadShowBible", () => {
+  test("reads a file's contents", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-load-show-bible-test-"));
+    const path = join(tmpRoot, "show-bible.md");
+    writeFileSync(path, "House style rules.");
+    expect(await loadShowBible(path)).toBe("House style rules.");
+  });
+
+  test("resolves to an empty string when the file is missing", async () => {
+    const path = join(tmpdir(), "audio-gateway-load-show-bible-test-missing", "show-bible.md");
+    expect(await loadShowBible(path)).toBe("");
   });
 });
 
@@ -455,5 +589,15 @@ describe("length governor", () => {
     );
     expect(notes.map((n) => n.segmentIndex)).toEqual([1]);
     expect(notes[0]?.note).toContain("150 words against a target of 100");
+  });
+});
+
+describe("metadata pass — partial reply", () => {
+  test("a blank field keeps the outline's draft for that field", async () => {
+    const { parseEpisodeMetadata } = await import("./podcast-script");
+    const parsed = parseEpisodeMetadata('{"description":"Neu.","chapters":[{"segment":0,"title":"Kalt"}]}', 2);
+    expect(parsed.title).toBe("");
+    expect(parsed.description).toBe("Neu.");
+    expect(parsed.chapters).toEqual([{ segmentIndex: 0, title: "Kalt" }]);
   });
 });

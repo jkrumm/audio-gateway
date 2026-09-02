@@ -62,7 +62,7 @@ usage sink.
 ## Podcasts
 
 Long-form pipeline: notes in, a two-host episode out. `POST /v1/podcasts` kicks off a background job
-— outline → per-segment dialogue (`PODCAST_SCRIPT_MODEL`) → per-turn ElevenLabs synthesis
+— story pass (`PODCAST_OUTLINE_MODEL`) → per-segment dialogue by the voice owner (`PODCAST_WRITE_MODEL`) → reviews (`PODCAST_REVIEW_MODELS`) → revisions → metadata (`PODCAST_METADATA_MODEL`) → per-turn ElevenLabs synthesis
 (`PODCAST_TTS_MODEL`, one voice per host) → gapped concat → loudness-normalised, chaptered MP3 →
 optional cover art (image-gen gateway) → optional Audiobookshelf publish. Only one job's pipeline
 runs at a time (bounds Replicate fan-out/memory); design + cost expectations + every knob are in

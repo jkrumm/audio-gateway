@@ -64,6 +64,19 @@ const pairOf2 = (name: string, fallback: string): [string, string] => {
 };
 
 /**
+ * Parse a comma-separated env var into a non-empty list of trimmed entries —
+ * used for the podcast review roster, where every listed model runs every
+ * reviewer role. Fails fast at boot on an empty result.
+ */
+const csvList = (name: string, fallback: string): string[] => {
+  const raw = process.env[name] ?? fallback;
+  const parts = raw.split(",").map((s) => s.trim()).filter(Boolean);
+  // A blank list falls back rather than failing boot: the podcast pipeline is
+  // opt-in, and a stray comma in this var must not take STT/TTS down with it.
+  return parts.length > 0 ? parts : fallback.split(",").map((s) => s.trim()).filter(Boolean);
+};
+
+/**
  * Map `NODE_ENV` to the OTel `deployment.environment` resource attribute —
  * `production` only for an exact `NODE_ENV=production`, `development`
  * otherwise (unset, `dev`, `test`, anything else). Exported (pure, no env
@@ -279,23 +292,30 @@ export const config = {
   // Long-form podcast pipeline (script → per-turn TTS → mux → publish)
   // ---------------------------------------------------------------------------
 
-  /** OpenAI-dialect chat model (IU endpoint) that writes the podcast outline + dialogue. */
   /**
-   * Writer for the story pass, segments and revisions. An episode is not
-   * latency-bound and the script is the product, so the pick follows what
-   * writers report, not leaderboard Elo: Opus 5 tops EQ-Bench but practitioners
-   * (and Anthropic's own prompting guide) describe it as longer, metaphor-heavy
-   * and over-explaining; Opus 4.6 is the version writers name for organic voice
-   * and dialogue. See modelpick docs/decisions/podcast-writer.md. `-eu` variant
-   * exists on the endpoint if residency matters.
+   * Story pass only (through-line, hook, reveals, digressions, segments) —
+   * reasons long before answering, which is what the outline pays for. See
+   * modelpick docs/decisions/podcast-writer.md.
    */
-  podcastScriptModel: process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-4-6",
+  podcastOutlineModel: process.env["PODCAST_OUTLINE_MODEL"] ?? "claude-opus-5",
   /**
-   * The three reviewers (notes, not prose). Same model by default; Fable 5.1
-   * was tried and dropped — $50/M output plus hidden reasoning for a job where
-   * the practitioner evidence favours Claude's line-level judgement anyway.
+   * The VOICE OWNER: segment writers and every revision/tightening pass. No
+   * other model ever writes or rewrites dialogue — practitioners (and
+   * Anthropic's own prompting guide) name this version for organic voice and
+   * dialogue, where Opus 5 runs longer and more metaphor-heavy by default.
    */
-  podcastReviewModel: process.env["PODCAST_REVIEW_MODEL"] ?? process.env["PODCAST_SCRIPT_MODEL"] ?? "claude-opus-4-6",
+  podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "claude-opus-4-6",
+  /**
+   * Every reviewer role (dramaturge, conversation coach, fact & speech
+   * editor) runs on EVERY listed model, all in parallel — cross-model notes
+   * catch what a single model's blind spots miss, and reviewers only point,
+   * they never draft.
+   */
+  podcastReviewModels: csvList("PODCAST_REVIEW_MODELS", "gemini-3.1-pro-preview,gpt-5.6-luna"),
+  /** Final metadata pass (title/description/cover prompt/genres/chapter titles) after the script is locked. */
+  podcastMetadataModel: process.env["PODCAST_METADATA_MODEL"] ?? "gpt-5.6-luna",
+  /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Missing file → empty (logged once). */
+  podcastShowBible: process.env["PODCAST_SHOW_BIBLE"] ?? "./docs/show-bible.md",
   /** Replicate model id used to synthesize each podcast turn. */
   podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
   /** The two ElevenLabs voices, one per host, in host order. */

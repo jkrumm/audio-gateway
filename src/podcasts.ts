@@ -477,9 +477,14 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       series: request.series,
     },
     {
-      model: config.podcastScriptModel,
-      reviewModel: config.podcastReviewModel,
+      models: {
+        outline: config.podcastOutlineModel,
+        write: config.podcastWriteModel,
+        review: config.podcastReviewModels,
+        metadata: config.podcastMetadataModel,
+      },
       concurrency: 3,
+      showBiblePath: config.podcastShowBible,
       onProgress: (stage, done, total) => store.update(job.id, { progress: { stage, done, total } }),
     },
   );

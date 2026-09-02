@@ -43,10 +43,13 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 - `src/podcasts.ts` — long-form podcast orchestrator: job ledger (`bun:sqlite`), the one-job-at-a-time
   queue, the `runPodcastJob` pipeline (script → synth → mux/master → cover → publish), and the
   `/v1/podcasts*` HTTP handlers (`handlePodcasts`/`isPodcastPath`, mounted from `index.ts`).
-- `src/podcast-script.ts` — the writers' room: a story pass (through-line, spoiler-free hook, planned
-  reveals and digressions, motif, segments), parallel segment writers, three parallel reviewers
-  (dramaturge, conversation coach, fact & speech editor), then per-segment revisions; rhythm is the
-  LLM's call, only tag vocabulary and turn ceilings are enforced in code (`sanitizeTurns`).
+- `src/podcast-script.ts` — the writers' room: a role split with one voice owner — an outline model
+  plans the story (through-line, spoiler-free hook, planned reveals and digressions, motif, segments),
+  the write model owns every segment AND every revision, every reviewer role (dramaturge, conversation
+  coach, fact & speech editor) runs on every listed review model in parallel (advisory only), and a
+  final metadata model writes the locked script's title/description/cover prompt/genres/chapter
+  titles; a show bible is injected verbatim into the writer/reviewer prompts. Rhythm is the LLM's
+  call, only tag vocabulary and turn ceilings are enforced in code (`sanitizeTurns`).
 - `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes each on the
   Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets

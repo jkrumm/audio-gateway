@@ -49,9 +49,12 @@ ARGO_API_SECRET=op://common/api/SECRET
 # OTEL_SERVICE_NAME=audio-gateway
 
 # Long-form podcast pipeline — defaults live in config.ts. Only needed to
-# override the script/TTS models, voices, host names, timing, or storage paths.
-# PODCAST_SCRIPT_MODEL=claude-opus-4-6   # or claude-opus-4-6-eu
-# PODCAST_REVIEW_MODEL=claude-opus-4-6
+# override the writer-role models, TTS model, voices, host names, timing, or storage paths.
+# PODCAST_OUTLINE_MODEL=claude-opus-5        # story pass only
+# PODCAST_WRITE_MODEL=claude-opus-4-6        # the voice owner: segments + every revision
+# PODCAST_REVIEW_MODELS=gemini-3.1-pro-preview,gpt-5.6-luna   # every role runs on every listed model
+# PODCAST_METADATA_MODEL=gpt-5.6-luna        # final title/description/cover/genres/chapters pass
+# PODCAST_SHOW_BIBLE=./docs/show-bible.md    # house style injected verbatim into the writer prompts
 # PODCAST_TTS_MODEL=elevenlabs/v3
 # PODCAST_VOICES=Mark,Sarah
 # PODCAST_HOST_NAMES=Jonas,Lena

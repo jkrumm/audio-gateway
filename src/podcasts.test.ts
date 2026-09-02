@@ -443,12 +443,23 @@ describe("POST /v1/podcasts/:id/publish", () => {
   });
 
   test("runs and returns the job JSON — fails cleanly when Audiobookshelf isn't configured", async () => {
-    const job = seedDoneJob();
-    const res = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${job.id}/publish`, { method: "POST" })));
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { status: string; error: string | null };
-    expect(body.status).toBe("failed");
-    expect(body.error).toContain("not configured");
+    // audiobookshelf.test.ts / cover.test.ts flip the config singleton to "configured"
+    // and bun test shares one module registry — pin the precondition this test is about.
+    const cfg = config as unknown as { absUrl: string; absApiKey: string };
+    const saved = { absUrl: cfg.absUrl, absApiKey: cfg.absApiKey };
+    cfg.absUrl = "";
+    cfg.absApiKey = "";
+    try {
+      const job = seedDoneJob();
+      const res = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${job.id}/publish`, { method: "POST" })));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { status: string; error: string | null };
+      expect(body.status).toBe("failed");
+      expect(body.error).toContain("not configured");
+    } finally {
+      cfg.absUrl = saved.absUrl;
+      cfg.absApiKey = saved.absApiKey;
+    }
   });
 
   test("409 when the same job is already publishing", async () => {

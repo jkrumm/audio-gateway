@@ -21,6 +21,7 @@ export interface UsageRow {
     | "podcast-outline"
     | "podcast-segment"
     | "podcast-review"
+    | "podcast-metadata"
     | "podcast-request";
   model: string;
   status: number;
