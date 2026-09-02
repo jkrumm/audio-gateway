@@ -644,26 +644,28 @@ interface OpenAiUsage {
  * JSON body too (a proxy that ignores `stream`), so callers never branch.
  * Exported for tests.
  */
-export function parseChatCompletionStream(body: string): { content: string; usage?: OpenAiUsage } {
+export function parseChatCompletionStream(body: string): { content: string; usage?: OpenAiUsage; finishReason?: string } {
   const trimmed = body.trimStart();
   if (!trimmed.startsWith("data:") && !trimmed.startsWith("event:") && !trimmed.startsWith(":")) {
-    const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string } }>; usage?: OpenAiUsage };
-    return { content: json.choices?.[0]?.message?.content ?? "", usage: json.usage };
+    const json = JSON.parse(body) as { choices?: Array<{ message?: { content?: string }; finish_reason?: string }>; usage?: OpenAiUsage };
+    return { content: json.choices?.[0]?.message?.content ?? "", usage: json.usage, finishReason: json.choices?.[0]?.finish_reason };
   }
   let content = "";
   let usage: OpenAiUsage | undefined;
+  let finishReason: string | undefined;
   for (const line of body.split("\n")) {
     if (!line.startsWith("data:")) continue;
     const payload = line.slice("data:".length).trim();
     if (!payload || payload === "[DONE]") continue;
     const chunk = JSON.parse(payload) as {
-      choices?: Array<{ delta?: { content?: string } }>;
+      choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }>;
       usage?: OpenAiUsage | null;
     };
     content += chunk.choices?.[0]?.delta?.content ?? "";
+    if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
     if (chunk.usage) usage = chunk.usage;
   }
-  return { content, usage };
+  return { content, usage, finishReason };
 }
 
 async function callWriterLlm(params: {
@@ -708,9 +710,12 @@ async function callWriterLlm(params: {
         throw new Error(`Podcast ${params.stage} generation failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
       }
 
-      const { content, usage } = parseChatCompletionStream(res.body);
-      recordUsage({ endpoint: params.usageEndpoint, model: params.model, status: res.status, latencyMs, inputChars: params.userContent.length, usageJson: usage });
-      span.setAttributes({ "llm.output_tokens": usage?.completion_tokens ?? undefined });
+      const { content, usage, finishReason } = parseChatCompletionStream(res.body);
+      recordUsage({ endpoint: params.usageEndpoint, model: params.model, status: res.status, latencyMs, inputChars: params.userContent.length, usageJson: { ...usage, finish_reason: finishReason ?? null } });
+      span.setAttributes({ "llm.output_tokens": usage?.completion_tokens ?? undefined, "llm.finish_reason": finishReason });
+      if (!content.trim()) {
+        log.warn("podcast writer returned no content", { stage: params.stage, finishReason, completionTokens: usage?.completion_tokens ?? null, latencyMs });
+      }
       return content;
     },
     "client",
@@ -770,23 +775,35 @@ async function reviewEpisode(params: {
   const { req, outline, segments, model, onProgress } = params;
   let done = 0;
   const perRole = await synthConcurrent(REVIEWER_ROLES.length, REVIEWER_ROLES, async (role) => {
-    const result = await callAndParse(
-      `review ${role}`,
-      () =>
-        callWriterLlm({
-          model,
-          systemPrompt: reviewPrompt({ req, outline, role }),
-          userContent: buildReviewUserContent({ req, outline, segments }),
-          maxCompletionTokens: 6000,
-          stage: "review",
-          usageEndpoint: "podcast-review",
-        }),
-      parseReviewNotes,
-    );
+    let notes: ReviewNote[] = [];
+    try {
+      const result = await callAndParse(
+        `review ${role}`,
+        () =>
+          callWriterLlm({
+            model,
+            systemPrompt: reviewPrompt({ req, outline, role }),
+            userContent: buildReviewUserContent({ req, outline, segments }),
+            // Reviewers read source + outline + the whole draft and the writer
+            // model reasons before it answers; at 6000 all three came back with
+            // EMPTY content (2026-09-02) — the budget was spent on reasoning.
+            maxCompletionTokens: 16000,
+            stage: "review",
+            usageEndpoint: "podcast-review",
+          }),
+        parseReviewNotes,
+      );
+      notes = result.notes;
+      log.info("podcast review verdict", { role, verdict: result.verdict, notes: notes.length });
+    } catch (err) {
+      // A review is polish, not the episode: a reviewer that fails twice is
+      // skipped and the draft stands, rather than failing a job whose script
+      // and outline already exist.
+      log.warn("podcast reviewer skipped", { role, error: err instanceof Error ? err.message : String(err) });
+    }
     done++;
     onProgress?.("review", done, REVIEWER_ROLES.length);
-    log.info("podcast review verdict", { role, verdict: result.verdict, notes: result.notes.length });
-    return result.notes;
+    return notes;
   });
   return perRole.flat();
 }
@@ -817,20 +834,26 @@ async function reviseSegments(params: {
     const segmentSpec = outline.segments[index];
     if (!segmentSpec) throw new Error(`outline segment ${index} out of range`);
     const segmentNotes = segmentNotesFor(notes, index);
-    const turns = await callAndParse(
-      `revise ${index + 1}`,
-      () =>
-        callWriterLlm({
-          model,
-          systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total }),
-          userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
-          maxCompletionTokens: Math.round(segmentSpec.targetWords * 8 + 3000),
-          stage: "revise",
-          usageEndpoint: "podcast-segment",
-        }),
-      (raw) => sanitizeTurns(parseSegmentTurns(raw)),
-    );
-    revisedByIndex.set(index, turns);
+    try {
+      const turns = await callAndParse(
+        `revise ${index + 1}`,
+        () =>
+          callWriterLlm({
+            model,
+            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total }),
+            userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
+            maxCompletionTokens: Math.round(segmentSpec.targetWords * 8 + 6000),
+            stage: "revise",
+            usageEndpoint: "podcast-segment",
+          }),
+        (raw) => sanitizeTurns(parseSegmentTurns(raw)),
+      );
+      // An empty revision is a failed one — never replace a written segment with nothing.
+      if (turns.length > 0) revisedByIndex.set(index, turns);
+    } catch (err) {
+      // The draft segment stands; a revision that fails twice is polish lost, not an episode lost.
+      log.warn("podcast revision skipped, keeping draft segment", { index, error: err instanceof Error ? err.message : String(err) });
+    }
     done++;
     onProgress?.("revise", done, toRevise.length);
   });
