@@ -5,9 +5,9 @@
  * scripts/usage-tail.ts's hand-rolled arg parsing.
  *
  * Usage:
- *   bun run podcast -- --source <file.md|-> [--brief "…"] [--title "…"] [--minutes 20]
- *     [--series "…"] [--language de] [--publish] [--no-cover] [--base-url URL]
- *     [--out DIR] [--json] [--no-wait]
+ *   bun run podcast -- --source <file.md|-> [--path <brain-relative note path>]... [--brief "…"]
+ *     [--title "…"] [--minutes 20] [--series "…"] [--language de] [--publish] [--no-cover]
+ *     [--no-research] [--pin-minutes] [--no-brain-note] [--base-url URL] [--out DIR] [--json] [--no-wait]
  *   bun run podcast -- status <id> [--base-url URL] [--json]
  *   bun run podcast -- list [--base-url URL] [--json]
  *   bun run podcast -- publish <id> [--base-url URL] [--json]
@@ -16,12 +16,19 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const HELP = `Usage:
-  bun run podcast -- --source <file.md|-> [--brief "…"] [--title "…"] [--minutes 20] [--series "…"] [--language de] [--publish] [--no-cover] [--base-url URL] [--out DIR] [--json] [--no-wait]
+  bun run podcast -- --source <file.md|-> [--path <brain-relative note path>]... [--brief "…"] [--title "…"] [--minutes 20] [--series "…"] [--language de] [--publish] [--no-cover] [--no-research] [--pin-minutes] [--no-brain-note] [--base-url URL] [--out DIR] [--json] [--no-wait]
   bun run podcast -- status <id>
   bun run podcast -- list
   bun run podcast -- publish <id>
 
-Base URL: --base-url, then $PODCAST_BASE_URL, then http://localhost:7714.
+--path (repeatable) reads brain-relative note paths server-side; with --path,
+--source becomes optional. --no-research skips the research stage. --pin-minutes
+stops the editor from deviating from --minutes. --no-brain-note skips writing the
+transcript note back into the brain.
+
+Base URL: --base-url, then $PODCAST_BASE_URL, then http://localhost:7719 (the mini's
+podcast-pipeline instance; the CLI's default is no longer the VPS gateway — see
+docs/podcast-editorial-room.md §10).
 Auth: Authorization: Bearer $AUDIO_TOKEN (defaults to "claude-code").`;
 
 // ---------------------------------------------------------------------------
@@ -48,6 +55,10 @@ interface PodcastJobPublic {
   created_at: string;
   updated_at: string;
   links: { audio: string | null; cover: string | null; script: string | null };
+  // Editorial-room fields (docs/podcast-editorial-room.md §5/§7) — optional
+  // because older gateway builds and in-flight jobs may not carry them yet.
+  profile?: { format: string; lead: "A" | "B" | "balanced"; humor: string; minutes: number; topics: string[] } | null;
+  brief?: unknown;
 }
 
 const TERMINAL_STATUSES = new Set(["done", "failed"]);
@@ -59,6 +70,7 @@ const POLL_INTERVAL_MS = 5000;
 
 interface CreateArgs {
   source: string;
+  sourcePaths: string[];
   brief?: string;
   title?: string;
   minutes?: number;
@@ -66,6 +78,9 @@ interface CreateArgs {
   language?: "de" | "en";
   publish: boolean;
   cover: boolean;
+  research: boolean;
+  pinMinutes: boolean;
+  brainNote: boolean;
   baseUrl: string;
   out?: string;
   json: boolean;
@@ -73,17 +88,34 @@ interface CreateArgs {
 }
 
 function defaultBaseUrl(): string {
-  return process.env["PODCAST_BASE_URL"] ?? "http://localhost:7714";
+  return process.env["PODCAST_BASE_URL"] ?? "http://localhost:7719";
 }
 
 function parseCreateArgs(argv: string[]): CreateArgs {
-  const args: CreateArgs = { source: "", publish: false, cover: true, baseUrl: defaultBaseUrl(), json: false, wait: true };
+  const args: CreateArgs = {
+    source: "",
+    sourcePaths: [],
+    publish: false,
+    cover: true,
+    research: true,
+    pinMinutes: false,
+    brainNote: true,
+    baseUrl: defaultBaseUrl(),
+    json: false,
+    wait: true,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "--source":
         args.source = argv[++i] ?? "";
         break;
+      case "--path": {
+        const raw = argv[++i];
+        if (!raw) throw new Error("--path requires a brain-relative note path");
+        args.sourcePaths.push(raw);
+        break;
+      }
       case "--brief":
         args.brief = argv[++i];
         break;
@@ -112,6 +144,15 @@ function parseCreateArgs(argv: string[]): CreateArgs {
       case "--no-cover":
         args.cover = false;
         break;
+      case "--no-research":
+        args.research = false;
+        break;
+      case "--pin-minutes":
+        args.pinMinutes = true;
+        break;
+      case "--no-brain-note":
+        args.brainNote = false;
+        break;
       case "--base-url":
         args.baseUrl = argv[++i] ?? args.baseUrl;
         break;
@@ -128,7 +169,7 @@ function parseCreateArgs(argv: string[]): CreateArgs {
         throw new Error(`unknown argument: ${arg}`);
     }
   }
-  if (!args.source) throw new Error("--source is required");
+  if (!args.source && args.sourcePaths.length === 0) throw new Error("--source or --path is required");
   return args;
 }
 
@@ -242,6 +283,10 @@ function printSummary(job: PodcastJobPublic, paths: { audio: string | null; cove
   console.log("");
   console.log(job.title ?? "(untitled)");
   console.log(`duration ${formatMmSs(job.duration_seconds)} · ${job.turns ?? "?"} turns · $${job.cost_usd?.toFixed(2) ?? "?"}`);
+  if (job.profile) {
+    const p = job.profile;
+    console.log(`profile: ${p.format} · lead ${p.lead} · humor ${p.humor} · ${p.minutes}min · ${p.topics.join(", ")}`);
+  }
   if (job.chapters?.length) {
     console.log("chapters:");
     for (const c of job.chapters) console.log(`  ${formatMmSs(c.start_ms / 1000)}  ${c.title}`);
@@ -257,13 +302,17 @@ function printSummary(job: PodcastJobPublic, paths: { audio: string | null; cove
 // ---------------------------------------------------------------------------
 
 async function runCreate(args: CreateArgs): Promise<void> {
-  const source = await readSource(args.source);
-  const body: Record<string, unknown> = { source, publish: args.publish, cover: args.cover };
+  const body: Record<string, unknown> = { publish: args.publish, cover: args.cover };
+  if (args.source) body["source"] = await readSource(args.source);
+  if (args.sourcePaths.length > 0) body["sourcePaths"] = args.sourcePaths;
   if (args.brief !== undefined) body["brief"] = args.brief;
   if (args.title !== undefined) body["title"] = args.title;
   if (args.minutes !== undefined) body["minutes"] = args.minutes;
   if (args.series !== undefined) body["series"] = args.series;
   if (args.language !== undefined) body["language"] = args.language;
+  if (!args.research) body["research"] = false;
+  if (args.pinMinutes) body["pinMinutes"] = true;
+  if (!args.brainNote) body["brainNote"] = false;
 
   const created = await apiFetch<{ id: string; status: string }>(args.baseUrl, "/v1/podcasts", {
     method: "POST",
@@ -306,6 +355,10 @@ async function runStatus(argv: string[]): Promise<void> {
   }
   printProgressLine(job);
   console.log("");
+  if (job.profile) {
+    const p = job.profile;
+    console.log(`profile: ${p.format} · lead ${p.lead} · humor ${p.humor} · ${p.minutes}min · ${p.topics.join(", ")}`);
+  }
   if (job.error) console.log(`error: ${job.error}`);
 }
 

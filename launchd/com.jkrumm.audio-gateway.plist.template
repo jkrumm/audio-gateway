@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.jkrumm.audio-gateway</string>
+  <!-- The podcast-pipeline instance of this same service, on :7719. STT/TTS keeps
+       running on the VPS container; this instance exists only because the brain
+       vault is a git checkout on THIS machine (docs/podcast-editorial-room.md,
+       Decision 2). Never point ProgramArguments at the bun binary directly —
+       macOS BTM silently disallows launching a Homebrew binary that way; the
+       wrapper script is required. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>__HOME__/SourceRoot/audio-gateway/scripts/launch.sh</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>WorkingDirectory</key><string>__HOME__/SourceRoot/audio-gateway</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/audio-gateway.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/audio-gateway.err</string>
+</dict>
+</plist>
