@@ -62,31 +62,52 @@ usage sink.
 ## Podcasts
 
 Long-form pipeline: notes in, a two-host episode out. `POST /v1/podcasts` kicks off a background job
-— story pass (`PODCAST_OUTLINE_MODEL`) → per-segment dialogue by the voice owner (`PODCAST_WRITE_MODEL`) → reviews (`PODCAST_REVIEW_MODELS`) → revisions → metadata (`PODCAST_METADATA_MODEL`) → per-turn ElevenLabs synthesis
-(`PODCAST_TTS_MODEL`, one voice per host) → gapped concat → loudness-normalised, chaptered MP3 →
-optional cover art (image-gen gateway) → optional Audiobookshelf publish. Only one job's pipeline
-runs at a time (bounds Replicate fan-out/memory); design + cost expectations + every knob are in
-`docs/podcast.md`.
+— research (`PODCAST_RESEARCH_MODEL`, tool-calling: brain, past episodes, research gateway) → editorial
+brief (`PODCAST_EDITORIAL_MODEL`, decides format/roles/tone/humor/length/rhythm for this episode) →
+outline (`PODCAST_OUTLINE_MODEL`) → per-segment dialogue by the voice owner (`PODCAST_WRITE_MODEL`) →
+reviews (`PODCAST_REVIEW_MODELS`) → revisions → metadata (`PODCAST_METADATA_MODEL`) → per-turn
+ElevenLabs synthesis (`PODCAST_TTS_MODEL`, one voice per host, number-dense turns slowed) → gapped
+concat → loudness-normalised, chaptered MP3 → optional cover art (image-gen gateway) → optional
+Audiobookshelf publish → optional transcript note back into the brain. Only one job's pipeline runs
+at a time (bounds Replicate fan-out/memory); design + cost expectations + every knob are in
+`docs/podcast.md` and `docs/podcast-editorial-room.md`.
+
+**STT/TTS stay on the VPS.** Podcasts run on a separate **Mac mini instance** (`:7719`,
+`make launchd-install`, reachable over the tailnet at `podcasts.mini.jkrumm.com`) because the brain is
+a filesystem checkout that only exists there. `PODCAST_ENABLED=false` turns the VPS instance's
+`/v1/podcasts*` into a `410` pointing at the mini.
 
 ```
-POST   /v1/podcasts                  {source, brief?, title?, language?, minutes?, series?, publish?, cover?} → 202 {id, status}
+POST   /v1/podcasts                  {source?, sourcePaths?, brief?, title?, language?, minutes?, series?, publish?, cover?, research?, pinMinutes?, brainNote?} → 202 {id, status}
 GET    /v1/podcasts                  → {jobs: [...]}  (latest 50)
-GET    /v1/podcasts/:id              → the job's public JSON (status, live progress, title, chapters, cost_usd, abs, links, ...)
+GET    /v1/podcasts/:id              → the job's public JSON (status, live progress, title, chapters, cost_usd, abs, brief, profile, brain_note, links, ...)
 GET    /v1/podcasts/:id/audio        → the mp3 (attachment)
 GET    /v1/podcasts/:id/cover        → the cover PNG
 GET    /v1/podcasts/:id/script       → script.json, or a Markdown transcript with ?format=md
+GET    /v1/podcasts/:id/dossier      → the research stage's dossier.json (404 before research ran)
+GET    /v1/podcasts/:id/brief        → the editor's brief.json (404 before editorial ran)
 POST   /v1/podcasts/:id/publish      → re-run just the Audiobookshelf publish stage (mp3 stays on disk on failure)
+POST   /v1/podcasts/:id/retry        → re-queue a FAILED job as a new job with the same request
 DELETE /v1/podcasts/:id              → remove the job + its artifacts (409 while running)
 ```
 
-CLI (`bun run podcast`):
+`sourcePaths` (brain-relative note paths, ≤ 20, read server-side and appended to `source`, which may
+then be blank) / `research` (default `true`, run the research stage) / `pinMinutes` (default `false`,
+the editor may not deviate from `minutes`) / `brainNote` (default `true`, write the transcript note
+back into the brain) are the v2 additions.
+
+CLI (`bun run podcast`, mini instance):
 ```bash
 bun run podcast -- --source notes.md --minutes 15 --series "Spain Trip" --publish
+bun run podcast -- --path "Areas/Travel/Spain plan.md" --no-research --pin-minutes
 bun run podcast -- status <id>
 bun run podcast -- list
 bun run podcast -- publish <id>
 ```
-Base URL: `--base-url` → `$PODCAST_BASE_URL` → `http://localhost:7714`. Auth:
+`--path` (repeatable) reads a brain-relative note server-side instead of `--source`; `--no-research`
+skips the research stage; `--pin-minutes` stops the editor from deviating from `--minutes`;
+`--no-brain-note` skips writing the transcript note back into the brain. Base URL: `--base-url` →
+`$PODCAST_BASE_URL` → `http://localhost:7719` (the mini instance). Auth:
 `Authorization: Bearer $AUDIO_TOKEN` (defaults to `claude-code`) — same optional `PROXY_API_KEY`
 gate as everything else.
 

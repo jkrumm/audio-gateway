@@ -9,9 +9,59 @@ import { ReplicateSynthError, synthReplicateChunk, type ReplicateChunkParams } f
 // the Replicate/ElevenLabs lane (synthesizeTurns), reusing the shared
 // bounded-concurrency runner and the lane's own per-chunk synth+decode
 // (synthReplicateChunk) — no new upstream call shape.
+// Pacing lives here too: a turn thick with numbers is unlistenable at the
+// host's normal rate, so it is synthesized a notch slower (numberDensity +
+// TurnPacingOptions). ElevenLabs v3 has no SSML breaks; `speed` (0.7–1.2, per
+// request) and the writer's own "…" are the only pacing controls we have.
 
 /** Per-speaker prosody continuity is what previous/nextText is for — the other host's line in between isn't useful context. */
 const CONTEXT_MAX_CHARS = 600;
+
+/** ElevenLabs' per-request speed range. */
+const SPEED_MIN = 0.7;
+const SPEED_MAX = 1.2;
+
+/** Whole tokens that ARE a number (or a unit that always travels with one). "ein/eine/einer" are articles and deliberately absent. */
+const NUMBER_WORDS = new Set([
+  // German 0-12 plus the units that only ever appear alongside a figure
+  "null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", "elf", "zwölf",
+  "komma", "prozent", "euro", "cent",
+  // English 0-12
+  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+  // English teens and tens, spelled out rather than matched by suffix ("-ty" also ends "pretty", "party")
+  "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+  "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+  "hundred", "thousand", "million", "billion", "point", "percent",
+]);
+
+/** German writes compound numerals as one token ("eintausenddreihundertdreiundsiebzig") — these fragments catch them. */
+const NUMBER_WORD_PARTS = ["zehn", "zig", "ßig", "hundert", "tausend", "million", "milliarde"];
+
+/**
+ * Share of a turn's tokens that are numeric — digits, spelled-out German and
+ * English numerals, and the units that always travel with a figure. Used to
+ * spot the turns that read like a spreadsheet ("zwölf Euro fünfzig … hundert-
+ * fünfzigtausend Euro mal drei Komma neun neun Prozent") and slow them down.
+ * Pure; exported for tests.
+ */
+export function numberDensity(text: string): number {
+  const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  if (tokens.length === 0) return 0;
+  const numeric = tokens.filter(
+    (token) => /\d/.test(token) || NUMBER_WORDS.has(token) || NUMBER_WORD_PARTS.some((part) => token.includes(part)),
+  ).length;
+  return numeric / tokens.length;
+}
+
+export interface TurnPacingOptions {
+  /** Number density above which a turn is synthesized slower (config.podcastDenseTurnThreshold). */
+  denseThreshold: number;
+  /** Speed delta applied to such a turn (config.podcastDenseTurnSlowdown). */
+  denseSlowdown: number;
+}
+
+/** Mirrors the config defaults, so a caller that has not wired config through still gets the intended pacing. */
+const DEFAULT_PACING: TurnPacingOptions = { denseThreshold: 0.12, denseSlowdown: 0.06 };
 
 export interface SynthTurnInput {
   text: string;
@@ -49,11 +99,15 @@ const cap = (text: string | undefined): string | undefined =>
  * host's voice. `previousText`/`nextText` are filled from the SAME speaker's
  * neighbouring turn (not the other host's) — that's what ElevenLabs uses for
  * per-voice prosody continuity — and capped at {@link CONTEXT_MAX_CHARS}.
+ * A turn whose {@link numberDensity} is over `pacing.denseThreshold` is
+ * slowed by `pacing.denseSlowdown` (clamped to ElevenLabs' 0.7–1.2 range) —
+ * figures need more room than prose does.
  */
 export function turnsForSynthesis(
   segments: ScriptSegment[],
   hosts: [PodcastHost, PodcastHost],
   languageCode: string,
+  pacing: TurnPacingOptions = DEFAULT_PACING,
 ): SynthTurnInput[] {
   const hostById = new Map<"A" | "B", PodcastHost>(hosts.map((h) => [h.id, h] as const));
   const flat = segments.flatMap((segment) => segment.turns);
@@ -73,11 +127,15 @@ export function turnsForSynthesis(
     const nextText = nextTextBySpeaker.get(turn.speaker);
     nextTextBySpeaker.set(turn.speaker, turn.text);
     const host = hostById.get(turn.speaker) ?? hosts[0];
+    const dense = numberDensity(turn.text) > pacing.denseThreshold;
+    const speed = dense
+      ? Math.min(SPEED_MAX, Math.max(SPEED_MIN, (host.speed ?? 1) - pacing.denseSlowdown))
+      : host.speed;
     out[i] = {
       text: turn.text,
       speaker: turn.speaker,
       voice: host.voice,
-      ...(host.speed !== undefined && { speed: host.speed }),
+      ...(speed !== undefined && { speed }),
       languageCode,
       previousText: cap(previousTextByIndex[i]),
       nextText: cap(nextText),

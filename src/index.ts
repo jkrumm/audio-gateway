@@ -106,8 +106,10 @@ export async function handleRequest(req: Request): Promise<Response> {
 // ---------------------------------------------------------------------------
 
 if (import.meta.main) {
-  recoverPodcastJobs();
-  startStaleJobSweep();
+  if (config.podcastEnabled) {
+    recoverPodcastJobs();
+    startStaleJobSweep();
+  }
 
   const server = Bun.serve({
     port: config.port,

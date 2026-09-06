@@ -69,7 +69,19 @@ function authed(req: Request): Request {
 }
 
 function makeRequest(overrides: Partial<PodcastJobRequest> = {}): PodcastJobRequest {
-  return { source: "Some research notes.", language: "de", minutes: 10, series: "Test Show", publish: false, cover: true, ...overrides };
+  return {
+    source: "Some research notes.",
+    sourcePaths: [],
+    language: "de",
+    minutes: 10,
+    series: "Test Show",
+    publish: false,
+    cover: true,
+    research: true,
+    pinMinutes: false,
+    brainNote: true,
+    ...overrides,
+  };
 }
 
 /** Write a minimal artifact set for `job` to disk and point its `files` at them, bypassing the real pipeline entirely. */
@@ -91,6 +103,7 @@ function seedDoneJob(overrides: Partial<PodcastJobRequest> = {}): PodcastJob {
     genres: ["Travel"],
     language: "de",
     wordCount: 42,
+    topics: ["Planning"],
     hosts: [
       { id: "A", name: "Jonas", voice: "Mark" },
       { id: "B", name: "Lena", voice: "Sarah" },
@@ -108,7 +121,7 @@ function seedDoneJob(overrides: Partial<PodcastJobRequest> = {}): PodcastJob {
     durationSeconds: 120,
     turns: 2,
     chapters: [{ title: "Cold open", startMs: 0 }],
-    files: { audio: audioPath, cover: coverPath, script: scriptPath },
+    files: { audio: audioPath, cover: coverPath, script: scriptPath, dossier: null, brief: null },
       runner: null,
   });
 }
@@ -122,7 +135,7 @@ describe("PodcastStore", () => {
     const store = new PodcastStore(":memory:");
     const job = store.create({ caller: "tester", request: makeRequest() });
     expect(job.status).toBe("queued");
-    expect(job.files).toEqual({ audio: null, cover: null, script: null });
+    expect(job.files).toEqual({ audio: null, cover: null, script: null, dossier: null, brief: null });
     expect(store.get(job.id)?.id).toBe(job.id);
 
     const listed = store.list(10);
@@ -157,6 +170,54 @@ describe("PodcastStore", () => {
   test("get returns null for an unknown id", () => {
     const store = new PodcastStore(":memory:");
     expect(store.get("nope")).toBeNull();
+  });
+
+  test("rowToJob defaults pre-v2 fields for a ledger row written before they existed", () => {
+    const store = new PodcastStore(":memory:");
+    const db = (store as unknown as { db: { run: (sql: string, ...args: unknown[]) => unknown } }).db;
+    const legacyRequest = JSON.stringify({ source: "legacy notes", language: "de", minutes: 12, series: "Legacy Show", publish: false, cover: true });
+    const legacyState = JSON.stringify({
+      progress: null, title: "Legacy", description: null, durationSeconds: null, turns: null,
+      chapters: null, costUsd: null, error: null, abs: null, files: { audio: null, cover: null, script: null },
+    });
+    const now = new Date().toISOString();
+    db.run(
+      "INSERT INTO podcast_job (id, status, created_at, updated_at, caller, request_json, state_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      "legacy-1", "done", now, now, "tester", legacyRequest, legacyState,
+    );
+
+    const job = store.get("legacy-1");
+    expect(job?.request.sourcePaths).toEqual([]);
+    expect(job?.request.research).toBe(true);
+    expect(job?.request.pinMinutes).toBe(false);
+    expect(job?.request.brainNote).toBe(true);
+    expect(job?.files).toEqual({ audio: null, cover: null, script: null, dossier: null, brief: null });
+    expect(job?.brief).toBeNull();
+    expect(job?.profile).toBeNull();
+    expect(job?.brainNote).toBeNull();
+  });
+});
+
+describe("recentEpisodes", () => {
+  test("newest first, filtered by series, respects limit and only counts done jobs", async () => {
+    const store = new PodcastStore(":memory:");
+    const a = store.create({ caller: "t", request: makeRequest({ series: "Show A" }) });
+    store.update(a.id, { status: "done", title: "A1" });
+    await Bun.sleep(5);
+    const b = store.create({ caller: "t", request: makeRequest({ series: "Show A" }) });
+    store.update(b.id, { status: "done", title: "A2" });
+    await Bun.sleep(5);
+    const other = store.create({ caller: "t", request: makeRequest({ series: "Show B" }) });
+    store.update(other.id, { status: "done", title: "B1" });
+    store.create({ caller: "t", request: makeRequest({ series: "Show A" }) }); // still queued — excluded
+
+    const recent = store.recentEpisodes("Show A", 10);
+    expect(recent.map((e) => e.id)).toEqual([b.id, a.id]);
+    expect(recent.map((e) => e.title)).toEqual(["A2", "A1"]);
+    expect(recent.every((e) => e.profile === null)).toBe(true);
+
+    const limited = store.recentEpisodes("Show A", 1);
+    expect(limited).toEqual([{ id: b.id, createdAt: expect.any(String), title: "A2", description: "", profile: null }]);
   });
 });
 
@@ -231,8 +292,11 @@ describe("toPublicJob", () => {
       costUsd: 0.42,
       error: null,
       abs: { url: "https://abs.example.com/item/1", libraryItemId: "item-1", episodeId: "ep-1" },
-      files: { audio: "/tmp/a/episode.mp3", cover: "/tmp/a/cover.png", script: "/tmp/a/script.json" },
+      files: { audio: "/tmp/a/episode.mp3", cover: "/tmp/a/cover.png", script: "/tmp/a/script.json", dossier: "/tmp/a/dossier.json", brief: "/tmp/a/brief.json" },
       runner: null,
+      brief: null,
+      profile: null,
+      brainNote: null,
     };
 
     const pub = toPublicJob(job);
@@ -245,7 +309,12 @@ describe("toPublicJob", () => {
       audio: "/v1/podcasts/job-1/audio",
       cover: "/v1/podcasts/job-1/cover",
       script: "/v1/podcasts/job-1/script",
+      dossier: "/v1/podcasts/job-1/dossier",
+      brief: "/v1/podcasts/job-1/brief",
     });
+    expect(pub.brief).toBeNull();
+    expect(pub.profile).toBeNull();
+    expect(pub.brain_note).toBeNull();
     expect(JSON.stringify(pub)).not.toContain("TOP SECRET NOTES");
   });
 });
@@ -259,6 +328,7 @@ describe("renderTranscriptMarkdown", () => {
       genres: [],
       language: "de",
       wordCount: 10,
+      topics: [],
       hosts: [
         { id: "A", name: "Jonas", voice: "Mark" },
         { id: "B", name: "Lena", voice: "Sarah" },
@@ -350,6 +420,64 @@ describe("POST /v1/podcasts validation", () => {
     const getRes = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${created.id}`)));
     const body = (await getRes.json()) as Record<string, unknown>;
     expect(body["minutes"]).toBe(60);
+  });
+
+  test("sourcePaths: more than 20 entries → 400", async () => {
+    stubFailingFetch();
+    const req = authed(new Request("http://localhost/v1/podcasts", {
+      method: "POST",
+      body: JSON.stringify({ source: "hello", sourcePaths: Array.from({ length: 21 }, (_, i) => `note-${i}.md`) }),
+      headers: { "content-type": "application/json" },
+    }));
+    expect((await handleRequest(req)).status).toBe(400);
+  });
+
+  test("sourcePaths: a blank entry → 400", async () => {
+    stubFailingFetch();
+    const req = authed(new Request("http://localhost/v1/podcasts", {
+      method: "POST",
+      body: JSON.stringify({ source: "hello", sourcePaths: ["ok.md", "   "] }),
+      headers: { "content-type": "application/json" },
+    }));
+    expect((await handleRequest(req)).status).toBe(400);
+  });
+
+  test("source may be blank when sourcePaths is non-empty", async () => {
+    stubFailingFetch();
+    const req = authed(new Request("http://localhost/v1/podcasts", {
+      method: "POST",
+      body: JSON.stringify({ sourcePaths: ["notes/a.md"] }),
+      headers: { "content-type": "application/json" },
+    }));
+    const res = await handleRequest(req);
+    expect(res.status).toBe(202);
+    const created = (await res.json()) as { id: string };
+    expect(_test.getStore().get(created.id)?.request.sourcePaths).toEqual(["notes/a.md"]);
+  });
+
+  test("research/pinMinutes/brainNote: defaults, then explicit overrides", async () => {
+    stubFailingFetch();
+    const defaultsRes = await handleRequest(authed(new Request("http://localhost/v1/podcasts", {
+      method: "POST",
+      body: JSON.stringify({ source: "hello world" }),
+      headers: { "content-type": "application/json" },
+    })));
+    const defaultsCreated = (await defaultsRes.json()) as { id: string };
+    const defaultsRequest = _test.getStore().get(defaultsCreated.id)?.request;
+    expect(defaultsRequest?.research).toBe(true);
+    expect(defaultsRequest?.pinMinutes).toBe(false);
+    expect(defaultsRequest?.brainNote).toBe(true);
+
+    const overridesRes = await handleRequest(authed(new Request("http://localhost/v1/podcasts", {
+      method: "POST",
+      body: JSON.stringify({ source: "hello world", research: false, pinMinutes: true, brainNote: false }),
+      headers: { "content-type": "application/json" },
+    })));
+    const overridesCreated = (await overridesRes.json()) as { id: string };
+    const overridesRequest = _test.getStore().get(overridesCreated.id)?.request;
+    expect(overridesRequest?.research).toBe(false);
+    expect(overridesRequest?.pinMinutes).toBe(true);
+    expect(overridesRequest?.brainNote).toBe(false);
   });
 });
 
@@ -586,12 +714,36 @@ describe("episodeFilename", () => {
 });
 
 describe("podcastDoneMessage", () => {
-  test("carries title, minutes, chapters and the Audiobookshelf link", async () => {
+  test("carries title, minutes, chapters, format line and the Audiobookshelf link", async () => {
     const { podcastDoneMessage } = await import("./podcasts");
-    const msg = podcastDoneMessage({ title: "T", durationSeconds: 1536, chapters: ["A", "B"], absUrl: "https://abs.example/item/1", costUsd: 2.257, publishRequested: true });
-    const unpublished = podcastDoneMessage({ title: "T", durationSeconds: 60, chapters: [], absUrl: null, costUsd: null, publishRequested: false });
+    const msg = podcastDoneMessage({
+      title: "T",
+      durationSeconds: 1536,
+      chapters: ["A", "B"],
+      absUrl: "https://abs.example/item/1",
+      costUsd: 2.257,
+      publishRequested: true,
+      format: "Erklärstück",
+      lead: "A",
+      humor: "sparse",
+      hostNames: ["Jonas", "Lena"],
+    });
+    const unpublished = podcastDoneMessage({
+      title: "T",
+      durationSeconds: 60,
+      chapters: [],
+      absUrl: null,
+      costUsd: null,
+      publishRequested: false,
+      format: "Gespräch",
+      lead: "balanced",
+      humor: "none",
+      hostNames: ["Jonas", "Lena"],
+    });
     expect(unpublished).toContain("nicht angefordert");
+    expect(unpublished).toContain("Format: Gespräch · ausgeglichen · none");
     expect(msg).toContain("*T* (26 min, 2 Kapitel)");
+    expect(msg).toContain("Format: Erklärstück · Jonas führt · sparse");
     expect(msg).toContain("• B");
     expect(msg).toContain("https://abs.example/item/1");
     expect(msg).toContain("2.26 USD");
@@ -624,6 +776,11 @@ describe("resolveNotifyChannel", () => {
     const saved = { ...cfg };
     cfg.argoBaseUrl = "http://argo.test";
     cfg.argoApiSecret = "s";
+    // `resolveNotifyChannel()`'s default parameter (`fetchImpl = fetch`) evaluates the bare
+    // global `fetch` identifier even when the id-shortcut path never calls it — afterEach
+    // above deletes globalThis.fetch after every test, so a prior test leaves it undefined
+    // ("fetch is not defined") unless this test restores a stub first.
+    stubFailingFetch();
     try {
       cfg.podcastNotifyChannel = "C0AS5GUH5U4";
       expect(await resolveNotifyChannel()).toBe("C0AS5GUH5U4");
@@ -639,6 +796,33 @@ describe("resolveNotifyChannel", () => {
       expect(calls.length).toBe(1);
     } finally {
       Object.assign(cfg, { podcastNotifyChannel: saved.podcastNotifyChannel, argoBaseUrl: saved.argoBaseUrl, argoApiSecret: saved.argoApiSecret });
+    }
+  });
+});
+
+describe("podcast pipeline disabled (config.podcastEnabled = false)", () => {
+  test("every /v1/podcasts route 410s with a pointer to the mini instance", async () => {
+    const cfg = config as unknown as { podcastEnabled: boolean };
+    const saved = cfg.podcastEnabled;
+    cfg.podcastEnabled = false;
+    try {
+      const listRes = await handleRequest(authed(new Request("http://localhost/v1/podcasts")));
+      expect(listRes.status).toBe(410);
+      const body = (await listRes.json()) as { error: string };
+      expect(body.error).toContain("mini instance");
+
+      const postRes = await handleRequest(authed(new Request("http://localhost/v1/podcasts", {
+        method: "POST",
+        body: JSON.stringify({ source: "hello" }),
+        headers: { "content-type": "application/json" },
+      })));
+      expect(postRes.status).toBe(410);
+
+      const job = seedDoneJob();
+      const getRes = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${job.id}`)));
+      expect(getRes.status).toBe(410);
+    } finally {
+      cfg.podcastEnabled = saved;
     }
   });
 });

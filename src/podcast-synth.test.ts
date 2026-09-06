@@ -19,7 +19,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { turnsForSynthesis, synthesizeTurns } = await import("./podcast-synth");
+const { turnsForSynthesis, synthesizeTurns, numberDensity } = await import("./podcast-synth");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -97,6 +97,68 @@ describe("turnsForSynthesis", () => {
     ];
     const turns = turnsForSynthesis(segments, HOSTS, "en");
     expect(turns[2]?.previousText?.length).toBe(600);
+  });
+});
+
+/** The cold open of episode 5 — the exact turn the pacing rule exists for. */
+const DENSE_TURN =
+  "Zwölf Euro fünfzig. Das ist die Differenz, und deshalb reden wir heute über eintausenddreihundertdreiundsiebzig Euro fünfundsiebzig … hundertfünfzigtausend Euro mal drei Komma neun neun Prozent.";
+
+describe("numberDensity", () => {
+  test("the Obermenzing cold open is dense", () => {
+    expect(numberDensity(DENSE_TURN)).toBeGreaterThan(0.12);
+  });
+
+  test("a normal spoken sentence is not dense", () => {
+    expect(numberDensity("Und dann stehst du da an der Mautstelle und fragst dich, ob das alles so klug war.")).toBeLessThanOrEqual(0.12);
+  });
+
+  test("the articles ein/eine/einer do not count as numbers", () => {
+    expect(numberDensity("Ein Auto, eine Frage, einer von vielen Wegen dorthin.")).toBe(0);
+  });
+
+  test("digits, German compounds and English numerals all count", () => {
+    expect(numberDensity("330")).toBe(1);
+    expect(numberDensity("eintausenddreihundertdreiundsiebzig")).toBe(1);
+    expect(numberDensity("dreißig")).toBe(1);
+    expect(numberDensity("twenty seven percent")).toBe(1);
+    expect(numberDensity("")).toBe(0);
+  });
+});
+
+describe("dense-turn pacing", () => {
+  const dense: ScriptSegment[] = [{ title: "S1", turns: [{ speaker: "A", text: DENSE_TURN }, { speaker: "B", text: "Das musst du mir noch einmal erklären, bitte." }] }];
+
+  test("a dense turn is slowed by the configured delta; a normal one keeps the host's speed", () => {
+    const hosts: [PodcastHost, PodcastHost] = [
+      { id: "A", name: "Lena", voice: "Rachel", speed: 1.0 },
+      { id: "B", name: "Marco", voice: "Roger", speed: 1.05 },
+    ];
+    const turns = turnsForSynthesis(dense, hosts, "de", { denseThreshold: 0.12, denseSlowdown: 0.06 });
+    expect(turns[0]?.speed).toBeCloseTo(0.94, 5);
+    expect(turns[1]?.speed).toBe(1.05);
+  });
+
+  test("a host with no speed of its own is slowed from 1.0", () => {
+    const turns = turnsForSynthesis(dense, HOSTS, "de", { denseThreshold: 0.12, denseSlowdown: 0.06 });
+    expect(turns[0]?.speed).toBeCloseTo(0.94, 5);
+    // The non-dense turn stays unset, so ElevenLabs keeps the model's own pace.
+    expect(turns[1]?.speed).toBeUndefined();
+  });
+
+  test("the slowed speed is clamped to the 0.7 floor", () => {
+    const slowHosts: [PodcastHost, PodcastHost] = [
+      { id: "A", name: "Lena", voice: "Rachel", speed: 0.72 },
+      { id: "B", name: "Marco", voice: "Roger" },
+    ];
+    const turns = turnsForSynthesis(dense, slowHosts, "de", { denseThreshold: 0.12, denseSlowdown: 0.5 });
+    expect(turns[0]?.speed).toBe(0.7);
+  });
+
+  test("defaults to the config defaults (0.12 / 0.06) when no pacing is passed", () => {
+    const turns = turnsForSynthesis(dense, HOSTS, "de");
+    expect(turns[0]?.speed).toBeCloseTo(0.94, 5);
+    expect(turns[1]?.speed).toBeUndefined();
   });
 });
 

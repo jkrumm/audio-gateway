@@ -1,12 +1,46 @@
 # Podcast pipeline — design
 
-Turns a pile of research notes into a two-host, long-form podcast episode: outline → per-segment
-dialogue → per-turn ElevenLabs synthesis → gapped concat → loudness-normalised, chaptered MP3 →
-optional cover art → optional Audiobookshelf publish. One HTTP `POST /v1/podcasts` kicks off a job
-that runs in the background; `GET /v1/podcasts/:id` polls it. See `src/podcasts.ts` for the
-orchestrator and `README.md` for the API/CLI surface.
+Turns a pile of research notes into a two-host, long-form podcast episode: research → editorial
+brief → outline → per-segment dialogue → per-turn ElevenLabs synthesis → gapped concat →
+loudness-normalised, chaptered MP3 → optional cover art → optional Audiobookshelf publish → optional
+brain note. One HTTP `POST /v1/podcasts` kicks off a job that runs in the background;
+`GET /v1/podcasts/:id` polls it. See `src/podcasts.ts` for the orchestrator and `README.md` for the
+API/CLI surface.
 
-## Two-pass writer (`src/podcast-script.ts`)
+## v2 (2026-09-06)
+
+Five produced episodes were the same episode: the show bible and the outline prompt prescribed one
+shape. v2 removes the fixed dramaturgy from the spec and puts two new stages in front of the
+writers' room:
+
+- **Research** (`src/podcast-research.ts`) — a tool-calling loop (`src/llm-tools.ts`,
+  `PODCAST_RESEARCH_MODEL`) that searches the brain, reads past episodes, and spends a small budget
+  of research-gateway calls, producing a `Dossier` (summary, additions, glossary, prior coverage,
+  open questions). Best-effort — a throw here never fails the job, it just leaves the dossier empty.
+- **Editorial** (`src/podcast-editorial.ts`, `PODCAST_EDITORIAL_MODEL`) — one call that reads the
+  dossier, the listener brief and the last `PODCAST_HISTORY_DEPTH` episode profiles, and decides
+  THIS episode's format, roles, tone, humor, opening/closing, rhythm and length (an `EpisodeBrief`).
+  A parse/LLM failure falls back to a neutral default brief, never the old formula.
+
+Stage order inside `scripting`: `research → editorial → outline → segment → review → revise →
+metadata`. Memory lives in the job ledger (`EpisodeProfile`, persisted once the script locks,
+`durationSeconds` filled after mastering) and `PodcastStore.recentEpisodes` feeds it back to the
+next episode's editor and to the research tools' `past_episodes`/`past_transcript`. A copy goes into
+the second brain as a transcript note (`src/brain-note.ts`, `Areas/Podcasts/`, best-effort git
+add/commit/push) when `BRAIN_DIR` is set and the request's `brainNote` isn't `false`.
+
+The pipeline itself stays in this repo, but it now runs on **two instances**: the VPS keeps
+serving STT/TTS, and the Mac mini runs a second instance (`:7719`) for podcasts specifically —
+the brain is a filesystem checkout that only exists there, and `research.jkrumm.com` is
+tailnet-only. `PODCAST_ENABLED=false` turns the VPS instance's `/v1/podcasts*` into a `410` pointing
+at the mini. Full design + decisions: `docs/podcast-editorial-room.md`.
+
+## Two-pass writer (`src/podcast-script.ts`) — pre-v2 history
+
+Describes the fixed dramaturgy (cold open, running motif, three takeaways) that shipped before v2;
+kept for history. Since v2, shape/roles/opening/closing/length/humor come from the `EpisodeBrief`
+(above), not from this prompt — the numbers below (segment counts, cold-open behaviour) are now
+defaults/fallbacks only.
 
 A single outline call decides the episode's shape — title, description, cover prompt, genres, a
 running `motif`, and `planSegmentCount(minutes)` segments (~4 minutes each, clamped to 3–9), each
@@ -26,7 +60,12 @@ words or more. Turn length and rhythm are NOT quota-driven — see "Writers' roo
 ~1400 chars OR ~180 words at sentence boundaries (same speaker), and folds a short leading fragment
 ("Echt?") into its same-speaker predecessor.
 
-## Writers' room: dramaturgy, review and revision (`src/podcast-script.ts`)
+## Writers' room: dramaturgy, review and revision (`src/podcast-script.ts`) — pre-v2 history
+
+Since v2 the outline/segment/review prompts pull shape, roles, tone, humor, opening/closing and
+rhythm from the `EpisodeBrief`, not from a house formula — devices (hook/motif/reveals/digressions)
+are filled only when the brief's `devices` list asks for them. Review/revision/metadata mechanics
+below are unchanged.
 
 A two-pass writer (outline → parallel segments) reliably produces on-topic dialogue, but it reads like
 a report given quotas, not a conversation with a shape — the rhythm rules used to be numeric ("half of
@@ -188,6 +227,17 @@ row.
 | `PODCAST_AUTHOR` | `Hermes` | Author/artist tag on published episodes. |
 | `ABS_URL` / `ABS_API_KEY` / `ABS_LIBRARY` | unset / unset / `Podcasts` | Audiobookshelf base URL, API key, and target podcast library — unset disables publishing entirely. |
 | `IMAGE_GEN_URL` / `IMAGE_GEN_API_KEY` | unset / unset | image-gen gateway for cover art — unset disables covers entirely. |
+| `PODCAST_ENABLED` | `true` | Serve `/v1/podcasts*` at all; `false` → every route `410`s with a pointer to the mini instance. |
+| `BRAIN_DIR` | unset | Vault checkout the research tools read and the episode note is written into; empty disables both. |
+| `RESEARCH_GATEWAY_URL` | `https://research.jkrumm.com` | research-gateway base (tailnet-only). |
+| `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
+| `PODCAST_RESEARCH_MODEL` | `gpt-5.6-luna` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
+| `PODCAST_EDITORIAL_MODEL` | `claude-opus-5` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
+| `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls the researcher may spend per job. |
+| `PODCAST_TOOL_MAX_ROUNDS` | `12` | Tool-loop rounds per job before the researcher is forced to conclude. |
+| `PODCAST_HISTORY_DEPTH` | `8` | How many recent episode profiles the editor (and `past_episodes`) sees. |
+| `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | Number-word density above which a turn is synthesized slower. |
+| `PODCAST_DENSE_TURN_SLOWDOWN` | `0.06` | Speed delta applied to dense turns (clamped to the 0.7 floor). |
 
 ## Tuning after the first episode (2026-09-02)
 

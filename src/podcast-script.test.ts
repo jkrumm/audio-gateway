@@ -26,9 +26,13 @@ const {
   parseSegmentTurns,
   sanitizeTurns,
   writePodcastScript,
+  buildEpisodeProfile,
   loadShowBible,
   V3_PODCAST_TAGS,
 } = await import("./podcast-script");
+const { EMPTY_DOSSIER } = await import("./podcast-types");
+type EpisodeBrief = import("./podcast-types").EpisodeBrief;
+type Dossier = import("./podcast-types").Dossier;
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -53,12 +57,99 @@ const HOSTS: [import("./podcast-script").PodcastHost, import("./podcast-script")
   { id: "B", name: "Marco", voice: "Roger" },
 ];
 
+const BASE_BRIEF: EpisodeBrief = {
+  format: "Erklärstück",
+  rationale: "Die letzten Folgen waren Streitgespräche.",
+  minutes: 12,
+  segments: 3,
+  roles: { A: "erklärt die Rechnung", B: "fragt für den Hörer nach" },
+  tone: "ruhig, konkret",
+  humor: "sparse",
+  opening: "Direkt rein mit dem Thema, kein Cold Open.",
+  closing: "Aufhören, wenn das Argument fertig ist.",
+  rhythm: "Lange Turns bei A, kurze Einwürfe bei B.",
+  devices: [],
+  avoid: [],
+  glossaryPolicy: "Namen erst als das einführen, was sie sind.",
+};
+
+const briefWith = (overrides: Partial<EpisodeBrief>): EpisodeBrief => ({ ...BASE_BRIEF, ...overrides });
+
 describe("planSegmentCount", () => {
   test("clamps to the 3..9 range around ~4 minutes per segment", () => {
     expect(planSegmentCount(1)).toBe(3);
     expect(planSegmentCount(12)).toBe(3);
     expect(planSegmentCount(20)).toBe(5);
     expect(planSegmentCount(100)).toBe(9);
+  });
+});
+
+describe("buildEpisodeProfile", () => {
+  const words = (n: number): string => Array.from({ length: n }, () => "wort").join(" ");
+  const scriptWith = (segments: import("./podcast-script").ScriptSegment[], topics: string[] = ["Maut", "Van"]) =>
+    ({
+      title: "t",
+      description: "d",
+      coverPrompt: "c",
+      genres: [],
+      language: "de" as const,
+      segments,
+      wordCount: 0,
+      topics,
+    }) satisfies import("./podcast-script").PodcastScript;
+
+  test("computes lead from the word share and copies the brief's decisions", () => {
+    const profile = buildEpisodeProfile({
+      brief: briefWith({ format: "Erklärstück", humor: "none", opening: "Direkt rein.", minutes: 9 }),
+      script: scriptWith([
+        { title: "S1", turns: [{ speaker: "A", text: words(80) }, { speaker: "B", text: words(20) }] },
+      ]),
+      dossier: EMPTY_DOSSIER,
+    });
+    expect(profile.lead).toBe("A");
+    expect(profile.format).toBe("Erklärstück");
+    expect(profile.humor).toBe("none");
+    expect(profile.opening).toBe("Direkt rein.");
+    expect(profile.minutes).toBe(9);
+    expect(profile.segmentCount).toBe(1);
+    expect(profile.topics).toEqual(["Maut", "Van"]);
+    expect(profile.durationSeconds).toBeNull();
+  });
+
+  test("a share within 10 percentage points is balanced, beyond it is not", () => {
+    const balanced = buildEpisodeProfile({
+      brief: BASE_BRIEF,
+      script: scriptWith([{ title: "S1", turns: [{ speaker: "A", text: words(55) }, { speaker: "B", text: words(45) }] }]),
+      dossier: EMPTY_DOSSIER,
+    });
+    expect(balanced.lead).toBe("balanced");
+
+    const leaning = buildEpisodeProfile({
+      brief: BASE_BRIEF,
+      script: scriptWith([{ title: "S1", turns: [{ speaker: "A", text: words(44) }, { speaker: "B", text: words(56) }] }]),
+      dossier: EMPTY_DOSSIER,
+    });
+    expect(leaning.lead).toBe("B");
+  });
+
+  test("an empty script is balanced rather than a division by zero", () => {
+    const profile = buildEpisodeProfile({ brief: BASE_BRIEF, script: scriptWith([]), dossier: EMPTY_DOSSIER });
+    expect(profile.lead).toBe("balanced");
+    expect(profile.segmentCount).toBe(0);
+  });
+
+  test("counts the dossier's tool calls, research calls separately", () => {
+    const dossier: Dossier = {
+      ...EMPTY_DOSSIER,
+      toolCalls: [
+        { tool: "brain_search", args: {}, ok: true, ms: 5 },
+        { tool: "research", args: {}, ok: true, ms: 900 },
+        { tool: "research", args: {}, ok: false, ms: 900 },
+      ],
+    };
+    const profile = buildEpisodeProfile({ brief: BASE_BRIEF, script: scriptWith([]), dossier });
+    expect(profile.toolCalls).toBe(3);
+    expect(profile.researchCalls).toBe(2);
   });
 });
 
@@ -137,6 +228,29 @@ describe("parseOutline", () => {
     expect(outline.hook).toBe("");
     expect(outline.reveals).toEqual([]);
     expect(outline.digressions).toEqual([]);
+  });
+
+  test("accepts an outline that deliberately declines every dramaturgy device (empty strings and arrays)", () => {
+    const outline = parseOutline(
+      JSON.stringify({
+        title: "Ein dichter Durchgang",
+        description: "D",
+        cover_prompt: "P",
+        genres: ["Tech"],
+        motif: "",
+        through_line: "",
+        hook: "",
+        reveals: [],
+        digressions: [],
+        segments: [{ title: "S1", goal: "g", key_facts: [], target_words: 700, tension: "" }],
+      }),
+    );
+    expect(outline.motif).toBe("");
+    expect(outline.hook).toBe("");
+    expect(outline.throughLine).toBe("");
+    expect(outline.reveals).toEqual([]);
+    expect(outline.digressions).toEqual([]);
+    expect(outline.segments).toHaveLength(1);
   });
 
   test("clamps a reveal/digression segment index onto a real segment", () => {
@@ -297,6 +411,8 @@ const BASE_REQUEST = {
   minutes: 12,
   hosts: HOSTS,
   series: "Roadtrip Radio",
+  dossier: EMPTY_DOSSIER,
+  episodeBrief: BASE_BRIEF,
 };
 
 const MODELS = {
@@ -495,6 +611,254 @@ describe("writePodcastScript", () => {
     expect(outlineSystemPrompt).toContain("Hosts never say 'als KI'.");
   });
 
+  test("the episode brief drives segment count and target words, not planSegmentCount(minutes)", async () => {
+    let outlineSystemPrompt = "";
+    const segmentPrompts: string[] = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineSystemPrompt = systemPrompt;
+        return chatCompletion(
+          JSON.stringify({
+            title: "T",
+            description: "D",
+            cover_prompt: "P",
+            genres: [],
+            segments: [{ title: "Nur eins", goal: "g", key_facts: [], target_words: 500, tension: "t" }],
+          }),
+        );
+      }
+      segmentPrompts.push(systemPrompt);
+      return segmentResponse(0);
+    });
+
+    // minutes: 12 would give planSegmentCount -> 3 segments and 1680 target words.
+    await writePodcastScript(
+      { ...BASE_REQUEST, episodeBrief: briefWith({ segments: 1, minutes: 5 }) },
+      { models: MODELS, concurrency: 2, review: false, metadata: false },
+    );
+
+    expect(outlineSystemPrompt).toContain("Produce exactly 1 segments");
+    expect(outlineSystemPrompt).toContain("about 5 minutes");
+    expect(outlineSystemPrompt).toContain("about 700 words in total");
+    expect(segmentPrompts).toHaveLength(1);
+    expect(segmentPrompts[0]).toContain("ONE SEGMENT (1 of 1)");
+  });
+
+  test("the brief's opening/closing replace the hardcoded cold open and three takeaways", async () => {
+    let outlineSystemPrompt = "";
+    const segmentPrompts: string[] = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineSystemPrompt = systemPrompt;
+        return outlineResponse();
+      }
+      segmentPrompts.push(systemPrompt);
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    await writePodcastScript(
+      {
+        ...BASE_REQUEST,
+        episodeBrief: briefWith({
+          opening: "Straight in with the number nobody expected, no station intro.",
+          closing: "Stop when the argument is finished.",
+        }),
+      },
+      { models: MODELS, concurrency: 3, review: false, metadata: false },
+    );
+
+    // No formula left anywhere in the prompts.
+    for (const prompt of [outlineSystemPrompt, ...segmentPrompts]) {
+      expect(prompt).not.toContain("cold open plus a short intro");
+      expect(prompt).not.toContain("three concrete takeaways");
+      expect(prompt).not.toContain("one running joke or motif across the episode");
+    }
+    expect(outlineSystemPrompt).toContain("Straight in with the number nobody expected");
+    expect(outlineSystemPrompt).toContain("Stop when the argument is finished.");
+
+    const first = segmentPrompts.find((p) => p.includes("ONE SEGMENT (1 of 3)")) ?? "";
+    const last = segmentPrompts.find((p) => p.includes("ONE SEGMENT (3 of 3)")) ?? "";
+    expect(first).toContain("the brief's OPENING is binding: Straight in with the number nobody expected");
+    expect(first).toContain("Do not add a cold open");
+    expect(last).toContain("the brief's CLOSING is binding: Stop when the argument is finished.");
+    expect(last).toContain("Do not add takeaways");
+  });
+
+  test("devices, avoid and the humor level are rendered only when the brief sets them", async () => {
+    const capture = async (episodeBrief: EpisodeBrief): Promise<string> => {
+      let prompt = "";
+      setFetch(async (_url, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+        const systemPrompt = body.messages[0]?.content ?? "";
+        if (systemPrompt.includes("You are writing the OUTLINE")) {
+          prompt = systemPrompt;
+          return outlineResponse();
+        }
+        return segmentResponse(0);
+      });
+      await writePodcastScript({ ...BASE_REQUEST, episodeBrief }, { models: MODELS, concurrency: 3, review: false, metadata: false });
+      return prompt;
+    };
+
+    const bare = await capture(briefWith({ devices: [], avoid: [], humor: "none" }));
+    expect(bare).not.toContain("Devices to use");
+    expect(bare).not.toContain("Avoid (patterns from recent episodes");
+    expect(bare).toContain("Humor: none — write no jokes at all.");
+
+    const rich = await capture(
+      briefWith({ devices: ["a motif: the broken coffee machine"], avoid: ["the number-then-Warte cold open"], humor: "natural" }),
+    );
+    expect(rich).toContain("Devices to use (and only these): a motif: the broken coffee machine");
+    expect(rich).toContain("Avoid (patterns from recent episodes, do not repeat them): the number-then-Warte cold open");
+    expect(rich).toContain("Humor: natural — let humor happen");
+  });
+
+  test("the dossier's additions, glossary, prior coverage and open questions reach the outline and segment user content", async () => {
+    const userContents: string[] = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      userContents.push(body.messages[1]?.content ?? "");
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(
+      {
+        ...BASE_REQUEST,
+        dossier: {
+          summary: "Es geht um die Maut.",
+          additions: [{ source: "brain: Areas/Travel/Maut.md", text: "Die Vignette gilt zehn Tage." }],
+          glossary: [{ term: "ASFINAG", plain: "die Firma, die Österreichs Autobahnen betreibt" }],
+          priorCoverage: [{ episodeId: "e1", title: "Folge eins", covered: "die Route über den Brenner" }],
+          openQuestions: ["Gilt die Vignette auch für den Anhänger?"],
+          toolCalls: [],
+        },
+      },
+      { models: MODELS, concurrency: 3, review: false, metadata: false },
+    );
+
+    expect(userContents.length).toBeGreaterThan(1);
+    for (const content of userContents) {
+      expect(content).toContain("[brain: Areas/Travel/Maut.md]\nDie Vignette gilt zehn Tage.");
+      expect(content).toContain("ASFINAG — die Firma, die Österreichs Autobahnen betreibt");
+      expect(content).toContain("PRIOR COVERAGE (do not repeat");
+      expect(content).toContain("Folge eins: die Route über den Brenner");
+      expect(content).toContain("Gilt die Vignette auch für den Anhänger?");
+    }
+  });
+
+  test("an empty dossier renders no ADDITIONS/GLOSSARY headings at all", async () => {
+    let outlineUserContent = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineUserContent = body.messages[1]?.content ?? "";
+        return outlineResponse();
+      }
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 3, review: false, metadata: false });
+
+    expect(outlineUserContent).not.toContain("ADDITIONS");
+    expect(outlineUserContent).not.toContain("GLOSSARY");
+    expect(outlineUserContent).not.toContain("PRIOR COVERAGE");
+    expect(outlineUserContent).not.toContain("OPEN QUESTIONS");
+  });
+
+  test("the dramaturge reviews against the brief; the fact editor flags figure clusters and unintroduced names", async () => {
+    let dramaturgePrompt = "";
+    let factEditorPrompt = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      if (systemPrompt.includes("You are the DRAMATURGE")) {
+        dramaturgePrompt = systemPrompt;
+        return chatCompletion(JSON.stringify({ notes: [], verdict: "ok" }));
+      }
+      if (systemPrompt.includes("You are the FACT & SPEECH EDITOR")) {
+        factEditorPrompt = systemPrompt;
+        return chatCompletion(JSON.stringify({ notes: [], verdict: "ok" }));
+      }
+      if (systemPrompt.includes("You are the CONVERSATION COACH")) return chatCompletion(JSON.stringify({ notes: [], verdict: "ok" }));
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    await writePodcastScript(
+      { ...BASE_REQUEST, episodeBrief: briefWith({ format: "Kurzbriefing" }) },
+      { models: { ...MODELS, review: ["review-model-1"] }, concurrency: 3, review: true, metadata: false },
+    );
+
+    expect(dramaturgePrompt).toContain("AGAINST ITS EPISODE BRIEF");
+    expect(dramaturgePrompt).toContain("THE BRIEF THIS EPISODE OWES:");
+    expect(dramaturgePrompt).toContain("Format: Kurzbriefing");
+    expect(dramaturgePrompt).toContain("devices NOBODY asked for");
+    expect(factEditorPrompt).toContain("FIGURE CLUSTERS and UNINTRODUCED NAMES");
+    expect(factEditorPrompt).toContain("before the hosts said what it IS in plain words");
+  });
+
+  test("the numbers-and-names non-negotiable is in every writer prompt", async () => {
+    const prompts: string[] = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      prompts.push(systemPrompt);
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 3, review: false, metadata: false });
+
+    expect(prompts).toHaveLength(4);
+    for (const prompt of prompts) {
+      expect(prompt).toContain("One figure per sentence");
+      expect(prompt).toContain("Round, unless the precision IS the point");
+      expect(prompt).toContain("WHAT IT IS before WHAT IT IS CALLED");
+      expect(prompt).toContain("Open questions stay open");
+      // Roles come from the brief, never from a hardcoded host description.
+      expect(prompt).not.toContain("the curious co-host");
+      expect(prompt).toContain("comes from the EPISODE BRIEF below");
+    }
+  });
+
+  test("the metadata pass's topics land on the script; a skipped metadata pass leaves them empty", async () => {
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      if (systemPrompt.includes("You are the final METADATA EDITOR")) {
+        return chatCompletion(
+          JSON.stringify({
+            title: "T",
+            description: "D",
+            cover_prompt: "C",
+            genres: ["Travel"],
+            topics: ["Maut", "Vignette", "Van"],
+            chapters: [],
+          }),
+        );
+      }
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    const withMetadata = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 3, review: false });
+    expect(withMetadata.topics).toEqual(["Maut", "Vignette", "Van"]);
+
+    const withoutMetadata = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 3, review: false, metadata: false });
+    expect(withoutMetadata.topics).toEqual([]);
+  });
+
   test("a missing show bible file does not fail the outline prompt", async () => {
     let outlineSystemPrompt = "";
     setFetch(async (_url, init) => {
@@ -599,5 +963,12 @@ describe("metadata pass — partial reply", () => {
     expect(parsed.title).toBe("");
     expect(parsed.description).toBe("Neu.");
     expect(parsed.chapters).toEqual([{ segmentIndex: 0, title: "Kalt" }]);
+    expect(parsed.topics).toEqual([]);
+  });
+
+  test("topics are trimmed and blanks dropped", async () => {
+    const { parseEpisodeMetadata } = await import("./podcast-script");
+    const parsed = parseEpisodeMetadata('{"topics":["  Maut ","", "Vignette", 7]}', 1);
+    expect(parsed.topics).toEqual(["Maut", "Vignette"]);
   });
 });

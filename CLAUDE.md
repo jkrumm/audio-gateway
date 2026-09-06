@@ -1,11 +1,13 @@
 # audio-gateway — Project Guide
 
 OpenAI-compatible audio service (STT + expressive Gemini TTS + Replicate/ElevenLabs TTS) fronting
-the IU unified audio endpoint. The **single source of truth** for audio in the personal stack —
-deployed as a single Docker container on the VPS (consumed by Argo in-cluster on the shared
-`proxy` network, Hermes over the tailnet). Local development runs on the Mac via `bun run dev`
-(`:7714`). Replaced the original `audio-proxy` and Argo's previously-duplicated native pipeline
-(both retired 2026-06-17).
+the IU unified audio endpoint. The **single source of truth** for audio in the personal stack.
+Same image and code run on **two instances**: the VPS (Docker container, consumed by Argo in-cluster
+on the shared `proxy` network, Hermes over the tailnet) serves STT/TTS; the **Mac mini** runs a
+LaunchAgent instance (`:7719`) dedicated to the long-form **podcast** pipeline, because the second
+brain and the research gateway are only reachable from there. Local development runs on the Mac via
+`bun run dev` (`:7714`). Replaced the original `audio-proxy` and Argo's previously-duplicated native
+pipeline (both retired 2026-06-17).
 
 ## Stack
 - Bun + TypeScript (strict). **No runtime npm dependencies** — Bun built-ins only
@@ -40,22 +42,51 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 - `src/audio.ts` — the ffmpeg/ffprobe process boundary: PCM/WAV framing, chunk concatenation,
   `transcode` (between raw PCM / auto-detected containers and mp3/opus/wav/pcm output), and
   `audioDuration`. Shared by both TTS lanes and STT duration probing.
-- `src/podcasts.ts` — long-form podcast orchestrator: job ledger (`bun:sqlite`), the one-job-at-a-time
-  queue, the `runPodcastJob` pipeline (script → synth → mux/master → cover → publish), and the
-  `/v1/podcasts*` HTTP handlers (`handlePodcasts`/`isPodcastPath`, mounted from `index.ts`).
-- `src/podcast-script.ts` — the writers' room: a role split with one voice owner — an outline model
-  plans the story (through-line, spoiler-free hook, planned reveals and digressions, motif, segments),
-  the write model owns every segment AND every revision, every reviewer role (dramaturge, conversation
-  coach, fact & speech editor) runs on every listed review model in parallel (advisory only), and a
-  final metadata model writes the locked script's title/description/cover prompt/genres/chapter
-  titles; a show bible is injected verbatim into the writer/reviewer prompts. Rhythm is the LLM's
-  call, only tag vocabulary and turn ceilings are enforced in code (`sanitizeTurns`).
+- `src/podcast-types.ts` — pure shared shapes of the v2 podcast pipeline (`Dossier`, `EpisodeBrief`,
+  `EpisodeProfile`, `EpisodeSummary`, `EpisodeHistory`) — no imports, so research/editorial/script/
+  ledger modules depend on this file, not on each other.
+- `src/llm-tools.ts` — a generic OpenAI-dialect tool-calling loop (`runToolLoop`) over `fetch`,
+  shared by every stage that needs the model to call tools (currently the researcher). Echoes the
+  assistant message back into `messages` UNCHANGED (not rebuilt from parsed fields) so a provider
+  that smuggles state through opaque extra fields (e.g. Gemini's `thought_signature`) round-trips.
+- `src/podcast-research.ts` — the research stage: a tool-calling loop (`runPodcastResearch`) giving
+  the writers' room eyes on the listener's second brain (`brain_search`/`brain_read`, path-contained
+  under `BRAIN_DIR`), past episodes (`past_episodes`/`past_transcript`, backed by an `EpisodeHistory`
+  the caller injects), and a budgeted research-gateway tool. Also exports `readBrainNotes` (reads
+  `sourcePaths` up front). Produces a `Dossier`; best-effort — the caller decides what to do on throw.
+- `src/podcast-editorial.ts` — the editorial room: one call (`decideEpisodeBrief`, no tools) that
+  reads the dossier, the listener brief and the recent episode profiles, and decides THIS episode's
+  format, roles, tone, humor, opening/closing, rhythm and length as a free-form `EpisodeBrief`,
+  bounded only by hard limits (segments 1–9, minutes clamped to the request bounds). A parse/LLM
+  failure falls back to `defaultEpisodeBrief` — a neutral conversation, never the old fixed formula.
+- `src/podcasts.ts` — long-form podcast orchestrator: job ledger (`bun:sqlite`, incl.
+  `PodcastStore.recentEpisodes`), the one-job-at-a-time queue, the `runPodcastJob` pipeline
+  (research → editorial → script → synth → mux/master → cover → publish → brain note), and the
+  `/v1/podcasts*` HTTP handlers (`handlePodcasts`/`isPodcastPath`, mounted from `index.ts`; 410s
+  every route when `config.podcastEnabled` is off).
+- `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
+  dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,
+  roles, tone, humor, opening, closing and rhythm; devices (hook/motif/reveals/digressions) are
+  filled only when the brief's `devices` list asks for one. The outline model plans the story inside
+  what the brief already decided; the write model owns every segment AND every revision; every
+  reviewer role (dramaturge, conversation coach, fact & speech editor) runs on every listed review
+  model in parallel (advisory only, judged against the brief, not a fixed curve); a final metadata
+  model writes the locked script's title/description/cover prompt/genres/chapter titles/topics; a
+  show bible is injected verbatim into the writer/reviewer prompts. Only tag vocabulary, turn
+  ceilings and segment bounds are enforced in code (`sanitizeTurns`).
 - `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes each on the
-  Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode.
+  Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode. `turnsForSynthesis`
+  also does number-density pacing: a turn thick with figures (`numberDensity`) is synthesized a notch
+  slower (`config.podcastDenseTurnThreshold`/`podcastDenseTurnSlowdown`) — ElevenLabs v3 has no SSML
+  breaks, so `speed` is the only lever.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
   (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
 - `src/cover.ts` — episode cover art via the image-gen gateway; best-effort, never fails a job.
 - `src/audiobookshelf.ts` — Audiobookshelf publish client: upload → scan → poll → patch metadata/cover/episode.
+- `src/brain-note.ts` — writes a finished episode's transcript back into the second brain
+  (`Areas/Podcasts/<date> <title>.md`, plus a regenerated `Areas/Podcasts/Podcasts.md` folder note),
+  then best-effort `git add`/`commit`/`push` in the vault checkout. Every step logs and stops the
+  chain on failure rather than throwing — a filed note is polish, not the episode.
 - `src/otel.ts` — hand-rolled OpenTelemetry exporter (no SDK, `fetch` only) to an OTLP/HTTP JSON
   collector. One root span per request (`audio.speech`/`audio.transcription`, kind SERVER) with
   child spans per pipeline stage (`audio.prep`, `audio.synth.chunk`, `audio.decode`,
@@ -84,14 +115,25 @@ deployed as a single Docker container on the VPS (consumed by Argo in-cluster on
 
 ## Run
 - Dev: `bun run dev` (`secrets-run` injects secrets from `.env.tpl` — drop-in op shim: live `op` on the MacBook, encrypted cache on the mini; listens on `:7714`).
-- VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime.
-- `bun run podcast -- --source <file.md|-> [--minutes N] [--publish] [...]` — CLI for the long-form
-  podcast pipeline (submit, poll progress, download the finished episode); see `docs/podcast.md`.
+- VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime. Serves STT/TTS;
+  `PODCAST_ENABLED=false` once the mini instance owns the podcast pipeline.
+- Mac mini prod: a LaunchAgent instance dedicated to podcasts (`launchd/`, `.env.mini.tpl`, port
+  `7719`). `make launchd-install | launchd-status | launchd-restart | launchd-logs | launchd-uninstall`
+  manage it; `make seed-ledger` copies the VPS podcast job ledger + episode artifacts onto the mini
+  so it starts with existing episodes as editorial memory.
+- `bun run podcast -- --source <file.md|-> [--path <brain path>]... [--minutes N] [--publish]
+  [--no-research] [--pin-minutes] [--no-brain-note] [...]` — CLI for the long-form podcast pipeline
+  (submit, poll progress, download the finished episode), talks to the mini instance by default; see
+  `docs/podcast.md`.
 - `bun run usage:tail [--db <path>] [--prod] [--since 30m|2h|1d|<ISO>] [--limit N] [--json]` — a
   readable per-request usage timeline (mode, stage timings, text snippets) for reviewing TTS/STT
   quality; `--prod` scp's the VPS SQLite file (+ WAL/SHM) to a temp dir first.
 
 ## Reference
+`docs/podcast-editorial-room.md` — the v2 podcast pipeline design (research, editorial brief, memory,
+the two-instance split); `docs/podcast.md` is the fuller design doc + knobs, marking the pre-v2
+fixed-dramaturgy sections as history.
+
 `docs/hyperdx-dashboard.md` — the ClickStack span model and the tile definitions (search + SQL) for the
 HyperDX "Audio" dashboard; `bun run usage:tail --prod` is the terminal view of the same requests.
 

@@ -26,8 +26,48 @@ export interface UsageDbRow {
   text_json: string | null;
 }
 
-const REQUEST_ENDPOINTS = new Set(["speech-request", "transcription-request"]);
+const REQUEST_ENDPOINTS = new Set(["speech-request", "transcription-request", "podcast-request"]);
 const PREP_ENDPOINTS = new Set(["speech-prep", "speech-summary"]);
+
+/** Podcast pipeline stage endpoints (docs/podcast-editorial-room.md), joined onto a `podcast-request` line by request_id. */
+const PODCAST_STAGE_ENDPOINTS: Record<string, string> = {
+  "podcast-research": "research",
+  "podcast-editorial": "editorial",
+  "podcast-outline": "outline",
+  "podcast-segment": "segment",
+  "podcast-review": "review",
+  "podcast-metadata": "metadata",
+};
+
+/** research/editorial/outline/metadata are sequential calls (attempts/rounds) — sum. segment/review fan out in parallel — max approximates wall-clock, mirrors `synthMs` below. */
+const PODCAST_STAGE_AGGREGATION: Record<string, "sum" | "max"> = {
+  research: "sum",
+  editorial: "sum",
+  outline: "sum",
+  segment: "max",
+  review: "max",
+  metadata: "sum",
+};
+
+function aggregateLatencyMs(rows: UsageDbRow[], mode: "sum" | "max"): number {
+  return mode === "max" ? Math.max(...rows.map((r) => r.latency_ms)) : rows.reduce((sum, r) => sum + r.latency_ms, 0);
+}
+
+/** Group a podcast-request's sibling rows by pipeline stage and aggregate each stage's latency. `null` when no stage rows joined (e.g. research skipped, or pre-v2 history). */
+function buildPodcastStages(siblings: UsageDbRow[]): Record<string, number> | null {
+  const byStage = new Map<string, UsageDbRow[]>();
+  for (const sibling of siblings) {
+    const stage = PODCAST_STAGE_ENDPOINTS[sibling.endpoint];
+    if (!stage) continue;
+    const bucket = byStage.get(stage);
+    if (bucket) bucket.push(sibling);
+    else byStage.set(stage, [sibling]);
+  }
+  if (byStage.size === 0) return null;
+  const out: Record<string, number> = {};
+  for (const [stage, stageRows] of byStage) out[stage] = aggregateLatencyMs(stageRows, PODCAST_STAGE_AGGREGATION[stage] ?? "sum");
+  return out;
+}
 
 interface SpeechUsageJson {
   mode?: string | null;
@@ -47,7 +87,7 @@ interface TextJson {
 export interface RequestLine {
   id: number;
   ts: string;
-  endpoint: "speech-request" | "transcription-request";
+  endpoint: "speech-request" | "transcription-request" | "podcast-request";
   requestId: string | null;
   caller: string | null;
   model: string;
@@ -70,6 +110,8 @@ export interface RequestLine {
   prepMs: number | null;
   synthMs: number | null;
   sttMs: number | null;
+  /** `podcast-request` lines only: stage name → aggregated latency ms (research, editorial, outline, segment, review, metadata). */
+  podcastStages: Record<string, number> | null;
 }
 
 function parseJson<T>(raw: string | null): T | null {
@@ -111,7 +153,7 @@ export function buildRequestLines(rows: UsageDbRow[]): RequestLine[] {
     lines.push({
       id: row.id,
       ts: row.ts,
-      endpoint: row.endpoint as "speech-request" | "transcription-request",
+      endpoint: row.endpoint as "speech-request" | "transcription-request" | "podcast-request",
       requestId: row.request_id,
       caller: row.caller,
       model: row.model,
@@ -136,15 +178,17 @@ export function buildRequestLines(rows: UsageDbRow[]): RequestLine[] {
       // better than summing them.
       synthMs: synthRows.length > 0 ? Math.max(...synthRows.map((r) => r.latency_ms)) : null,
       sttMs: sttRows.length > 0 ? sttRows.reduce((sum, r) => sum + r.latency_ms, 0) : null,
+      podcastStages: row.endpoint === "podcast-request" ? buildPodcastStages(siblings) : null,
     });
   }
 
   return lines;
 }
 
-/** Rollup key: lane/mode for speech requests, "transcription" for STT requests. */
+/** Rollup key: lane/mode for speech requests, "transcription" for STT requests, "podcast" for podcast jobs. */
 export function rollupKey(line: RequestLine): string {
   if (line.endpoint === "transcription-request") return "transcription";
+  if (line.endpoint === "podcast-request") return "podcast";
   return `${line.lane ?? "unknown"}/${line.mode ?? "unknown"}`;
 }
 
@@ -239,6 +283,24 @@ export function formatLine(line: RequestLine): string {
       `${fmtSeconds(line.totalLatencyMs)}${statusTag}`,
       audio,
       snippet ? `▸ ${snippet}` : null,
+    ]
+      .filter((part): part is string => part !== null)
+      .join("  ");
+  }
+
+  if (line.endpoint === "podcast-request") {
+    const stages = line.podcastStages
+      ? Object.entries(line.podcastStages)
+          .map(([stage, ms]) => `${stage} ${fmtSeconds(ms)}`)
+          .join(" · ")
+      : null;
+    return [
+      time,
+      "podcast",
+      line.model,
+      line.title ? `"${line.title}"` : null,
+      `${fmtSeconds(line.totalLatencyMs)} total${statusTag}`,
+      stages ? `(${stages})` : null,
     ]
       .filter((part): part is string => part !== null)
       .join("  ");

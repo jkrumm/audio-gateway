@@ -229,6 +229,25 @@ Layered; `bun test` stays hermetic and credential-free, live e2e is opt-in:
   resolves and responds **only** over the tailnet; RollHook deploy-on-push works.
 - No `any` without a justifying comment; no real secrets committed; `bun.lock` committed.
 
+## Phase 4 — the editorial room (2026-09-06)
+
+The long-form podcast pipeline (added after this PRD, see `docs/podcast.md`) got a second generation;
+full design in `docs/podcast-editorial-room.md`. Three decisions there diverge from statements made
+earlier in this document:
+
+1. **No Mac prod instance → a Mac mini LaunchAgent for podcasts.** The Purpose section above says
+   "There is no Mac LaunchAgent and no Mac prod instance." That now holds only for STT/TTS: the
+   podcast pipeline runs a dedicated LaunchAgent instance on the Mac mini (`:7719`, `launchd/`,
+   `.env.mini.tpl`), because the second brain and the research gateway are only reachable from there.
+2. **Fixed dramaturgy → an editorial brief.** The podcast writers' room originally prescribed one
+   show shape (cold open, running motif, three takeaways) for every episode. An editorial stage now
+   decides format, roles, tone, humor, length and rhythm per episode against the material and the
+   history of recent episodes; the fixed formula is gone from the prompts.
+3. **Single instance → two instances.** "Topology decision: ONE deployment" (above) still holds for
+   STT/TTS — the VPS stays the single source of truth there. The podcast pipeline is the one
+   exception: the same image and code now also run on the mini, and `PODCAST_ENABLED=false` retires
+   the VPS's `/v1/podcasts*` once the mini instance is trusted.
+
 ## Implementer instructions
 
 1. Read `docs/reference/audio-proxy-spec.md` (the contract) AND the source under `../audio-proxy/src/`:

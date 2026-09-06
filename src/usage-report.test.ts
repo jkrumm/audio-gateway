@@ -132,6 +132,38 @@ describe("buildRequestLines", () => {
     const [line] = buildRequestLines(rows);
     expect(line?.error).toBe(true);
   });
+
+  test("joins a podcast-request row with research/editorial/outline/segment/review/metadata siblings by request_id", () => {
+    const rows: UsageDbRow[] = [
+      row({ request_id: "job-1", endpoint: "podcast-research", latency_ms: 4000 }),
+      row({ request_id: "job-1", endpoint: "podcast-research", latency_ms: 3000 }), // a second tool-loop round — research sums
+      row({ request_id: "job-1", endpoint: "podcast-editorial", latency_ms: 2500 }),
+      row({ request_id: "job-1", endpoint: "podcast-outline", latency_ms: 6000 }),
+      row({ request_id: "job-1", endpoint: "podcast-segment", latency_ms: 8000 }),
+      row({ request_id: "job-1", endpoint: "podcast-segment", latency_ms: 9500 }), // parallel segments — max wins
+      row({ request_id: "job-1", endpoint: "podcast-review", latency_ms: 3000 }),
+      row({ request_id: "job-1", endpoint: "podcast-review", latency_ms: 4200 }), // parallel reviewers — max wins
+      row({ request_id: "job-1", endpoint: "podcast-metadata", latency_ms: 1800 }),
+      row({
+        request_id: "job-1",
+        endpoint: "podcast-request",
+        model: "elevenlabs/v3",
+        latency_ms: 120_000,
+        usage_json: JSON.stringify({ title: "Der Camper-Plan" }),
+      }),
+    ];
+
+    const [line] = buildRequestLines(rows);
+    expect(line?.endpoint).toBe("podcast-request");
+    expect(line?.title).toBe("Der Camper-Plan");
+    expect(line?.podcastStages).toEqual({ research: 7000, editorial: 2500, outline: 6000, segment: 9500, review: 4200, metadata: 1800 });
+  });
+
+  test("a podcast-request row with no joined stage rows gets podcastStages: null", () => {
+    const rows: UsageDbRow[] = [row({ request_id: "job-2", endpoint: "podcast-request" })];
+    const [line] = buildRequestLines(rows);
+    expect(line?.podcastStages).toBeNull();
+  });
 });
 
 describe("computeRollups", () => {
@@ -173,6 +205,12 @@ describe("computeRollups", () => {
     const [rollup] = computeRollups(buildRequestLines(rows));
     expect(rollup?.key).toBe("transcription");
   });
+
+  test("podcast-request rows roll up under the 'podcast' key", () => {
+    const rows: UsageDbRow[] = [row({ request_id: "p1", endpoint: "podcast-request" })];
+    const [rollup] = computeRollups(buildRequestLines(rows));
+    expect(rollup?.key).toBe("podcast");
+  });
 });
 
 describe("formatLine / formatRollup", () => {
@@ -207,6 +245,26 @@ describe("formatLine / formatRollup", () => {
     const formatted = formatLine(line!);
     expect(formatted).toContain("transcription");
     expect(formatted).toContain("6.6s audio");
+  });
+
+  test("formats a podcast-request line with the joined stage timings", () => {
+    const rows: UsageDbRow[] = [
+      row({ request_id: "fmt-3", endpoint: "podcast-research", latency_ms: 4000 }),
+      row({ request_id: "fmt-3", endpoint: "podcast-editorial", latency_ms: 2000 }),
+      row({
+        request_id: "fmt-3",
+        endpoint: "podcast-request",
+        model: "elevenlabs/v3",
+        latency_ms: 90_000,
+        usage_json: JSON.stringify({ title: "Der Camper-Plan" }),
+      }),
+    ];
+    const [line] = buildRequestLines(rows);
+    const formatted = formatLine(line!);
+    expect(formatted).toContain("podcast");
+    expect(formatted).toContain("Der Camper-Plan");
+    expect(formatted).toContain("research 4.0s");
+    expect(formatted).toContain("editorial 2.0s");
   });
 
   test("formatRollup produces a readable summary line", () => {

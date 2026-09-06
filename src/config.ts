@@ -377,6 +377,29 @@ export const config = {
   podcastSeriesDescription:
     process.env["PODCAST_SERIES_DESCRIPTION"] ??
     "Zwei Hosts nehmen Notizen aus dem Brain auseinander: Pläne, Recherchen, Entscheidungen — als Gespräch zum Anhören, mit Kapiteln.",
+  // --- v2: research, editorial, memory (docs/podcast-editorial-room.md) ---
+  /** Serve `/v1/podcasts*` at all. The VPS instance turns this off once the mini instance owns the pipeline (410 with a hint). */
+  podcastEnabled: (process.env["PODCAST_ENABLED"] ?? "true").toLowerCase() !== "false",
+  /** Obsidian vault checkout the research tools read and the episode note is written into; empty disables both. */
+  brainDir: (process.env["BRAIN_DIR"] ?? "").replace(/\/+$/, ""),
+  /** research-gateway base URL (tailnet-only). */
+  researchGatewayUrl: (process.env["RESEARCH_GATEWAY_URL"] ?? "https://research.jkrumm.com").replace(/\/+$/, ""),
+  /** Bearer for the research gateway; empty disables the `research` tool. */
+  researchApiKey: process.env["RESEARCH_API_KEY"] ?? "",
+  /** Tool-calling researcher (brain search/read, past episodes, research gateway). Luna: cheapest 100 % tool caller on IU (modelpick 2026-09-04). */
+  podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "gpt-5.6-luna",
+  /** The editor: decides format, roles, tone, humor, length and rhythm per episode against the history. */
+  podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "claude-opus-5",
+  /** research-gateway calls the researcher may spend per job. */
+  podcastResearchMaxCalls: num("PODCAST_RESEARCH_MAX_CALLS", 2),
+  /** Tool-loop rounds per job before the researcher is forced to conclude. */
+  podcastToolMaxRounds: num("PODCAST_TOOL_MAX_ROUNDS", 12),
+  /** How many recent episode profiles the editor sees. */
+  podcastHistoryDepth: num("PODCAST_HISTORY_DEPTH", 8),
+  /** Number-word density (per word) above which a turn is synthesized slower. */
+  podcastDenseTurnThreshold: num("PODCAST_DENSE_TURN_THRESHOLD", 0.12),
+  /** Speed delta applied to dense turns (clamped to the 0.7 floor). */
+  podcastDenseTurnSlowdown: num("PODCAST_DENSE_TURN_SLOWDOWN", 0.06),
   /** Audiobookshelf base URL; empty disables publishing entirely (see audiobookshelf.ts). */
   absUrl: withHttpsScheme((process.env["ABS_URL"] ?? "").replace(/\/+$/, "")),
   absApiKey: process.env["ABS_API_KEY"] ?? "",

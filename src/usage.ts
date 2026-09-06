@@ -18,6 +18,8 @@ export interface UsageRow {
     | "speech-request"
     | "transcription-request"
     | "podcast-cover"
+    | "podcast-research"
+    | "podcast-editorial"
     | "podcast-outline"
     | "podcast-segment"
     | "podcast-review"
