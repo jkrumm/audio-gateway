@@ -7,7 +7,8 @@
  * ~/SourceRoot/brain/AGENTS.md's folder-note convention: the folder note
  * lives at `Areas/Podcasts/Podcasts.md`, same name as its folder.
  */
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { log } from "./log";
 import type { EpisodeProfile } from "./podcast-types";
@@ -24,6 +25,11 @@ export interface EpisodeNoteInput {
   /** The caller renders this (`podcasts.ts`'s `renderTranscriptMarkdown`). */
   transcriptMarkdown: string;
   absItemId?: string | null;
+  /** brain-sync's own mkdir lock dir (dotfiles/brain/brain-sync.sh); injectable for tests, defaults to `~/Library/Caches/brain-sync.lock`. */
+  lockDir?: string;
+  /** Injectable for tests — defaults mirror brain-sync.sh (6 retries, 5s apart). */
+  lockRetryAttempts?: number;
+  lockRetryDelayMs?: number;
 }
 
 const FOLDER_NOTE_TITLE = "Podcasts";
@@ -32,14 +38,9 @@ const FOLDER_NOTE_TITLE = "Podcasts";
 // Pure rendering
 // ---------------------------------------------------------------------------
 
-/** YAML-significant characters at the start of a scalar that force quoting. */
-const SPECIAL_START = /^[-?:,[\]{}#&*!|>'"%@`]/;
-
+/** Always double-quoted (backslash escaped first, then the quote) — simpler and safer than guessing which scalars need it. */
 function yamlScalar(value: string): string {
-  if (value.includes(":") || SPECIAL_START.test(value)) {
-    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-  }
-  return value;
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function slugify(value: string): string {
@@ -80,11 +81,15 @@ function buildFrontmatter(input: EpisodeNoteInput): string {
  * `renderTranscriptMarkdown` (podcasts.ts) always opens with `# <title>\n\n<description>\n\n`
  * before the first `## <segment>` heading — strip that prefix so the episode
  * note's own `# <title>` + description aren't duplicated above "## Transkript".
+ * Cuts at the first line starting with `## ` rather than counting paragraphs,
+ * so a multi-paragraph description is dropped in full instead of leaving its
+ * later paragraphs duplicated in the body.
  */
 function stripHeadingAndDescription(transcriptMarkdown: string): string {
-  const parts = transcriptMarkdown.split("\n\n");
-  if (parts[0]?.startsWith("# ")) return parts.slice(2).join("\n\n");
-  return transcriptMarkdown;
+  if (!transcriptMarkdown.startsWith("# ")) return transcriptMarkdown;
+  const lines = transcriptMarkdown.split("\n");
+  const headingIndex = lines.findIndex((line) => line.startsWith("## "));
+  return headingIndex === -1 ? transcriptMarkdown : lines.slice(headingIndex).join("\n");
 }
 
 /** Pure: builds the full episode note markdown (frontmatter + title + description + transcript). */
@@ -196,6 +201,38 @@ async function collectFolderEntries(folderDir: string, folderNotePath: string): 
   return entries;
 }
 
+const DEFAULT_LOCK_DIR = join(homedir(), "Library", "Caches", "brain-sync.lock");
+const DEFAULT_LOCK_RETRY_ATTEMPTS = 6;
+const DEFAULT_LOCK_RETRY_DELAY_MS = 5000;
+
+/**
+ * Acquire brain-sync's own mkdir lock (`~/SourceRoot/dotfiles/brain/brain-sync.sh`)
+ * before touching the vault's git state — that job commits/pushes on its own
+ * 5-minute timer, and `mkdir` is the same atomic primitive it uses, so the two
+ * never race for `.git/index.lock`. Retries a held lock a few times (mirrors
+ * brain-sync.sh's own tolerance) before giving up. Returns whether THIS call
+ * created the lock — only the creator may remove it.
+ */
+async function acquireBrainSyncLock(lockDir: string, attempts: number, delayMs: number): Promise<boolean> {
+  for (let attempt = 0; attempt <= attempts; attempt++) {
+    try {
+      await mkdir(lockDir);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if (attempt === attempts) return false;
+      await Bun.sleep(delayMs);
+    }
+  }
+  return false;
+}
+
+/** Only removes the lock dir when `owned` — never clears a lock this call did not create. */
+async function releaseBrainSyncLock(lockDir: string, owned: boolean): Promise<void> {
+  if (!owned) return;
+  await rm(lockDir, { recursive: true, force: true }).catch(() => {});
+}
+
 /** Runs one git step in `cwd`; returns success, logging stderr on a non-zero exit. */
 async function gitStep(cwd: string, args: string[], context: { jobId: string }): Promise<boolean> {
   const proc = Bun.spawn(["git", ...args], { cwd, stdout: "ignore", stderr: "pipe" });
@@ -229,12 +266,26 @@ export async function writeEpisodeBrainNote(input: EpisodeNoteInput): Promise<{ 
   }
 
   const context = { jobId: input.jobId };
-  if (!(await gitStep(input.brainDir, ["add", "--", notePath, folderNotePath], context))) {
+  const lockDir = input.lockDir ?? DEFAULT_LOCK_DIR;
+  const owned = await acquireBrainSyncLock(
+    lockDir,
+    input.lockRetryAttempts ?? DEFAULT_LOCK_RETRY_ATTEMPTS,
+    input.lockRetryDelayMs ?? DEFAULT_LOCK_RETRY_DELAY_MS,
+  );
+  if (!owned) {
+    log.warn("brain note git chain skipped: brain-sync lock is busy", { jobId: input.jobId, lockDir });
     return { path: notePath, committed: false, pushed: false };
   }
-  if (!(await gitStep(input.brainDir, ["commit", "-m", `podcast: ${input.title}`, "--", notePath, folderNotePath], context))) {
-    return { path: notePath, committed: false, pushed: false };
+  try {
+    if (!(await gitStep(input.brainDir, ["add", "--", notePath, folderNotePath], context))) {
+      return { path: notePath, committed: false, pushed: false };
+    }
+    if (!(await gitStep(input.brainDir, ["commit", "-m", `podcast: ${input.title}`, "--", notePath, folderNotePath], context))) {
+      return { path: notePath, committed: false, pushed: false };
+    }
+    const pushed = await gitStep(input.brainDir, ["push"], context);
+    return { path: notePath, committed: true, pushed };
+  } finally {
+    await releaseBrainSyncLock(lockDir, owned);
   }
-  const pushed = await gitStep(input.brainDir, ["push"], context);
-  return { path: notePath, committed: true, pushed };
 }

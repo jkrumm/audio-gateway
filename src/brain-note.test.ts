@@ -3,7 +3,7 @@
  * git test spins up a real temp-dir repo with a bare "remote" — no network.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -41,6 +41,19 @@ const TRANSCRIPT_MARKDOWN = [
   "",
 ].join("\n");
 
+const MULTI_PARAGRAPH_TRANSCRIPT_MARKDOWN = [
+  "# Test Episode",
+  "",
+  "First paragraph of the description.",
+  "",
+  "Second paragraph of the description.",
+  "",
+  "## Segment One",
+  "",
+  "**Jonas:** Hallo und willkommen.",
+  "",
+].join("\n");
+
 function baseInput(overrides: Partial<Parameters<typeof renderEpisodeNote>[0]> = {}) {
   return {
     brainDir: "/tmp/does-not-matter",
@@ -60,15 +73,15 @@ describe("renderEpisodeNote", () => {
   test("frontmatter carries the expected keys and the transcript heading/description are not duplicated", () => {
     const note = renderEpisodeNote(baseInput());
     expect(note).toContain("---\n");
-    expect(note).toContain("title: Test Episode");
+    expect(note).toContain('title: "Test Episode"');
     expect(note).toContain("date: 2026-09-06");
     expect(note).toContain("tags: [podcast, brain-sonderausgabe]");
-    expect(note).toContain("series: Brain Sonderausgabe");
-    expect(note).toContain("format: Erklärstück");
+    expect(note).toContain('series: "Brain Sonderausgabe"');
+    expect(note).toContain('format: "Erklärstück"');
     expect(note).toContain("lead: A");
     expect(note).toContain("humor: sparse");
     expect(note).toContain("minutes: 18");
-    expect(note).toContain("topics:\n  - Peptide\n  - Recovery");
+    expect(note).toContain('topics:\n  - "Peptide"\n  - "Recovery"');
     expect(note).toContain("job: job-123");
     expect(note).not.toContain("abs:");
 
@@ -86,6 +99,21 @@ describe("renderEpisodeNote", () => {
     expect(note).toContain('title: "Titel: Der Doppelpunkt"');
   });
 
+  test("quotes a plain title with no special characters, e.g. a trailing episode number", () => {
+    const note = renderEpisodeNote(baseInput({ title: "Der Roadtrip #1" }));
+    expect(note).toContain('title: "Der Roadtrip #1"');
+  });
+
+  test("escapes an embedded double quote", () => {
+    const note = renderEpisodeNote(baseInput({ title: 'Er sagte "Hallo"' }));
+    expect(note).toContain('title: "Er sagte \\"Hallo\\""');
+  });
+
+  test("escapes a backslash", () => {
+    const note = renderEpisodeNote(baseInput({ title: "C:\\Users\\test" }));
+    expect(note).toContain('title: "C:\\\\Users\\\\test"');
+  });
+
   test("includes abs when present", () => {
     const note = renderEpisodeNote(baseInput({ absItemId: "abs-item-1" }));
     expect(note).toContain("abs: abs-item-1");
@@ -94,6 +122,15 @@ describe("renderEpisodeNote", () => {
   test("writes topics: [] when there are none", () => {
     const note = renderEpisodeNote(baseInput({ profile: { ...PROFILE, topics: [] } }));
     expect(note).toContain("topics: []");
+  });
+
+  test("does not duplicate a multi-paragraph description", () => {
+    const note = renderEpisodeNote(baseInput({ transcriptMarkdown: MULTI_PARAGRAPH_TRANSCRIPT_MARKDOWN }));
+    const afterTranskript = note.split("## Transkript")[1] ?? "";
+    expect(afterTranskript).not.toContain("First paragraph of the description.");
+    expect(afterTranskript).not.toContain("Second paragraph of the description.");
+    expect(afterTranskript).toContain("## Segment One");
+    expect(afterTranskript).toContain("**Jonas:** Hallo und willkommen.");
   });
 });
 
@@ -155,8 +192,10 @@ describe("writeEpisodeBrainNote", () => {
 
   test("writes the note + folder note and commits + pushes to the remote", async () => {
     const { vault, remote } = initVaultWithBareRemote();
+    const lockRoot = mkdtempSync(join(tmpdir(), "brain-lock-test-"));
+    const lockDir = join(lockRoot, "lock");
     try {
-      const result = await writeEpisodeBrainNote(baseInput({ brainDir: vault }));
+      const result = await writeEpisodeBrainNote(baseInput({ brainDir: vault, lockDir }));
 
       expect(existsSync(result.path)).toBe(true);
       expect(result.path.endsWith("2026-09-06 Test Episode.md")).toBe(true);
@@ -168,6 +207,7 @@ describe("writeEpisodeBrainNote", () => {
 
       expect(result.committed).toBe(true);
       expect(result.pushed).toBe(true);
+      expect(existsSync(lockDir)).toBe(false); // released once the git chain finished
 
       const log = Bun.spawnSync(["git", "log", "--oneline", "-1"], { cwd: vault });
       expect(log.stdout.toString()).toContain("podcast: Test Episode");
@@ -177,18 +217,57 @@ describe("writeEpisodeBrainNote", () => {
     } finally {
       rmSync(vault, { recursive: true, force: true });
       rmSync(remote, { recursive: true, force: true });
+      rmSync(lockRoot, { recursive: true, force: true });
     }
   });
 
   test("returns committed:false without throwing when the directory is not a git repo", async () => {
     const plainDir = mkdtempSync(join(tmpdir(), "brain-plain-"));
+    const lockRoot = mkdtempSync(join(tmpdir(), "brain-lock-test-"));
+    const lockDir = join(lockRoot, "lock");
     try {
-      const result = await writeEpisodeBrainNote(baseInput({ brainDir: plainDir }));
+      const result = await writeEpisodeBrainNote(baseInput({ brainDir: plainDir, lockDir }));
       expect(existsSync(result.path)).toBe(true);
       expect(result.committed).toBe(false);
       expect(result.pushed).toBe(false);
     } finally {
       rmSync(plainDir, { recursive: true, force: true });
+      rmSync(lockRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("waits for a held brain-sync lock, then proceeds once it's released", async () => {
+    const { vault, remote } = initVaultWithBareRemote();
+    const lockRoot = mkdtempSync(join(tmpdir(), "brain-lock-test-"));
+    const lockDir = join(lockRoot, "lock");
+    mkdirSync(lockDir); // simulate brain-sync.sh holding the lock right now
+    const releaseTimer = setTimeout(() => rmSync(lockDir, { recursive: true, force: true }), 30);
+    try {
+      const result = await writeEpisodeBrainNote(baseInput({ brainDir: vault, lockDir, lockRetryAttempts: 10, lockRetryDelayMs: 20 }));
+      expect(result.committed).toBe(true);
+      expect(existsSync(lockDir)).toBe(false);
+    } finally {
+      clearTimeout(releaseTimer);
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(lockRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("never removes a lock it did not create, and skips the git chain while it stays busy", async () => {
+    const { vault, remote } = initVaultWithBareRemote();
+    const lockRoot = mkdtempSync(join(tmpdir(), "brain-lock-test-"));
+    const lockDir = join(lockRoot, "lock");
+    mkdirSync(lockDir); // held by "someone else" for the whole test
+    try {
+      const result = await writeEpisodeBrainNote(baseInput({ brainDir: vault, lockDir, lockRetryAttempts: 1, lockRetryDelayMs: 5 }));
+      expect(result.committed).toBe(false);
+      expect(result.pushed).toBe(false);
+      expect(existsSync(lockDir)).toBe(true); // not ours — must survive
+    } finally {
+      rmSync(vault, { recursive: true, force: true });
+      rmSync(remote, { recursive: true, force: true });
+      rmSync(lockRoot, { recursive: true, force: true });
     }
   });
 });

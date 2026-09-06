@@ -21,21 +21,35 @@ const CONTEXT_MAX_CHARS = 600;
 const SPEED_MIN = 0.7;
 const SPEED_MAX = 1.2;
 
-/** Whole tokens that ARE a number (or a unit that always travels with one). "ein/eine/einer" are articles and deliberately absent. */
+/**
+ * Whole tokens that ARE a number (or a unit that always travels with one).
+ * "ein/eine/einer" are articles and deliberately absent; English "one" and
+ * "point" are dropped too — both are common outside a number ("one of the
+ * things", "I want to point out") and would otherwise false-positive.
+ */
 const NUMBER_WORDS = new Set([
   // German 0-12 plus the units that only ever appear alongside a figure
   "null", "eins", "zwei", "drei", "vier", "fünf", "sechs", "sieben", "acht", "neun", "zehn", "elf", "zwölf",
   "komma", "prozent", "euro", "cent",
-  // English 0-12
-  "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+  // English 0-12 (minus "one", see above)
+  "zero", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
   // English teens and tens, spelled out rather than matched by suffix ("-ty" also ends "pretty", "party")
   "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
   "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
-  "hundred", "thousand", "million", "billion", "point", "percent",
+  "hundred", "thousand", "million", "billion", "percent",
 ]);
 
-/** German writes compound numerals as one token ("eintausenddreihundertdreiundsiebzig") — these fragments catch them. */
-const NUMBER_WORD_PARTS = ["zehn", "zig", "ßig", "hundert", "tausend", "million", "milliarde"];
+/**
+ * A German compound numeral is the WHOLE token built from a concatenation of
+ * these stems (e.g. "einundzwanzig" = ein+und+zwanzig, "eintausenddreihundert-
+ * dreiundsiebzig" = ein+tausend+drei+hundert+drei+und+siebzig) — matched in
+ * full, never as a substring, so "einzig"/"regelmäßig"/"jetzig" (which merely
+ * CONTAIN "zig"/"ßig") don't false-positive the way a `.includes()` check did.
+ * "ein" and "und" alone are excluded below: an article and a conjunction, not
+ * numbers by themselves.
+ */
+const GERMAN_COMPOUND_NUMERAL =
+  /^(?:eins?|zwei|drei|vier|fünf|sechs?|sieb(?:en)?|acht|neun|zehn|elf|zwölf|zwanzig|dreißig|vierzig|fünfzig|sechzig|siebzig|achtzig|neunzig|hundert|tausend|million(?:en)?|milliarden?|und)+$/;
 
 /**
  * Share of a turn's tokens that are numeric — digits, spelled-out German and
@@ -47,9 +61,12 @@ const NUMBER_WORD_PARTS = ["zehn", "zig", "ßig", "hundert", "tausend", "million
 export function numberDensity(text: string): number {
   const tokens = text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
   if (tokens.length === 0) return 0;
-  const numeric = tokens.filter(
-    (token) => /\d/.test(token) || NUMBER_WORDS.has(token) || NUMBER_WORD_PARTS.some((part) => token.includes(part)),
-  ).length;
+  const numeric = tokens.filter((token) => {
+    if (/\d/.test(token)) return true;
+    if (NUMBER_WORDS.has(token)) return true;
+    if (token === "ein" || token === "und") return false;
+    return GERMAN_COMPOUND_NUMERAL.test(token);
+  }).length;
   return numeric / tokens.length;
 }
 

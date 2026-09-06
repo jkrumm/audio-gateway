@@ -124,6 +124,29 @@ describe("numberDensity", () => {
     expect(numberDensity("twenty seven percent")).toBe(1);
     expect(numberDensity("")).toBe(0);
   });
+
+  test("words merely containing a numeral stem as a substring do not count (no more substring matching)", () => {
+    expect(numberDensity("einzig")).toBe(0);
+    expect(numberDensity("regelmäßig")).toBe(0);
+    expect(numberDensity("witzige")).toBe(0);
+    expect(numberDensity("jetzig")).toBe(0);
+  });
+
+  test("bare 'ein' and 'und' do not count on their own", () => {
+    expect(numberDensity("ein")).toBe(0);
+    expect(numberDensity("und")).toBe(0);
+  });
+
+  test("English 'one' and 'point' were dropped from the word set", () => {
+    expect(numberDensity("one of the things I want to point out")).toBe(0);
+  });
+
+  test("German compound numerals built from 'ein'/'und' plus other stems still count", () => {
+    expect(numberDensity("einundzwanzig")).toBe(1);
+    expect(numberDensity("dreizehn")).toBe(1);
+    expect(numberDensity("siebzehn")).toBe(1);
+    expect(numberDensity("fünfzig")).toBe(1);
+  });
 });
 
 describe("dense-turn pacing", () => {

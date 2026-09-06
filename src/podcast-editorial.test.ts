@@ -166,6 +166,22 @@ describe("parseEpisodeBrief", () => {
     expect(brief.minutes).toBe(20);
   });
 
+  test("a missing segments field is recomputed against the brief's OWN minutes, not the requested minutes", () => {
+    // Requested (INPUT.minutes) is 20 -> planSegmentCount(20) would be 5, the
+    // old buggy fallback. The editor argues for 50 minutes instead; segments
+    // must follow THAT number: planSegmentCount(50) = 9.
+    const brief = parseEpisodeBrief(JSON.stringify({ minutes: 50 }), INPUT);
+    expect(brief.minutes).toBe(50);
+    expect(brief.segments).toBe(9);
+  });
+
+  test("a missing segments field on a PINNED request is recomputed against the pinned minutes", () => {
+    // The editor's own (ignored) minutes must not leak into the segment count either.
+    const brief = parseEpisodeBrief(JSON.stringify({ minutes: 999 }), { ...INPUT, minutes: 8, pinMinutes: true });
+    expect(brief.minutes).toBe(8);
+    expect(brief.segments).toBe(3); // planSegmentCount(8)
+  });
+
   test("an unknown or missing humor level falls back to sparse", () => {
     expect(parseEpisodeBrief(JSON.stringify({ humor: "hilarious" }), INPUT).humor).toBe("sparse");
     expect(parseEpisodeBrief("{}", INPUT).humor).toBe("sparse");

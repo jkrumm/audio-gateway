@@ -8,8 +8,11 @@ NODE_ENV=production
 MACHINE=mini
 
 # The brain vault is a filesystem checkout only here — this is the whole reason
-# the podcast pipeline moved to the mini (Decision 2).
-BRAIN_DIR=/Users/jkrumm/SourceRoot/brain
+# the podcast pipeline moved to the mini (Decision 2). Relative to this repo
+# (the LaunchAgent's WorkingDirectory, see launchd/com.jkrumm.audio-gateway.plist.template)
+# so no tracked file carries the real home path; config.ts resolves it to an
+# absolute path at boot.
+BRAIN_DIR=../brain
 
 # research-gateway is tailnet-only; the mini is on the tailnet. Same ref
 # hermes-agent's .env.tpl uses for its own `research-gateway` skill.

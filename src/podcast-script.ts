@@ -229,6 +229,26 @@ export function extractJsonObject(raw: string): string {
   return fenced.slice(start, end + 1);
 }
 
+/**
+ * Blank the dramaturgy devices the episode brief did not ask for, so a writer
+ * model's tendency to invent a hook/motif/reveal/digression regardless of the
+ * brief (the single most common failure of this show, per the outline/segment
+ * prompts above) is enforced in code rather than only asked for. Exported for
+ * tests; called right after `parseOutline` in `writePodcastScript`, before
+ * `buildSegmentUserContent` ever reads `outline.hook`.
+ */
+export function pruneUnrequestedDevices(outline: Outline, brief: EpisodeBrief): Outline {
+  const devices = brief.devices.join(" ").toLowerCase();
+  const wants = (...keywords: string[]): boolean => keywords.some((keyword) => devices.includes(keyword));
+  return {
+    ...outline,
+    hook: wants("hook", "cold open", "opening beat", "einstieg") ? outline.hook : "",
+    motif: wants("motif", "running", "leitmotiv") ? outline.motif : "",
+    reveals: wants("reveal", "withheld", "withhold") ? outline.reveals : [],
+    digressions: wants("digression", "side-trip", "anecdote", "abschweif") ? outline.digressions : [],
+  };
+}
+
 /** Clamp a reveal/digression's 0-based segment index onto a real segment, defensively. */
 function clampSegmentIndex(value: number, segmentCount: number): number {
   return Math.min(Math.max(Math.round(value), 0), Math.max(segmentCount - 1, 0));
@@ -764,6 +784,7 @@ function buildRevisionUserContent(params: {
 
   const parts = [
     `SOURCE (verbatim; every fact must come from here):\n${req.source}`,
+    ...dossierSections(req.dossier),
     `CURRENT TURNS FOR THIS SEGMENT:\n${renderTurns(current.turns)}`,
     `EDITORIAL NOTES FOR THIS SEGMENT:\n${notes.map((n) => `- [${n.reviewer}] ${n.note}`).join("\n")}`,
     previousDraft ? `END OF PREVIOUS SEGMENT (for the seam — do not repeat it):\n${renderTurns(previousDraft.turns.slice(-3))}` : undefined,
@@ -1254,7 +1275,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         stage: "outline",
         usageEndpoint: "podcast-outline",
       }),
-    (raw) => normalizeOutlineTargets(parseOutline(raw), targetWords),
+    (raw) => normalizeOutlineTargets(pruneUnrequestedDevices(parseOutline(raw), req.episodeBrief), targetWords),
   );
   opts.onProgress?.("outline", 1, 1);
 

@@ -142,7 +142,11 @@ export function parseEpisodeBrief(
     ? input.minutes
     : clamp(minutesRaw, input.bounds.minMinutes, input.bounds.maxMinutes);
 
-  const segmentsRaw = typeof parsed["segments"] === "number" && Number.isFinite(parsed["segments"]) ? Math.round(parsed["segments"]) : fallback.segments;
+  // When the model left segments out, recompute it against the BRIEF's OWN
+  // (already clamped/pinned) minutes — not the requested minutes fallback.segments
+  // was built from, which can disagree once pinMinutes/clamping kicked in.
+  const segmentsRaw =
+    typeof parsed["segments"] === "number" && Number.isFinite(parsed["segments"]) ? Math.round(parsed["segments"]) : planSegmentCount(minutes);
 
   const humorRaw = typeof parsed["humor"] === "string" ? parsed["humor"].trim().toLowerCase() : "";
   const humor = HUMOR_LEVELS.find((h) => h === humorRaw) ?? "sparse";

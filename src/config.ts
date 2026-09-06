@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { resolve } from "node:path";
 
 const required = (name: string): string => {
   const value = process.env[name];
@@ -380,8 +381,18 @@ export const config = {
   // --- v2: research, editorial, memory (docs/podcast-editorial-room.md) ---
   /** Serve `/v1/podcasts*` at all. The VPS instance turns this off once the mini instance owns the pipeline (410 with a hint). */
   podcastEnabled: (process.env["PODCAST_ENABLED"] ?? "true").toLowerCase() !== "false",
-  /** Obsidian vault checkout the research tools read and the episode note is written into; empty disables both. */
-  brainDir: (process.env["BRAIN_DIR"] ?? "").replace(/\/+$/, ""),
+  /**
+   * Obsidian vault checkout the research tools read and the episode note is
+   * written into; empty disables both. Resolved to an ABSOLUTE path relative
+   * to `cwd` (the mini's LaunchAgent sets `BRAIN_DIR=../brain`, relative to its
+   * WorkingDirectory) so logs, the ledger and git-cwd operations always see a
+   * real path rather than a value that only resolves correctly from one
+   * specific working directory.
+   */
+  brainDir: (() => {
+    const raw = (process.env["BRAIN_DIR"] ?? "").replace(/\/+$/, "");
+    return raw ? resolve(raw) : "";
+  })(),
   /** research-gateway base URL (tailnet-only). */
   researchGatewayUrl: (process.env["RESEARCH_GATEWAY_URL"] ?? "https://research.jkrumm.com").replace(/\/+$/, ""),
   /** Bearer for the research gateway; empty disables the `research` tool. */

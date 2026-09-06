@@ -28,7 +28,7 @@ const { config } = await import("./config");
 // BEFORE any podcast route runs (cover.test.ts's pattern) — env vars race
 // with whichever other config-touching test file's import wins the shared
 // module registry first, so mutate the live singleton instead.
-type MutablePodcastConfig = { podcastDb: string; podcastDataDir: string };
+type MutablePodcastConfig = { podcastDb: string; podcastDataDir: string; brainDir: string };
 const mutableConfig = config as unknown as MutablePodcastConfig;
 const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-podcasts-test-"));
 mutableConfig.podcastDb = join(tmpRoot, "podcasts.db");
@@ -442,17 +442,82 @@ describe("POST /v1/podcasts validation", () => {
     expect((await handleRequest(req)).status).toBe(400);
   });
 
-  test("source may be blank when sourcePaths is non-empty", async () => {
+  test("sourcePaths without BRAIN_DIR configured → 400", async () => {
     stubFailingFetch();
-    const req = authed(new Request("http://localhost/v1/podcasts", {
-      method: "POST",
-      body: JSON.stringify({ sourcePaths: ["notes/a.md"] }),
-      headers: { "content-type": "application/json" },
-    }));
-    const res = await handleRequest(req);
-    expect(res.status).toBe(202);
-    const created = (await res.json()) as { id: string };
-    expect(_test.getStore().get(created.id)?.request.sourcePaths).toEqual(["notes/a.md"]);
+    const originalBrainDir = mutableConfig.brainDir;
+    mutableConfig.brainDir = "";
+    try {
+      const req = authed(new Request("http://localhost/v1/podcasts", {
+        method: "POST",
+        body: JSON.stringify({ sourcePaths: ["notes/a.md"] }),
+        headers: { "content-type": "application/json" },
+      }));
+      const res = await handleRequest(req);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { message: string } }).error.message).toContain("BRAIN_DIR");
+    } finally {
+      mutableConfig.brainDir = originalBrainDir;
+    }
+  });
+
+  describe("sourcePaths with BRAIN_DIR configured", () => {
+    let vaultDir: string;
+    let originalBrainDir: string;
+
+    afterEach(() => {
+      mutableConfig.brainDir = originalBrainDir;
+    });
+
+    function setBrainDir(): void {
+      vaultDir = mkdtempSync(join(tmpdir(), "audio-gateway-vault-test-"));
+      originalBrainDir = mutableConfig.brainDir;
+      mutableConfig.brainDir = vaultDir;
+    }
+
+    test("a missing note path → 400 with the path in the message", async () => {
+      stubFailingFetch();
+      setBrainDir();
+      const req = authed(new Request("http://localhost/v1/podcasts", {
+        method: "POST",
+        body: JSON.stringify({ sourcePaths: ["does/not-exist.md"] }),
+        headers: { "content-type": "application/json" },
+      }));
+      const res = await handleRequest(req);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { message: string } };
+      expect(body.error.message).toContain("does/not-exist.md");
+    });
+
+    test("source may be blank when sourcePaths is non-empty, and the note text is folded into source", async () => {
+      stubFailingFetch();
+      setBrainDir();
+      writeFileSync(join(vaultDir, "a.md"), "Note content from the vault.");
+      const req = authed(new Request("http://localhost/v1/podcasts", {
+        method: "POST",
+        body: JSON.stringify({ sourcePaths: ["a.md"] }),
+        headers: { "content-type": "application/json" },
+      }));
+      const res = await handleRequest(req);
+      expect(res.status).toBe(202);
+      const created = (await res.json()) as { id: string };
+      const job = _test.getStore().get(created.id);
+      expect(job?.request.sourcePaths).toEqual(["a.md"]);
+      expect(job?.request.source).toContain("## a.md");
+      expect(job?.request.source).toContain("Note content from the vault.");
+    });
+
+    test("combined source over the character limit → 400", async () => {
+      stubFailingFetch();
+      setBrainDir();
+      writeFileSync(join(vaultDir, "big.md"), "x".repeat(200_001));
+      const req = authed(new Request("http://localhost/v1/podcasts", {
+        method: "POST",
+        body: JSON.stringify({ sourcePaths: ["big.md"] }),
+        headers: { "content-type": "application/json" },
+      }));
+      const res = await handleRequest(req);
+      expect(res.status).toBe(400);
+    });
   });
 
   test("research/pinMinutes/brainNote: defaults, then explicit overrides", async () => {

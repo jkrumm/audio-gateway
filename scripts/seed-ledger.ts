@@ -18,12 +18,14 @@
  */
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 const DATA_DIR = resolve(REPO_ROOT, "data");
 const DB_PATH = resolve(DATA_DIR, "podcasts.db");
+const DB_WAL_PATH = `${DB_PATH}-wal`;
+const DB_SHM_PATH = `${DB_PATH}-shm`;
 const LOCAL_PODCASTS_DIR = resolve(DATA_DIR, "podcasts");
 
 const REMOTE_DB_GLOB = "vps:/var/lib/audio-gateway/podcasts.db*";
@@ -64,9 +66,19 @@ function rewriteStateJson(stateJson: string): { rewritten: string; changed: bool
 async function main(): Promise<void> {
   const { force } = parseArgs(process.argv.slice(2));
 
-  if (existsSync(DB_PATH) && !force) {
-    console.error(`refusing to run: ${DB_PATH} already exists — pass --force to overwrite.`);
+  // Checked (and, with --force, removed) together: `existsSync(DB_PATH)` alone
+  // missed a leftover WAL/SHM sidecar (replayed into the fresh db on open) and
+  // a leftover data/podcasts dir (which turns `scp -r .../podcasts <dest>/`
+  // into a nested `<dest>/podcasts/podcasts/`).
+  const targets = [DB_PATH, DB_WAL_PATH, DB_SHM_PATH, LOCAL_PODCASTS_DIR];
+  const existing = targets.filter((path) => existsSync(path));
+  if (existing.length > 0 && !force) {
+    console.error(`refusing to run: ${existing.join(", ")} already exist — pass --force to overwrite.`);
     process.exit(1);
+  }
+  if (existing.length > 0) {
+    console.log(`--force: removing ${existing.join(", ")} before copying ...`);
+    await Promise.all(existing.map((path) => rm(path, { recursive: true, force: true })));
   }
 
   await mkdir(DATA_DIR, { recursive: true });

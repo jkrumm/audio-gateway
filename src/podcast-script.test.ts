@@ -28,11 +28,13 @@ const {
   writePodcastScript,
   buildEpisodeProfile,
   loadShowBible,
+  pruneUnrequestedDevices,
   V3_PODCAST_TAGS,
 } = await import("./podcast-script");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
 type EpisodeBrief = import("./podcast-types").EpisodeBrief;
 type Dossier = import("./podcast-types").Dossier;
+type Outline = import("./podcast-script").Outline;
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -267,6 +269,43 @@ describe("parseOutline", () => {
     );
     expect(outline.reveals).toEqual([{ text: "Out of range reveal", segmentIndex: 0 }]);
     expect(outline.digressions).toEqual([{ beat: "Out of range digression", segmentIndex: 0, returnHook: "back" }]);
+  });
+});
+
+describe("pruneUnrequestedDevices", () => {
+  const outlineWithAllDevices: Outline = {
+    title: "T",
+    description: "D",
+    coverPrompt: "P",
+    genres: [],
+    motif: "the broken coffee machine",
+    throughLine: "Will the van make the pass?",
+    hook: "The mechanic just said the word 'maybe'.",
+    reveals: [{ text: "The pass has a weight limit.", segmentIndex: 1 }],
+    digressions: [{ beat: "A story about a flat tyre in Portugal.", segmentIndex: 0, returnHook: "Anyway, back to the van." }],
+    segments: [{ title: "S1", goal: "g", keyFacts: [], targetWords: 100, tension: "t" }],
+  };
+
+  test("blanks hook, motif, reveals and digressions when the brief lists no devices", () => {
+    const pruned = pruneUnrequestedDevices(outlineWithAllDevices, briefWith({ devices: [] }));
+    expect(pruned.hook).toBe("");
+    expect(pruned.motif).toBe("");
+    expect(pruned.reveals).toEqual([]);
+    expect(pruned.digressions).toEqual([]);
+    // Everything else on the outline is untouched.
+    expect(pruned.throughLine).toBe(outlineWithAllDevices.throughLine);
+    expect(pruned.title).toBe(outlineWithAllDevices.title);
+  });
+
+  test("keeps only the devices the brief actually asked for", () => {
+    const pruned = pruneUnrequestedDevices(
+      outlineWithAllDevices,
+      briefWith({ devices: ["One genuine live disagreement between the hosts", "Withheld: the total cost until the end"] }),
+    );
+    expect(pruned.reveals).toEqual(outlineWithAllDevices.reveals);
+    expect(pruned.hook).toBe("");
+    expect(pruned.motif).toBe("");
+    expect(pruned.digressions).toEqual([]);
   });
 });
 
@@ -880,6 +919,78 @@ describe("writePodcastScript", () => {
     });
 
     expect(outlineSystemPrompt).not.toContain("SHOW BIBLE");
+  });
+
+  test("an outline hook/motif/reveal/digression the brief did not ask for never reaches the segment writers", async () => {
+    const segmentPrompts: Array<{ system: string; user: string }> = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        return outlineResponse({
+          hook: "A concrete cold-open beat nobody asked for.",
+          motif: "an invented running joke",
+          reveals: [{ text: "A twist nobody asked for.", segment: 1 }],
+          digressions: [{ beat: "An anecdote nobody asked for.", segment: 0, return_hook: "back to it" }],
+        });
+      }
+      segmentPrompts.push({ system: systemPrompt, user: body.messages[1]?.content ?? "" });
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    await writePodcastScript(
+      { ...BASE_REQUEST, episodeBrief: briefWith({ devices: [] }) },
+      { models: MODELS, concurrency: 3, review: false, metadata: false },
+    );
+
+    expect(segmentPrompts).toHaveLength(3);
+    for (const { system, user } of segmentPrompts) {
+      expect(system).not.toContain("Running motif of the episode");
+      expect(user).not.toContain("HOOK (open this segment");
+      expect(user).not.toContain("REVEALS TO LAND IN THIS SEGMENT");
+      expect(user).not.toContain("DO NOT REVEAL YET");
+      expect(user).not.toContain("DIGRESSION FOR THIS SEGMENT");
+    }
+  });
+
+  test("the revision pass's user content includes the dossier's ADDITIONS/GLOSSARY/PRIOR COVERAGE/OPEN QUESTIONS sections", async () => {
+    let revisionUserContent = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      if (systemPrompt.includes("You are a reviewer from a different model family")) {
+        return chatCompletion(JSON.stringify({ notes: [{ segment: 0, turn: 0, note: "Tighten the opening line." }], verdict: "ok" }));
+      }
+      if (systemPrompt.includes("You are REVISING ONE SEGMENT")) {
+        revisionUserContent = body.messages[1]?.content ?? "";
+        return chatCompletion(JSON.stringify({ turns: [{ speaker: "A", text: "Revised line." }] }));
+      }
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      return segmentResponse(Number(match?.[1] ?? 1) - 1);
+    });
+
+    await writePodcastScript(
+      {
+        ...BASE_REQUEST,
+        dossier: {
+          summary: "Es geht um die Maut.",
+          additions: [{ source: "brain: Areas/Travel/Maut.md", text: "Die Vignette gilt zehn Tage." }],
+          glossary: [{ term: "ASFINAG", plain: "die Firma, die Österreichs Autobahnen betreibt" }],
+          priorCoverage: [{ episodeId: "e1", title: "Folge eins", covered: "die Route über den Brenner" }],
+          openQuestions: ["Gilt die Vignette auch für den Anhänger?"],
+          toolCalls: [],
+        },
+      },
+      { models: { ...MODELS, review: ["review-model-1"] }, concurrency: 3, review: true, metadata: false },
+    );
+
+    expect(revisionUserContent).toContain("[brain: Areas/Travel/Maut.md]\nDie Vignette gilt zehn Tage.");
+    expect(revisionUserContent).toContain("ASFINAG — die Firma, die Österreichs Autobahnen betreibt");
+    expect(revisionUserContent).toContain("PRIOR COVERAGE (do not repeat");
+    expect(revisionUserContent).toContain("Folge eins: die Route über den Brenner");
+    expect(revisionUserContent).toContain("Gilt die Vignette auch für den Anhänger?");
   });
 });
 

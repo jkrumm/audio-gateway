@@ -46,12 +46,26 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 // Vault access — path containment, frontmatter, search
 // ---------------------------------------------------------------------------
 
-/** Resolve a vault-relative path inside `brainDir`, rejecting `..`, absolute paths and symlink escapes. */
+/**
+ * `.md` only, and no path segment may start with "." — blocks `.obsidian/...`,
+ * a bare `.env`, or any hidden directory nested deeper in the vault. The one
+ * containment predicate shared by `resolveInVault` (single-file reads —
+ * `brain_read`, `readBrainNotes`) and `walkMarkdown` (the `brain_search`
+ * directory walk).
+ */
+function isAllowedVaultRelPath(relPath: string): boolean {
+  const segments = relPath.split(/[\\/]/).filter(Boolean);
+  if (segments.some((segment) => segment.startsWith("."))) return false;
+  return relPath.toLowerCase().endsWith(".md");
+}
+
+/** Resolve a vault-relative path inside `brainDir`, rejecting `..`, absolute paths, symlink escapes, non-`.md` files and hidden path segments. */
 async function resolveInVault(brainDir: string, relPath: string): Promise<string> {
   if (isAbsolute(relPath)) throw new Error(`path must be relative to the vault: "${relPath}"`);
   const resolved = resolve(brainDir, relPath);
   const rel = relative(brainDir, resolved);
   if (rel.startsWith("..") || isAbsolute(rel)) throw new Error(`path escapes the vault: "${relPath}"`);
+  if (!isAllowedVaultRelPath(rel)) throw new Error(`only markdown files outside hidden directories may be read: "${relPath}"`);
   let real: string;
   try {
     real = await realpath(resolved);
@@ -82,7 +96,7 @@ function parseFrontmatter(raw: string): { frontmatter: Record<string, string>; b
   return { frontmatter, body: raw.slice(match[0].length) };
 }
 
-async function walkMarkdown(dir: string): Promise<string[]> {
+async function walkMarkdown(dir: string, root: string = dir): Promise<string[]> {
   const out: string[] = [];
   let entries;
   try {
@@ -94,8 +108,8 @@ async function walkMarkdown(dir: string): Promise<string[]> {
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
-      out.push(...(await walkMarkdown(full)));
-    } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      out.push(...(await walkMarkdown(full, root)));
+    } else if (entry.isFile() && isAllowedVaultRelPath(relative(root, full))) {
       out.push(full);
     }
   }
@@ -296,7 +310,6 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
       }
       const depth = args.depth ?? "quick";
       if (used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
-      used++;
 
       const submitRes = await fetchImpl(`${research.url}/research/`, {
         method: "POST",
@@ -307,6 +320,9 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
       if (submitRes.status < 200 || submitRes.status >= 300) {
         return `error: research submit failed HTTP ${submitRes.status} ${submitRes.body.slice(0, 300)}`;
       }
+      // Debited only once the gateway actually accepted the job — a 429, a
+      // transport error, or any other non-2xx must not consume a slot.
+      used++;
       const { jobId } = JSON.parse(submitRes.body) as ResearchGatewaySubmitResponse;
 
       const deadline = Date.now() + RESEARCH_POLL_TIMEOUT_MS;

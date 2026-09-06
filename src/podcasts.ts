@@ -574,15 +574,9 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   const hosts = jobHosts();
   const files = { ...job.files };
 
-  // 0. sourcePaths — brain-relative notes read up front and appended to the
-  // source; everything downstream (research, editorial, the writers' room)
-  // sees the combined text.
-  let source = request.source;
-  if (request.sourcePaths.length > 0) {
-    if (!config.brainDir) throw new Error("podcast job requested sourcePaths but BRAIN_DIR is not configured");
-    const notes = await readBrainNotes(config.brainDir, request.sourcePaths);
-    for (const note of notes) source += `\n\n## ${note.path}\n${note.text}`;
-  }
+  // sourcePaths were already read and folded into `request.source` by
+  // `createPodcastJob` — nothing to re-read here.
+  const source = request.source;
 
   const history = buildEpisodeHistory(store, request.series);
 
@@ -1162,8 +1156,22 @@ async function createPodcastJob(req: Request, tokenCaller: string | undefined): 
     sourcePaths = sourcePathsRaw as string[];
   }
 
-  const source = typeof body["source"] === "string" ? body["source"] : "";
+  let source = typeof body["source"] === "string" ? body["source"] : "";
   if (!source.trim() && sourcePaths.length === 0) return errorResponse(400, "source or sourcePaths is required");
+
+  // sourcePaths are read HERE, up front, and folded into `source` — everything
+  // downstream (research, editorial, the writers' room) sees one combined
+  // string, and the ledger stores the combined text as `request.source`
+  // (`sourcePaths` stays on the request only for the record).
+  if (sourcePaths.length > 0) {
+    if (!config.brainDir) return errorResponse(400, "sourcePaths requires BRAIN_DIR to be configured");
+    try {
+      const notes = await readBrainNotes(config.brainDir, sourcePaths);
+      for (const note of notes) source += `\n\n## ${note.path}\n${note.text}`;
+    } catch (err) {
+      return errorResponse(400, err instanceof Error ? err.message : String(err));
+    }
+  }
   if (source.length > MAX_SOURCE_CHARS) return errorResponse(400, `source exceeds ${MAX_SOURCE_CHARS} characters`);
 
   const languageRaw = typeof body["language"] === "string" ? body["language"] : "de";

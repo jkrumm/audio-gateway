@@ -134,6 +134,46 @@ describe("brain_search / brain_read", () => {
     expect(notes).toEqual([{ path: "peptides.md", text: expect.stringContaining("BPC-157") }]);
     await expect(readBrainNotes(vault, ["../outside.md"])).rejects.toThrow(/escapes the vault/);
   });
+
+  test("brain_read rejects a dotfile inside a hidden directory", async () => {
+    vault = setupVault();
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tool = findTool(tools, "brain_read");
+    await expect(tool.execute({ path: ".obsidian/plugins/x/data.json" })).rejects.toThrow(/markdown files outside hidden directories/);
+  });
+
+  test("brain_read rejects a bare dotfile", async () => {
+    vault = setupVault();
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tool = findTool(tools, "brain_read");
+    await expect(tool.execute({ path: ".env" })).rejects.toThrow(/markdown files outside hidden directories/);
+  });
+
+  test("brain_read rejects a hidden directory nested deeper in the vault", async () => {
+    vault = setupVault();
+    mkdirSync(join(vault, "foo", ".hidden"), { recursive: true });
+    writeFileSync(join(vault, "foo", ".hidden", "x.md"), "secret");
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tool = findTool(tools, "brain_read");
+    await expect(tool.execute({ path: "foo/.hidden/x.md" })).rejects.toThrow(/markdown files outside hidden directories/);
+  });
+
+  test("brain_read rejects a non-markdown file", async () => {
+    vault = setupVault();
+    writeFileSync(join(vault, "note.txt"), "not markdown");
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tool = findTool(tools, "brain_read");
+    await expect(tool.execute({ path: "note.txt" })).rejects.toThrow(/markdown files outside hidden directories/);
+  });
+
+  test("brain_read accepts an ordinary vault-relative markdown path", async () => {
+    vault = setupVault();
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tool = findTool(tools, "brain_read");
+    const raw = await tool.execute({ path: "Areas/peptide-protocol.md" });
+    const result = JSON.parse(raw) as { path: string };
+    expect(result.path).toBe("Areas/peptide-protocol.md");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -245,6 +285,46 @@ describe("research tool", () => {
     });
     const result = await findTool(tools, "research").execute({ query: "q" });
     expect(result).toMatch(/research failed: no sources found/);
+  });
+
+  test("a 429 on submit does not consume a budget slot", async () => {
+    const { fetchImpl } = scriptedFetch([
+      rawRes(429, { error: "full" }),
+      rawRes(200, { jobId: "job-1" }),
+      rawRes(200, { status: "done", result: { report: "recovered report" } }),
+    ]);
+    const tools = buildResearchTools({
+      history: noHistory,
+      model: "m",
+      maxRounds: 1,
+      research: { url: "https://research.example.com", apiKey: "key", maxCalls: 1 },
+      fetchImpl,
+      pollIntervalMs: 0,
+    });
+    const tool = findTool(tools, "research");
+    expect(await tool.execute({ query: "q1" })).toBe("research queue full, try later");
+    expect(await tool.execute({ query: "q2" })).toContain("recovered report");
+  });
+
+  test("a transport error on submit does not consume a budget slot", async () => {
+    let calls = 0;
+    const fetchImpl: ToolLoopFetch = (async () => {
+      calls++;
+      if (calls === 1) throw new Error("network down");
+      if (calls === 2) return rawRes(200, { jobId: "job-1" });
+      return rawRes(200, { status: "done", result: { report: "recovered after transport error" } });
+    }) as ToolLoopFetch;
+    const tools = buildResearchTools({
+      history: noHistory,
+      model: "m",
+      maxRounds: 1,
+      research: { url: "https://research.example.com", apiKey: "key", maxCalls: 1 },
+      fetchImpl,
+      pollIntervalMs: 0,
+    });
+    const tool = findTool(tools, "research");
+    await expect(tool.execute({ query: "q1" })).rejects.toThrow("network down");
+    expect(await tool.execute({ query: "q2" })).toContain("recovered after transport error");
   });
 });
 
