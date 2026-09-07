@@ -385,6 +385,8 @@ describe("Graceful shutdown", () => {
     const body = await res.json() as Record<string, unknown>;
     expect(body["ok"]).toBe(true);
     expect(body["service"]).toBe("audio-gateway");
+    // Always present (empty when every launcher overlay resolved) so a monitor can key on it.
+    expect(body["degraded"]).toEqual([]);
   });
 
   test("new authed requests get 503 when draining", async () => {

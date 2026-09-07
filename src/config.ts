@@ -315,6 +315,13 @@ export const config = {
    */
   otelAuthorization: process.env["OTEL_EXPORTER_OTLP_AUTHORIZATION"] ?? "",
   otelAuthScheme: process.env["OTEL_EXPORTER_OTLP_AUTH_SCHEME"] ?? "",
+  /**
+   * Optional overlays the launcher (`scripts/launch.sh`) could NOT resolve and
+   * started without — `publish` (Audiobookshelf) and/or `otel` — as a comma
+   * list. Surfaced on `GET /health` as `degraded: [...]` so a monitor can tell
+   * "up" from "up, but every episode will end unpublished".
+   */
+  degraded: csvList("AUDIO_GATEWAY_DEGRADED", ""),
   /** OTel resource `service.name` / scope name stamped on every span and log record. */
   otelServiceName: process.env["OTEL_SERVICE_NAME"] ?? "audio-gateway",
 

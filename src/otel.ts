@@ -373,6 +373,8 @@ let spanHook: ((record: SpanRecord) => void) | null = null;
 let logHook: ((record: LogRecord) => void) | null = null;
 
 let lastFailureLogAt = 0;
+/** One info line on the first batch the collector accepts — the only positive proof the export path works (a rejected key is otherwise silent until a dashboard stays empty). */
+let firstSuccessLogged = false;
 
 /**
  * POST one OTLP JSON batch. Never throws — a non-ok response or a network
@@ -409,7 +411,14 @@ async function postBatch(url: string, body: unknown): Promise<void> {
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });
-    if (!res.ok) reportExportFailure(`export rejected: ${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      reportExportFailure(`export rejected: ${res.status} ${res.statusText}`);
+      return;
+    }
+    if (!firstSuccessLogged) {
+      firstSuccessLogged = true;
+      console.log(`[otel] first export batch accepted by ${url} (HTTP ${res.status})`);
+    }
   } catch (err) {
     reportExportFailure(`export failed: ${err instanceof Error ? err.message : String(err)}`);
   }

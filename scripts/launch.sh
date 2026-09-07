@@ -34,22 +34,36 @@ fi
 
 # Publishing is an optional third layer: its two refs are seeded separately, and
 # secrets-run fails closed on ANY unresolved ref — so probe it on its own and
-# start without it rather than not at all.
-TPL_PUBLISH="$DIR/.env.mini.publish.tpl"
+# start without it rather than not at all. Every overlay that fails to resolve
+# is named in AUDIO_GATEWAY_DEGRADED, which the process logs at error level and
+# exposes on GET /health as `degraded: [...]` — "started without publishing" is
+# a monitor-visible state, not a stderr line nobody reads.
+DEGRADED=()
+
+# $1 = overlay name, $2 = template path, $3 = the op:// refs it needs. Sets
+# REPLY to the overlay's --env-file argument on success (no command
+# substitution — a subshell could not append to DEGRADED); records the name
+# otherwise.
+overlay_args() {
+  local name="$1" tpl="$2" refs="$3"
+  if [[ -f "$tpl" ]] && timeout 20 "$SECRETS_RUN" export --env-file="$tpl" >/dev/null 2>&1; then
+    REPLY="--env-file=$tpl"
+    return 0
+  fi
+  local unresolved
+  unresolved=$(/usr/bin/grep -hoE '^[A-Za-z_][A-Za-z0-9_]*=op://[^[:space:]]+' "$tpl" 2>/dev/null | /usr/bin/sed 's/^[^=]*=//' | /usr/bin/tr '\n' ' ')
+  print -u2 "audio-gateway: ERROR overlay '$name' ($tpl) does not resolve — refs: ${unresolved:-$refs}. Starting DEGRADED without it (seed the ref(s) via \`make secrets-seed\` on the MacBook, then \`make launchd-restart\`)."
+  DEGRADED+=("$name")
+  return 1
+}
+
 PUBLISH_ARGS=()
-if [[ -f "$TPL_PUBLISH" ]] && timeout 20 "$SECRETS_RUN" export --env-file="$TPL_PUBLISH" >/dev/null 2>&1; then
-  PUBLISH_ARGS=(--env-file="$TPL_PUBLISH")
-else
-  print -u2 "audio-gateway: $TPL_PUBLISH does not resolve — starting WITHOUT Audiobookshelf publishing (seed op://vps/audiobookshelf/* and restart)."
-fi
+if overlay_args publish "$DIR/.env.mini.publish.tpl" "op://vps/audiobookshelf/*"; then PUBLISH_ARGS=("$REPLY"); fi
 
 # Same story for OpenTelemetry: the HyperDX ingestion key is its own seed.
-TPL_OTEL="$DIR/.env.mini.otel.tpl"
 OTEL_ARGS=()
-if [[ -f "$TPL_OTEL" ]] && timeout 20 "$SECRETS_RUN" export --env-file="$TPL_OTEL" >/dev/null 2>&1; then
-  OTEL_ARGS=(--env-file="$TPL_OTEL")
-else
-  print -u2 "audio-gateway: $TPL_OTEL does not resolve — starting WITHOUT OpenTelemetry export (seed op://vps/argo/HYPERDX_API_KEY_PROD and restart)."
-fi
+if overlay_args otel "$DIR/.env.mini.otel.tpl" "op://vps/argo/HYPERDX_API_KEY_PROD"; then OTEL_ARGS=("$REPLY"); fi
+
+export AUDIO_GATEWAY_DEGRADED="${(j:,:)DEGRADED}"
 
 exec "$SECRETS_RUN" run --env-file="$TPL_BASE" --env-file="$TPL_MINI" "${PUBLISH_ARGS[@]}" "${OTEL_ARGS[@]}" -- bun src/index.ts

@@ -67,9 +67,9 @@ export async function handleRequest(req: Request): Promise<Response> {
   // /health is answered before auth and before draining check.
   if (req.method === "GET" && path === "/health") {
     if (draining) {
-      return Response.json({ ok: false, service: "audio-gateway", draining: true }, { status: 503 });
+      return Response.json({ ok: false, service: "audio-gateway", draining: true, degraded: config.degraded }, { status: 503 });
     }
-    return Response.json({ ok: true, service: "audio-gateway" });
+    return Response.json({ ok: true, service: "audio-gateway", degraded: config.degraded });
   }
 
   // During graceful drain, reject new work (but /health above still answers 503).
@@ -121,6 +121,9 @@ if (import.meta.main) {
     port: server.port,
     iuBaseUrl: config.iuBaseUrl,
   });
+  if (config.degraded.length > 0) {
+    log.error("audio-gateway started degraded — an optional overlay did not resolve (see launch.sh stderr for the ref)", { degraded: config.degraded });
+  }
 
   // Graceful shutdown (Decision 5): SIGTERM + SIGINT.
   const shutdown = async (signal: string): Promise<void> => {

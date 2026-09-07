@@ -44,9 +44,8 @@ IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET
 PODCAST_DB=./data/podcasts.db
 PODCAST_DATA_DIR=./data/podcasts
 
-# No OTLP collector is reachable from the mini: ClickStack's unauthed receiver
-# (http://clickstack:4319) is a Docker-internal address on the VPS, and the
-# public/tailnet path (otel.<domain>:4318) requires a bearer ingestion key this
-# exporter doesn't send (src/otel.ts has no OTEL_EXPORTER_OTLP_HEADERS support).
-# hermes-agent, the other mini-resident long-lived service, ships no OTEL_* vars
-# either — same precedent, left unset here.
+# OpenTelemetry export lives in .env.mini.otel.tpl — the same optional-overlay
+# trick as publishing: the VPS's public OTLP ingest needs the HyperDX ingestion
+# key (OTEL_EXPORTER_OTLP_AUTHORIZATION), seeded on its own, and scripts/launch.sh
+# layers the overlay only when it resolves. Either overlay missing shows up on
+# GET /health as `degraded: [...]`.
