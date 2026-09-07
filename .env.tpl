@@ -52,20 +52,20 @@ ARGO_API_SECRET=op://common/api/SECRET
 # override the writer-role models, TTS model, voices, host names, timing, or storage paths.
 # PODCAST_OUTLINE_MODEL=claude-opus-5        # story pass only
 # PODCAST_WRITE_MODEL=claude-opus-4-6        # the voice owner: segments + every revision
-# PODCAST_REVIEW_MODELS=gemini-3.1-pro-preview,gpt-5.6-luna   # every role runs on every listed model
+# PODCAST_REVIEW_MODELS=gemini-3.8-flash,gpt-5.6-luna   # every role runs on every listed model
 # PODCAST_METADATA_MODEL=gpt-5.6-luna        # final title/description/cover/genres/chapters pass
 # PODCAST_SHOW_BIBLE=./docs/show-bible.md    # house style injected verbatim into the writer prompts
 # PODCAST_TTS_MODEL=elevenlabs/v3
 # PODCAST_VOICES=Mark,Sarah
 # PODCAST_HOST_NAMES=Jonas,Lena
 # PODCAST_DEFAULT_MINUTES=20
-# PODCAST_STABILITY=0.45
+# PODCAST_STABILITY=0.5
 # PODCAST_MP3_BITRATE=64
 # PODCAST_GAP_MS=380
 # PODCAST_SHORT_GAP_MS=160
 # PODCAST_DATA_DIR=./data/podcasts
 # PODCAST_DB=./data/podcasts.db
-# PODCAST_SERIES=Hermes Briefings
+# PODCAST_SERIES=Brain Sonderausgabe
 # PODCAST_AUTHOR=Hermes
 
 # Audiobookshelf publish target. Unset ABS_URL disables publishing entirely.

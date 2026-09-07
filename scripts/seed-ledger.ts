@@ -14,11 +14,17 @@
  * Both are rewritten to this machine's absolute `<repo>/data/podcasts` so the
  * copied episodes resolve locally.
  *
+ * Once this machine's instance has produced episodes of its own (rows whose
+ * `runner` is `<this hostname>:<pid>`), the VPS ledger is no longer a superset:
+ * seeding over them would destroy episodes the VPS never had. Refused unless
+ * `--force`, which then says exactly which ids it is about to drop.
+ *
  * Usage: bun scripts/seed-ledger.ts [--force]
  */
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { mkdir, rm } from "node:fs/promises";
+import { hostname } from "node:os";
 import { resolve } from "node:path";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
@@ -63,8 +69,35 @@ function rewriteStateJson(stateJson: string): { rewritten: string; changed: bool
   return { rewritten: JSON.stringify(state), changed };
 }
 
+/** Ids of jobs whose `runner` host is THIS machine — episodes produced here, not copied from the VPS. */
+function jobsProducedHere(dbPath: string): string[] {
+  if (!existsSync(dbPath)) return [];
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const rows = db.query("SELECT id, state_json FROM podcast_job").all() as { id: string; state_json: string }[];
+    const host = hostname();
+    return rows
+      .filter((row) => {
+        const runner = (JSON.parse(row.state_json) as { runner?: string | null }).runner ?? "";
+        return runner.split(":")[0] === host;
+      })
+      .map((row) => row.id);
+  } finally {
+    db.close();
+  }
+}
+
 async function main(): Promise<void> {
   const { force } = parseArgs(process.argv.slice(2));
+
+  const producedHere = jobsProducedHere(DB_PATH);
+  if (producedHere.length > 0 && !force) {
+    console.error(`refusing to run: the local ledger holds ${producedHere.length} job(s) produced on this machine (${producedHere.join(", ")}) — seeding would destroy them. Pass --force only if that is what you want.`);
+    process.exit(1);
+  }
+  if (producedHere.length > 0) {
+    console.warn(`--force: DROPPING ${producedHere.length} job(s) produced on this machine: ${producedHere.join(", ")}`);
+  }
 
   // Checked (and, with --force, removed) together: `existsSync(DB_PATH)` alone
   // missed a leftover WAL/SHM sidecar (replayed into the fresh db on open) and

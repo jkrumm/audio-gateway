@@ -20,12 +20,14 @@ launchd-install: ## Render the plist template (__HOME__ substituted) and (re)loa
 	@launchctl bootstrap "gui/$$(id -u)" "$(PLIST)"
 	@echo "installed $(LABEL) -> $(PLIST)"
 
-.PHONY: launchd-uninstall
-deploy: ## Pull master and restart the LaunchAgent — refuses while a podcast job is running
-	@busy=$$(curl -sf -H "Authorization: Bearer make" http://localhost:7719/v1/podcasts | /usr/bin/python3 -c 'import sys,json; j=json.load(sys.stdin)["jobs"]; print(sum(1 for x in j if x["status"] not in ("done","failed")))' 2>/dev/null || echo 0); \
+.PHONY: deploy
+deploy: ## Pull master and restart the LaunchAgent — refuses while a podcast job is running or the working tree is dirty
+	@if [ -n "$$(git status --porcelain --untracked-files=no)" ]; then echo "  ✗ working tree has uncommitted edits — the LaunchAgent runs THIS checkout, so a pull would ship them (untracked files are fine). Commit or stash first:"; git status --short; exit 1; fi; \
+	busy=$$(curl -sf -H "Authorization: Bearer make" http://localhost:7719/v1/podcasts | /usr/bin/python3 -c 'import sys,json; j=json.load(sys.stdin)["jobs"]; print(sum(1 for x in j if x["status"] not in ("done","failed")))' 2>/dev/null || echo 0); \
 	if [ "$$busy" != "0" ]; then echo "  ✗ $$busy podcast job(s) running — a restart would kill them (no resume). Retry later."; exit 1; fi; \
 	git pull --ff-only && bun install --frozen-lockfile && $(MAKE) launchd-restart && sleep 2 && $(MAKE) launchd-status
 
+.PHONY: launchd-uninstall
 launchd-uninstall: ## Unload and remove the LaunchAgent
 	@launchctl bootout "gui/$$(id -u)/$(LABEL)" 2>/dev/null || true
 	@rm -f "$(PLIST)"
@@ -73,6 +75,7 @@ help:
 	@echo "  make check              typecheck + test"
 	@echo ""
 	@echo "  Mini podcast-pipeline instance (:7719) — see docs/podcast-editorial-room.md"
+	@echo "  make deploy             Pull master + restart (refuses while a job runs or the tree is dirty)"
 	@echo "  make launchd-install    Render the plist + (re)load com.jkrumm.audio-gateway"
 	@echo "  make launchd-uninstall  Unload + remove the LaunchAgent"
 	@echo "  make launchd-status     LaunchAgent state + curl localhost:7719/health"

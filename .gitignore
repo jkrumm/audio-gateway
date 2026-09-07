@@ -5,3 +5,5 @@ out/
 *.log
 .DS_Store
 bun.lockb
+# Sep-2026 backup of the pre-seed local ledger + episode dirs (17 MB); kept on purpose, never tracked
+data.bak-local/
