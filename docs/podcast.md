@@ -169,9 +169,11 @@ the library's configured folder, `POST /api/libraries/:id/scan` to make ABS inge
 ABS has no synchronous "here's your item id" response to an upload, so this is unavoidable (poll
 interval 2 s, 90 s deadline). Show-level metadata (title/author/description/genres/language) and the
 cover are only written on first creation or when still empty, so a hand-edited show description is
-never clobbered by a later episode's publish. A failure here (including the poll timing out) fails
-the JOB, but never the MP3 — it's already on disk, so `POST /v1/podcasts/:id/publish` retries just
-this stage.
+never clobbered by a later episode's publish. A failure here (including the poll timing out) never
+fails the JOB: the episode is produced, the job finishes `done` with `publish: { ok: false, error }`
+and `abs: null`, the brain note is still written, and the Slack line says so. The MP3 is on disk, so
+`POST /v1/podcasts/:id/publish` repeats just this stage — and on success (re)files the brain note
+with the Audiobookshelf link. `/retry` is reserved for real generation failures.
 
 ## The one-job queue
 

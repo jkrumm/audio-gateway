@@ -62,6 +62,48 @@ afterEach(() => {
   delete (globalThis as unknown as { fetch?: FetchImpl }).fetch;
 });
 
+type MutableAbsConfig = { absUrl: string; absApiKey: string };
+const absConfig = config as unknown as MutableAbsConfig;
+
+/** Pin ABS to (un)configured for one test body — audiobookshelf.test.ts flips the shared config singleton the other way. */
+async function withAbs(configured: boolean, body: () => Promise<void>): Promise<void> {
+  const saved = { absUrl: absConfig.absUrl, absApiKey: absConfig.absApiKey };
+  absConfig.absUrl = configured ? "https://abs.example.com" : "";
+  absConfig.absApiKey = configured ? "test-abs-key" : "";
+  try {
+    await body();
+  } finally {
+    absConfig.absUrl = saved.absUrl;
+    absConfig.absApiKey = saved.absApiKey;
+  }
+}
+
+/** The minimal happy-path Audiobookshelf: one podcast library, the scan finds `jobId`'s file as episode ep1 on item1, every write answers 200. */
+function stubAbsFetch(jobId: string): void {
+  const json = (body: unknown): Response => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+  (globalThis as unknown as { fetch: FetchImpl }).fetch = mock(async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method === "GET" && path === "/api/libraries") {
+      return json({ libraries: [{ id: "lib1", name: "Podcasts", mediaType: "podcast", folders: [{ id: "f1", fullPath: "/podcasts" }] }] });
+    }
+    if (method === "GET" && path === "/api/libraries/lib1/items") {
+      return json({ results: [{ id: "item1", media: { metadata: { title: "Test Show", description: "" }, coverPath: null } }] });
+    }
+    if (method === "GET" && path === "/api/items/item1") {
+      return json({
+        id: "item1",
+        media: {
+          metadata: { title: "Test Show", description: "" },
+          coverPath: null,
+          episodes: [{ id: "ep1", title: "placeholder", audioFile: { metadata: { filename: `x [${jobId.slice(0, 8)}].mp3` } } }],
+        },
+      });
+    }
+    return json({});
+  });
+}
+
 function authed(req: Request): Request {
   const headers = new Headers(req.headers);
   headers.set("authorization", "Bearer test-proxy-secret");
@@ -292,6 +334,7 @@ describe("toPublicJob", () => {
       costUsd: 0.42,
       error: null,
       abs: { url: "https://abs.example.com/item/1", libraryItemId: "item-1", episodeId: "ep-1" },
+      publish: { ok: true, error: null },
       files: { audio: "/tmp/a/episode.mp3", cover: "/tmp/a/cover.png", script: "/tmp/a/script.json", dossier: "/tmp/a/dossier.json", brief: "/tmp/a/brief.json" },
       runner: null,
       brief: null,
@@ -305,6 +348,7 @@ describe("toPublicJob", () => {
     expect(pub.chapters).toEqual([{ title: "Intro", start_ms: 0 }]);
     expect(pub.abs).toEqual({ url: "https://abs.example.com/item/1", library_item_id: "item-1", episode_id: "ep-1" });
     expect(pub.series).toBe("Test Show");
+    expect(pub.publish).toEqual({ requested: false, ok: true, error: null });
     expect(pub.links).toEqual({
       audio: "/v1/podcasts/job-1/audio",
       cover: "/v1/podcasts/job-1/cover",
@@ -404,7 +448,7 @@ describe("POST /v1/podcasts validation", () => {
     expect(body["series"]).toBe(config.podcastSeries);
     expect(body["minutes"]).toBe(config.podcastDefaultMinutes);
     expect(body["language"]).toBe("de");
-    expect(body["publish"]).toBe(false);
+    expect(body["publish"]).toEqual({ requested: false, ok: null, error: null });
     expect(JSON.stringify(body)).not.toContain("hello world");
   });
 
@@ -635,24 +679,63 @@ describe("POST /v1/podcasts/:id/publish", () => {
     expect(res.status).toBe(404);
   });
 
-  test("runs and returns the job JSON — fails cleanly when Audiobookshelf isn't configured", async () => {
-    // audiobookshelf.test.ts / cover.test.ts flip the config singleton to "configured"
-    // and bun test shares one module registry — pin the precondition this test is about.
-    const cfg = config as unknown as { absUrl: string; absApiKey: string };
-    const saved = { absUrl: cfg.absUrl, absApiKey: cfg.absApiKey };
-    cfg.absUrl = "";
-    cfg.absApiKey = "";
-    try {
+  type PublishBody = { status: string; error: string | null; abs: { url: string; library_item_id: string; episode_id: string | null } | null; publish: { requested: boolean; ok: boolean | null; error: string | null } };
+  const publish = async (id: string): Promise<PublishBody> => {
+    const res = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${id}/publish`, { method: "POST" })));
+    expect(res.status).toBe(200);
+    return (await res.json()) as PublishBody;
+  };
+
+  test("runs and returns the job JSON — a failed upload keeps the job done, records publish.error and leaves abs null", async () => {
+    await withAbs(false, async () => {
       const job = seedDoneJob();
-      const res = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${job.id}/publish`, { method: "POST" })));
-      expect(res.status).toBe(200);
-      const body = (await res.json()) as { status: string; error: string | null };
+      const body = await publish(job.id);
+      expect(body.status).toBe("done");
+      expect(body.error).toBeNull();
+      expect(body.abs).toBeNull();
+      expect(body.publish.ok).toBe(false);
+      expect(body.publish.error).toContain("not configured");
+
+      // Still not a retry candidate: /retry is for generation failures only.
+      const retry = await handleRequest(authed(new Request(`http://localhost/v1/podcasts/${job.id}/retry`, { method: "POST" })));
+      expect(retry.status).toBe(409);
+    });
+  });
+
+  test("a job that recoverPodcastJobs failed mid-publish stays failed (own error kept) until a re-publish succeeds", async () => {
+    const job = seedDoneJob();
+    _test.getStore().update(job.id, { status: "failed", error: "interrupted by restart" });
+
+    await withAbs(false, async () => {
+      const body = await publish(job.id);
       expect(body.status).toBe("failed");
-      expect(body.error).toContain("not configured");
-    } finally {
-      cfg.absUrl = saved.absUrl;
-      cfg.absApiKey = saved.absApiKey;
-    }
+      expect(body.error).toBe("interrupted by restart");
+      expect(body.abs).toBeNull();
+      expect(body.publish).toEqual({ requested: false, ok: false, error: "Audiobookshelf publishing not configured (ABS_URL/ABS_API_KEY unset)" });
+    });
+
+    await withAbs(true, async () => {
+      stubAbsFetch(job.id);
+      const body = await publish(job.id);
+      expect(body.status).toBe("done");
+      expect(body.error).toBeNull();
+      expect(body.publish).toEqual({ requested: false, ok: true, error: null });
+      expect(body.abs).toEqual({ url: "https://abs.example.com/item/item1", library_item_id: "item1", episode_id: "ep1" });
+    });
+  });
+
+  test("a failed re-publish keeps the abs link an earlier publish produced — the item still exists in ABS", async () => {
+    const job = seedDoneJob();
+    _test.getStore().update(job.id, { abs: { url: "https://abs.example.com/item/old", libraryItemId: "old", episodeId: "ep-old" }, publish: { ok: true, error: null } });
+
+    await withAbs(true, async () => {
+      stubFailingFetch();
+      const body = await publish(job.id);
+      expect(body.status).toBe("done");
+      expect(body.publish.ok).toBe(false);
+      expect(body.publish.error).toContain("HTTP 500");
+      expect(body.abs).toEqual({ url: "https://abs.example.com/item/old", library_item_id: "old", episode_id: "ep-old" });
+    });
   });
 
   test("409 when the same job is already publishing", async () => {
@@ -788,6 +871,7 @@ describe("podcastDoneMessage", () => {
       absUrl: "https://abs.example/item/1",
       costUsd: 2.257,
       publishRequested: true,
+      publishError: null,
       format: "Erklärstück",
       lead: "A",
       humor: "sparse",
@@ -800,6 +884,7 @@ describe("podcastDoneMessage", () => {
       absUrl: null,
       costUsd: null,
       publishRequested: false,
+      publishError: null,
       format: "Gespräch",
       lead: "balanced",
       humor: "none",
@@ -811,7 +896,67 @@ describe("podcastDoneMessage", () => {
     expect(msg).toContain("Format: Erklärstück · Jonas führt · sparse");
     expect(msg).toContain("• B");
     expect(msg).toContain("https://abs.example/item/1");
-    expect(msg).toContain("2.26 USD");
+    expect(msg).toContain("Kosten: 2.26 USD");
+    expect(msg).not.toContain("ElevenLabs-Kosten");
+  });
+
+  test("a failed upload says produced-but-unpublished and points at /publish, never at /retry", async () => {
+    const { podcastDoneMessage } = await import("./podcasts");
+    const msg = podcastDoneMessage({
+      title: "T",
+      durationSeconds: 600,
+      chapters: [],
+      absUrl: null,
+      costUsd: 1,
+      publishRequested: true,
+      publishError: "ABS scan timed out",
+      format: "Gespräch",
+      lead: "balanced",
+      humor: "none",
+      hostNames: ["Jonas", "Lena"],
+    });
+    expect(msg).toContain("Produziert, Veröffentlichung fehlgeschlagen (ABS scan timed out) — /publish wiederholt nur den Upload.");
+    expect(msg).not.toContain("nicht konfiguriert");
+    expect(msg).not.toContain("/retry");
+  });
+});
+
+describe("publishEpisode (pipeline stage 6)", () => {
+  const script = { title: "The Plan", description: "d", coverPrompt: "c", genres: ["Travel"], language: "de" as const, wordCount: 1, topics: [], segments: [] };
+  const stage = (job: PodcastJob): ReturnType<typeof _test.publishEpisode> =>
+    _test.publishEpisode({ job, store: _test.getStore(), script, mp3: new Uint8Array([1, 2, 3]), coverPng: undefined, today: "2026-09-07" });
+
+  test("a throwing upload is caught: publish.error + publishError carry it, abs is null, nothing propagates to the pipeline", async () => {
+    await withAbs(true, async () => {
+      stubFailingFetch();
+      const job = _test.getStore().create({ caller: "t", request: makeRequest({ publish: true }) });
+      const result = await stage(job);
+      expect(result.abs).toBeNull();
+      expect(result.publish?.ok).toBe(false);
+      expect(result.publish?.error).toContain("HTTP 500");
+      expect(result.publishError).toBe(result.publish?.error ?? null);
+      expect(_test.getStore().get(job.id)?.status).toBe("publishing");
+    });
+  });
+
+  test("a successful upload returns the abs link", async () => {
+    await withAbs(true, async () => {
+      const job = _test.getStore().create({ caller: "t", request: makeRequest({ publish: true }) });
+      stubAbsFetch(job.id);
+      const result = await stage(job);
+      expect(result.publish).toEqual({ ok: true, error: null });
+      expect(result.publishError).toBeNull();
+      expect(result.abs).toEqual({ url: "https://abs.example.com/item/item1", libraryItemId: "item1", episodeId: "ep1" });
+    });
+  });
+
+  test("not configured is recorded on publish but is not a publishError; publish: false records nothing", async () => {
+    await withAbs(false, async () => {
+      const requested = await stage(_test.getStore().create({ caller: "t", request: makeRequest({ publish: true }) }));
+      expect(requested).toEqual({ abs: null, publish: { ok: false, error: "audiobookshelf not configured" }, publishError: null });
+      const unrequested = await stage(_test.getStore().create({ caller: "t", request: makeRequest({ publish: false }) }));
+      expect(unrequested).toEqual({ abs: null, publish: null, publishError: null });
+    });
   });
 });
 

@@ -86,8 +86,8 @@ GET    /v1/podcasts/:id/cover        → the cover PNG
 GET    /v1/podcasts/:id/script       → script.json, or a Markdown transcript with ?format=md
 GET    /v1/podcasts/:id/dossier      → the research stage's dossier.json (404 before research ran)
 GET    /v1/podcasts/:id/brief        → the editor's brief.json (404 before editorial ran)
-POST   /v1/podcasts/:id/publish      → re-run just the Audiobookshelf publish stage (mp3 stays on disk on failure)
-POST   /v1/podcasts/:id/retry        → re-queue a FAILED job as a new job with the same request
+POST   /v1/podcasts/:id/publish      → re-run just the Audiobookshelf publish stage (a failed upload never fails the job: status stays done, publish.error says why, abs is null)
+POST   /v1/podcasts/:id/retry        → re-queue a FAILED job (generation, not publish) as a new job with the same request
 DELETE /v1/podcasts/:id              → remove the job + its artifacts (409 while running)
 ```
 
@@ -125,5 +125,3 @@ bun run typecheck
 bun test
 ```
 
-## Status
-Built from `PRD.md`. See `docs/reference/audio-proxy-spec.md` for the full behavioral contract.

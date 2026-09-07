@@ -51,7 +51,7 @@ interface PodcastJobPublic {
   series: string;
   minutes: number;
   language: string;
-  publish: boolean;
+  publish: { requested: boolean; ok: boolean | null; error: string | null };
   created_at: string;
   updated_at: string;
   links: { audio: string | null; cover: string | null; script: string | null };
@@ -292,6 +292,7 @@ function printSummary(job: PodcastJobPublic, paths: { audio: string | null; cove
     for (const c of job.chapters) console.log(`  ${formatMmSs(c.start_ms / 1000)}  ${c.title}`);
   }
   if (job.abs) console.log(`audiobookshelf: ${job.abs.url}`);
+  if (job.publish.ok === false) console.log(`publish failed: ${job.publish.error} — \`bun run podcast -- publish ${job.id}\` repeats only the upload`);
   if (paths.audio) console.log(`audio:  ${paths.audio}`);
   if (paths.cover) console.log(`cover:  ${paths.cover}`);
   if (paths.script) console.log(`script: ${paths.script}`);
@@ -385,6 +386,7 @@ async function runPublish(argv: string[]): Promise<void> {
   }
   console.log(`[${job.status}] ${job.title ?? "(untitled)"}`);
   if (job.abs) console.log(`audiobookshelf: ${job.abs.url}`);
+  if (job.publish.ok === false) console.log(`publish failed: ${job.publish.error}`);
   if (job.error) console.log(`error: ${job.error}`);
 }
 

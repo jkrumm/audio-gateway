@@ -75,6 +75,13 @@ export interface PodcastJob {
   costUsd: number | null;
   error: string | null;
   abs: { url: string; libraryItemId: string; episodeId: string | null } | null;
+  /**
+   * Outcome of the Audiobookshelf publish stage; null when not requested or
+   * not yet attempted. A failed publish is NOT a failed job — the episode is
+   * produced and on disk, `abs` is null and `POST /:id/publish` repeats only
+   * the upload. `/retry` stays reserved for generation failures.
+   */
+  publish: { ok: boolean; error: string | null } | null;
   /** Absolute paths under `config.podcastDataDir/<id>/`. */
   files: { audio: string | null; cover: string | null; script: string | null; dossier: string | null; brief: string | null };
   /**
@@ -128,6 +135,7 @@ interface PodcastJobState {
   costUsd: PodcastJob["costUsd"];
   error: PodcastJob["error"];
   abs: PodcastJob["abs"];
+  publish?: PodcastJob["publish"];
   files: PodcastJob["files"];
   runner?: PodcastJob["runner"];
   brief: PodcastJob["brief"];
@@ -146,6 +154,7 @@ function jobToState(job: PodcastJob): PodcastJobState {
     costUsd: job.costUsd,
     error: job.error,
     abs: job.abs,
+    publish: job.publish,
     files: job.files,
     runner: job.runner,
     brief: job.brief,
@@ -192,6 +201,7 @@ function rowToJob(row: PodcastJobRow): PodcastJob {
     costUsd: state.costUsd ?? null,
     error: state.error ?? null,
     abs: state.abs ?? null,
+    publish: state.publish ?? null,
     files: {
       audio: state.files?.audio ?? null,
       cover: state.files?.cover ?? null,
@@ -273,6 +283,7 @@ export class PodcastStore {
       costUsd: null,
       error: null,
       abs: null,
+      publish: null,
       files: { audio: null, cover: null, script: null, dossier: null, brief: null },
       runner: null,
       brief: null,
@@ -427,7 +438,8 @@ export interface PublicPodcastJob {
   series: string;
   minutes: number;
   language: "de" | "en";
-  publish: boolean;
+  /** `requested` mirrors the request; `ok`/`error` are the publish stage's outcome (`ok: null` = not attempted). */
+  publish: { requested: boolean; ok: boolean | null; error: string | null };
   created_at: string;
   updated_at: string;
   links: { audio: string | null; cover: string | null; script: string | null; dossier: string | null; brief: string | null };
@@ -453,7 +465,7 @@ export function toPublicJob(job: PodcastJob): PublicPodcastJob {
     series: job.request.series,
     minutes: job.request.minutes,
     language: job.request.language,
-    publish: job.request.publish,
+    publish: { requested: job.request.publish, ok: job.publish?.ok ?? null, error: job.publish?.error ?? null },
     created_at: job.createdAt,
     updated_at: job.updatedAt,
     links: {
@@ -748,29 +760,14 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   profile.durationSeconds = durationSeconds;
   store.update(job.id, { durationSeconds, turns: turns.length, chapters, files: { ...files }, profile });
 
-  // 6. publishing
-  let absResult: PodcastJob["abs"] = null;
-  if (request.publish) {
-    if (!absConfigured()) {
-      log.warn("publish skipped: audiobookshelf not configured", { id: job.id });
-    } else {
-      store.update(job.id, { status: "publishing" });
-      const filename = episodeFilename(today, script.title, job.id);
-      const published = await publishToAudiobookshelf({
-        series: request.series,
-        author: config.podcastAuthor,
-        description: config.podcastSeriesDescription,
-        language: request.language,
-        genres: script.genres,
-        episode: { title: script.title, description: script.description, filename, file: mp3 },
-        cover: coverPng,
-      });
-      absResult = { url: published.url, libraryItemId: published.libraryItemId, episodeId: published.episodeId };
-    }
-  }
+  // 6. publishing — best-effort: the episode is produced whether or not the
+  // upload lands. A failure is recorded on `publish`, the job still finishes
+  // `done` (with the brain note below), and `POST /:id/publish` repeats only
+  // this stage.
+  const { abs: absResult, publish: publishResult, publishError } = await publishEpisode({ job, store, script, mp3, coverPng, today });
 
   const costUsd = getRequestMeta().costUsd ?? null;
-  store.update(job.id, { status: "done", abs: absResult, error: null, progress: null, costUsd });
+  store.update(job.id, { status: "done", abs: absResult, publish: publishResult, error: null, progress: null, costUsd });
 
   const audioSeconds = mux.totalMs / 1000;
   span.setAttributes({
@@ -781,6 +778,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     "audio.bytes_out": mp3.byteLength,
     "audio.cost_usd": costUsd ?? undefined,
     "audio.podcast.published": absResult !== null,
+    "audio.podcast.publish_error": publishResult?.error ?? undefined,
     "podcast.format": profile.format,
     "podcast.lead": profile.lead,
     "podcast.humor": profile.humor,
@@ -796,6 +794,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     durationSeconds,
     costUsd,
     published: absResult !== null,
+    publishError: publishResult?.error ?? null,
   });
   await notifyPodcastResult({
     text: podcastDoneMessage({
@@ -805,6 +804,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       absUrl: absResult?.url ?? null,
       costUsd,
       publishRequested: request.publish,
+      publishError,
       format: profile.format,
       lead: profile.lead,
       humor: profile.humor,
@@ -853,14 +853,63 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   }
 }
 
+/**
+ * Stage 6 of the pipeline. Never throws: an upload failure comes back on
+ * `publish.error` and on `publishError`, which drives the Slack line —
+ * "not configured" keeps its own line there and leaves `publishError` null.
+ * Exported for tests via `_test`.
+ */
+async function publishEpisode(params: {
+  job: PodcastJob;
+  store: PodcastStore;
+  script: PodcastScript;
+  mp3: Uint8Array;
+  coverPng: Uint8Array | undefined;
+  today: string;
+}): Promise<{ abs: PodcastJob["abs"]; publish: PodcastJob["publish"]; publishError: string | null }> {
+  const { job, store, script, mp3, coverPng, today } = params;
+  const { request } = job;
+  if (!request.publish) return { abs: null, publish: null, publishError: null };
+  if (!absConfigured()) {
+    log.warn("publish skipped: audiobookshelf not configured", { id: job.id });
+    return { abs: null, publish: { ok: false, error: "audiobookshelf not configured" }, publishError: null };
+  }
+
+  store.update(job.id, { status: "publishing" });
+  try {
+    const filename = episodeFilename(today, script.title, job.id);
+    const published = await publishToAudiobookshelf({
+      series: request.series,
+      author: config.podcastAuthor,
+      description: config.podcastSeriesDescription,
+      language: request.language,
+      genres: script.genres,
+      episode: { title: script.title, description: script.description, filename, file: mp3 },
+      cover: coverPng,
+    });
+    return {
+      abs: { url: published.url, libraryItemId: published.libraryItemId, episodeId: published.episodeId },
+      publish: { ok: true, error: null },
+      publishError: null,
+    };
+  } catch (err) {
+    const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
+    log.error("podcast.publish.failed", { id: job.id, error: message });
+    return { abs: null, publish: { ok: false, error: message }, publishError: message };
+  }
+}
+
 /** The Slack line for a finished episode — the listener wants the link, not the JSON. Exported for tests. */
 export function podcastDoneMessage(params: {
   title: string;
   durationSeconds: number;
   chapters: string[];
   absUrl: string | null;
+  /** Summed over every billed call in the job — ElevenLabs characters AND the writers' room LLM tokens (`usage.ts` keeps one running total, no split). */
   costUsd: number | null;
   publishRequested: boolean;
+  /** The upload's error when publishing was requested, configured and still failed; null otherwise. */
+  publishError: string | null;
   format: string;
   lead: EpisodeProfile["lead"];
   humor: string;
@@ -875,10 +924,12 @@ export function podcastDoneMessage(params: {
     ...params.chapters.map((c) => `• ${c}`),
     params.absUrl
       ? `Anhören in Audiobookshelf: ${params.absUrl}`
-      : params.publishRequested
-        ? "Nicht veröffentlicht: Audiobookshelf ist auf diesem Gateway nicht konfiguriert."
-        : "Nicht veröffentlicht (nicht angefordert) — die Datei liegt auf dem Gateway.",
-    params.costUsd != null ? `ElevenLabs-Kosten: ${params.costUsd.toFixed(2)} USD` : "",
+      : params.publishError
+        ? `Produziert, Veröffentlichung fehlgeschlagen (${params.publishError}) — /publish wiederholt nur den Upload.`
+        : params.publishRequested
+          ? "Nicht veröffentlicht: Audiobookshelf ist auf diesem Gateway nicht konfiguriert."
+          : "Nicht veröffentlicht (nicht angefordert) — die Datei liegt auf dem Gateway.",
+    params.costUsd != null ? `Kosten: ${params.costUsd.toFixed(2)} USD` : "",
   ];
   return lines.filter(Boolean).join("\n");
 }
@@ -942,10 +993,14 @@ function countDoneInSeries(store: PodcastStore, series: string): number {
 
 /**
  * Re-publish an already-generated episode: the mp3/cover are still on disk,
- * so this re-runs only stage 4, wrapped in the same trace as the original run
- * (same `job.id`) for correlation. Never throws — a failure is recorded on
- * the job (status `failed`) and returned to the caller as the job's JSON, so
- * `POST /publish` can simply be retried.
+ * so this re-runs only stage 6, wrapped in the same trace as the original run
+ * (same `job.id`) for correlation. Never throws — a failure lands on
+ * `publish: { ok: false, error }` and `POST /publish` can simply be retried;
+ * the job keeps the status and `error` it entered with (a `done` job stays
+ * `done`, one `recoverPodcastJobs` marked `failed` stays `failed`) and keeps
+ * any earlier `abs` link, since that item still exists in Audiobookshelf. A
+ * success makes it `done` and (re)files the brain note so it carries the
+ * Audiobookshelf link the original run lacked.
  */
 async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
   const store = getStore();
@@ -964,7 +1019,7 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
           if (!audioPath) throw new Error("podcast job has no audio to publish");
           const mp3 = await readFile(audioPath);
           const cover = job.files.cover ? await readFile(job.files.cover) : undefined;
-          const genres = await readPersistedGenres(job.files.script);
+          const script = await readPersistedScript(job.files.script);
           const title = job.title ?? job.request.title ?? job.request.series;
           const description = job.description ?? "";
           const today = new Date().toISOString().slice(0, 10);
@@ -975,7 +1030,7 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
             author: config.podcastAuthor,
             description: config.podcastSeriesDescription,
             language: job.request.language,
-            genres,
+            genres: script?.genres ?? [],
             episode: { title, description, filename, file: mp3 },
             cover,
           });
@@ -983,12 +1038,29 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
           store.update(job.id, {
             status: "done",
             error: null,
+            publish: { ok: true, error: null },
             abs: { url: published.url, libraryItemId: published.libraryItemId, episodeId: published.episodeId },
           });
           log.info("podcast.published", { id: job.id, url: published.url });
+
+          if (config.brainDir && job.request.brainNote && job.profile && script) {
+            const brainNoteResult = await writeEpisodeBrainNote({
+              brainDir: config.brainDir,
+              jobId: job.id,
+              title,
+              description,
+              series: job.request.series,
+              createdAt: job.createdAt,
+              profile: job.profile,
+              transcriptMarkdown: renderTranscriptMarkdown(script),
+              absItemId: published.libraryItemId,
+            });
+            store.update(job.id, { brainNote: brainNoteResult });
+            log.info("podcast.brain_note", { id: job.id, path: brainNoteResult.path, committed: brainNoteResult.committed, pushed: brainNoteResult.pushed });
+          }
         } catch (err) {
           const message = (err instanceof Error ? err.message : String(err)).slice(0, 500);
-          store.update(job.id, { status: "failed", error: message });
+          store.update(job.id, { status: job.status, abs: job.abs, publish: { ok: false, error: message } });
           span.setStatus("error", message);
           log.error("podcast.publish.failed", { id: job.id, error: message });
         }
@@ -998,13 +1070,12 @@ async function runPublishStage(job: PodcastJob): Promise<PodcastJob> {
   return store.get(job.id) ?? job;
 }
 
-async function readPersistedGenres(scriptPath: string | null): Promise<string[]> {
-  if (!scriptPath) return [];
+async function readPersistedScript(scriptPath: string | null): Promise<PersistedPodcastScript | null> {
+  if (!scriptPath) return null;
   try {
-    const raw = await readFile(scriptPath, "utf8");
-    return (JSON.parse(raw) as { genres?: string[] }).genres ?? [];
+    return JSON.parse(await readFile(scriptPath, "utf8")) as PersistedPodcastScript;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -1351,4 +1422,4 @@ export async function handlePodcasts(req: Request, path: string, tokenCaller?: s
 // directly (mirrors otel.ts's `_test` export) without racing the real
 // generation pipeline that a POST enqueues.
 // ---------------------------------------------------------------------------
-export const _test = { getStore, claimJob, releaseJob, asciiHeaderSafe };
+export const _test = { getStore, claimJob, releaseJob, asciiHeaderSafe, publishEpisode };
