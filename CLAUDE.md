@@ -15,7 +15,8 @@ pipeline (both retired 2026-06-17).
 - Port **7714**. OpenAI-compatible `/v1/audio/*` surface (suffix-routed, so `/audio/...` works too).
 
 ## Layout
-- `src/index.ts` — `Bun.serve` entry: routing, auth gate, `/health`, `/models`, top-level error wrap.
+- `src/index.ts` — `Bun.serve` entry: routing, auth gate, `/health` (with `degraded: [...]` — the
+  launcher overlays that did not resolve), `/models`, top-level error wrap.
 - `src/config.ts` — the ONLY place env is read; exports a frozen `config`. Required vars fail fast at boot.
 - `src/iu.ts` — upstream URL builders + bearer-header helper (OpenAI, Gemini, Replicate bases).
 - `src/usage.ts` — usage sink. SQLite adapter (default); HTTP adapter is the Phase-3 seam. Also
@@ -63,7 +64,10 @@ pipeline (both retired 2026-06-17).
   `PodcastStore.recentEpisodes`), the one-job-at-a-time queue, the `runPodcastJob` pipeline
   (research → editorial → script → synth → mux/master → cover → publish → brain note), and the
   `/v1/podcasts*` HTTP handlers (`handlePodcasts`/`isPodcastPath`, mounted from `index.ts`; 410s
-  every route when `config.podcastEnabled` is off).
+  every route when `config.podcastEnabled` is off). A failed Audiobookshelf upload never fails the
+  job: it finishes `done` with `publish: { ok: false, error }` and `abs: null`, the brain note is
+  still written, and `POST /:id/publish` repeats only the upload (then files the note with the
+  link); `/retry` is for generation failures only.
 - `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
   dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,
   roles, tone, humor, opening, closing and rhythm; devices (hook/motif/reveals/digressions) are
@@ -121,7 +125,8 @@ pipeline (both retired 2026-06-17).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime. Serves STT/TTS;
   `PODCAST_ENABLED=false` once the mini instance owns the podcast pipeline.
 - Mac mini prod: a LaunchAgent instance dedicated to podcasts (`launchd/`, `.env.mini.tpl`, port
-  `7719`). `make deploy` (pull + restart, refuses while a job runs — a restart kills it, no resume),
+  `7719`). `make deploy` (pull + restart; refuses while a job runs — a restart kills it, no resume —
+  and on a dirty working tree, since the LaunchAgent runs this checkout),
   `make launchd-install | launchd-status | launchd-restart | launchd-logs | launchd-uninstall`
   manage it; `make seed-ledger` copies the VPS podcast job ledger + episode artifacts onto the mini
   so it starts with existing episodes as editorial memory.
@@ -141,10 +146,9 @@ fixed-dramaturgy sections as history.
 `docs/hyperdx-dashboard.md` — the ClickStack span model and the tile definitions (search + SQL) for the
 HyperDX "Audio" dashboard; `bun run usage:tail --prod` is the terminal view of the same requests.
 
-`docs/reference/audio-proxy-spec.md` is the behavioral contract, extracted from the original
-`audio-proxy` service. That service is RETIRED (2026-06-17): its macOS LaunchAgent was removed and
-its GitHub repo archived; the local checkout at `../audio-proxy` is kept read-only for reference.
-`PRD.md` is the build spec and records the decisions that diverge from a straight port.
+`docs/decisions.md` — the numbered port-era decisions code comments cite ("Decision 5"); the
+`PRD.md` and `audio-proxy` spec they came from are deleted (the original `audio-proxy` service is
+retired since 2026-06-17, its repo archived).
 
 ## Git
 Direct-to-master (SourceRoot default; not on the PR-required list).

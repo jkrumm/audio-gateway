@@ -244,28 +244,34 @@ the tool loop's rounds. Root span attributes add `podcast.format`, `podcast.lead
 
 - `launchd/com.jkrumm.audio-gateway.plist.template` + `scripts/launch.sh` (wrapper, pattern
   from `hermes-serve-launch.sh`: PATH, `secrets-run` preflight, `exec secrets-run run
-  --env-file=.env.tpl --env-file=.env.mini.tpl -- bun src/index.ts`). `KeepAlive`,
+  --env-file=.env.tpl --env-file=.env.mini.tpl [overlays] -- bun src/index.ts`). `KeepAlive`,
   `RunAtLoad`, logs in `~/Library/Logs/audio-gateway.{log,err}`.
-- `.env.mini.tpl`: `PORT=7719`, `BRAIN_DIR=/Users/jkrumm/SourceRoot/brain`,
+- `.env.mini.tpl`: `PORT=7719`, `BRAIN_DIR=../brain` (relative to the LaunchAgent's
+  WorkingDirectory — no tracked file carries the real home path; `config.ts` resolves it),
   `RESEARCH_API_KEY=op://vps/research-gateway/API_SECRET`, `PODCAST_DB`/`PODCAST_DATA_DIR`
   under `./data`, image-gen + Argo refs as on the VPS, `PODCAST_NOTIFY_CHANNEL=media`,
   `USAGE_SOURCE_LABEL=audio-gateway-mini`. The two Audiobookshelf refs sit in their own
   overlay `.env.mini.publish.tpl`, which the launcher adds only when it resolves — `secrets-run`
   fails closed on any unseeded ref, and those two are seeded separately (`make secrets-seed`
   on the MacBook), so an unseeded cache yields a running instance that skips publishing
-  instead of no instance. OpenTelemetry uses the same trick: `.env.mini.otel.tpl` points the exporter at
-  the VPS's public ingest (`otel.<domain>`, bearertokenauth via `OTEL_EXPORTER_OTLP_HEADERS`)
-  and is layered only when the ingestion key resolves. A push to master does NOT redeploy the
-  mini — `make deploy` pulls and restarts, and refuses while a job runs.
-- `make launchd-install | launchd-status | launchd-logs | seed-ledger` (the last one scp's
-  the VPS ledger and episode dirs so the mini starts with the five existing episodes as
-  memory).
-- `dotfiles/docs/architecture.md` gets the LaunchAgent row (`make architecture-check`
-  fails otherwise). `dotfiles/config/Caddyfile` gets `podcasts.test → :7719` so the tailnet
+  instead of no instance. OpenTelemetry uses the same trick: `.env.mini.otel.tpl` points the
+  exporter at the VPS's public ingest (`otel.<domain>`, the HyperDX ingestion key as a
+  whole-value ref in `OTEL_EXPORTER_OTLP_AUTHORIZATION` — `secrets-run` cannot resolve a ref
+  embedded in an `OTEL_EXPORTER_OTLP_HEADERS` string) and is layered only when the key
+  resolves. An overlay that does not resolve is logged at error level with its ref and listed
+  on `GET /health` as `degraded: ["publish"|"otel"]`, so "up but every episode ends
+  unpublished" is a monitor-visible state. A push to master does NOT redeploy the mini —
+  `make deploy` pulls and restarts, and refuses while a job runs or the working tree is dirty
+  (the LaunchAgent runs this checkout).
+- `make launchd-install | launchd-status | launchd-logs | seed-ledger` (the last one scp'd
+  the VPS ledger and episode dirs so the mini started with the five existing episodes as
+  memory; it now refuses without `--force` once the ledger holds episodes produced here).
+- `dotfiles/docs/architecture.md` has the LaunchAgent row (`make architecture-check`
+  fails otherwise). `dotfiles/config/Caddyfile` has `podcasts.test → :7719` so the tailnet
   door `podcasts.mini.jkrumm.com` exists for the MacBook.
-- Hermes `skills/podcast` and Claude Code `skills/podcast` point at the mini instance; the
-  VPS keeps serving `/v1/podcasts` until the mini has produced one clean episode, then
-  `PODCAST_ENABLED=false` in the vps compose turns it off there (a 410 with a hint).
+- Hermes `skills/podcast` and Claude Code `skills/podcast` point at the mini instance. Done:
+  the VPS runs `PODCAST_ENABLED=false` and answers every `/v1/podcasts*` route with a 410
+  pointing at the mini.
 
 ## Acceptance
 
