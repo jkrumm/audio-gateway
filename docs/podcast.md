@@ -231,7 +231,7 @@ row.
 | `BRAIN_DIR` | unset | Vault checkout the research tools read and the episode note is written into; empty disables both. |
 | `RESEARCH_GATEWAY_URL` | `https://research.jkrumm.com` | research-gateway base (tailnet-only). |
 | `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
-| `PODCAST_RESEARCH_MODEL` | `gpt-5.6-luna` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
+| `PODCAST_RESEARCH_MODEL` | `gpt-5.6-terra` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
 | `PODCAST_EDITORIAL_MODEL` | `claude-opus-5` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
 | `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls the researcher may spend per job. |
 | `PODCAST_TOOL_MAX_ROUNDS` | `12` | Tool-loop rounds per job before the researcher is forced to conclude. |

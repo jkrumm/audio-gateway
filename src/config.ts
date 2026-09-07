@@ -411,8 +411,14 @@ export const config = {
   researchGatewayUrl: (process.env["RESEARCH_GATEWAY_URL"] ?? "https://research.jkrumm.com").replace(/\/+$/, ""),
   /** Bearer for the research gateway; empty disables the `research` tool. */
   researchApiKey: process.env["RESEARCH_API_KEY"] ?? "",
-  /** Tool-calling researcher (brain search/read, past episodes, research gateway). Luna: cheapest 100 % tool caller on IU (modelpick 2026-09-04). */
-  podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "gpt-5.6-luna",
+  /**
+   * Tool-calling researcher (brain search/read, past episodes, research gateway).
+   * Terra: 3/3 tools in 4.3 s on modelpick's live benchmark (2026-09-07), the
+   * fastest of the six candidates and a tier above Luna in judgment at a cost
+   * that is noise per episode (~60k input tokens → ~$0.15). Gemini 3.8 Flash
+   * dropped a tool in the same run.
+   */
+  podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "gpt-5.6-terra",
   /** The editor: decides format, roles, tone, humor, length and rhythm per episode against the history. */
   podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "claude-opus-5",
   /** research-gateway calls the researcher may spend per job. */
