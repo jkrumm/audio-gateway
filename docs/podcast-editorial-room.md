@@ -253,8 +253,10 @@ the tool loop's rounds. Root span attributes add `podcast.format`, `podcast.lead
   overlay `.env.mini.publish.tpl`, which the launcher adds only when it resolves — `secrets-run`
   fails closed on any unseeded ref, and those two are seeded separately (`make secrets-seed`
   on the MacBook), so an unseeded cache yields a running instance that skips publishing
-  instead of no instance. No OTLP endpoint is reachable from the mini (ClickStack's receiver
-  is Docker-internal on the VPS), so HyperDX spans come from the VPS instance only.
+  instead of no instance. OpenTelemetry uses the same trick: `.env.mini.otel.tpl` points the exporter at
+  the VPS's public ingest (`otel.<domain>`, bearertokenauth via `OTEL_EXPORTER_OTLP_HEADERS`)
+  and is layered only when the ingestion key resolves. A push to master does NOT redeploy the
+  mini — `make deploy` pulls and restarts, and refuses while a job runs.
 - `make launchd-install | launchd-status | launchd-logs | seed-ledger` (the last one scp's
   the VPS ledger and episode dirs so the mini starts with the five existing episodes as
   memory).

@@ -94,7 +94,10 @@ pipeline (both retired 2026-06-17).
   (`usage.ts`'s `requestId`, dashes stripped), so a trace and its `usage_record`/Argo rows join on
   the same value with no extra correlation column. `src/log.ts` mirrors every `log.*` call into an
   OTLP log record via `emitLog`, stamped with the active span's ids. Disabled (a true no-op on the
-  network path) unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set. Resource attributes: `deployment.environment`
+  network path) unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set; `OTEL_EXPORTER_OTLP_HEADERS`
+  (`key=value,…`) rides on every POST; `OTEL_EXPORTER_OTLP_AUTHORIZATION` (+ optional
+  `_AUTH_SCHEME`) sets the `authorization` header from a whole-value secret ref — the mini
+  instance uses it for the public ingest's ingestion key. Resource attributes: `deployment.environment`
   follows `NODE_ENV` (`production` → `production`, else `development`) to match every other VPS
   service — the machine (`MACHINE`/hostname) is its own `host.name` attribute instead. The standard
   `OTEL_RESOURCE_ATTRIBUTES` env var (`key=value,key=value`) merges on top of both.
@@ -118,7 +121,8 @@ pipeline (both retired 2026-06-17).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime. Serves STT/TTS;
   `PODCAST_ENABLED=false` once the mini instance owns the podcast pipeline.
 - Mac mini prod: a LaunchAgent instance dedicated to podcasts (`launchd/`, `.env.mini.tpl`, port
-  `7719`). `make launchd-install | launchd-status | launchd-restart | launchd-logs | launchd-uninstall`
+  `7719`). `make deploy` (pull + restart, refuses while a job runs — a restart kills it, no resume),
+  `make launchd-install | launchd-status | launchd-restart | launchd-logs | launchd-uninstall`
   manage it; `make seed-ledger` copies the VPS podcast job ledger + episode artifacts onto the mini
   so it starts with existing episodes as editorial memory.
 - `bun run podcast -- --source <file.md|-> [--path <brain path>]... [--minutes N] [--publish]

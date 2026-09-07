@@ -43,4 +43,13 @@ else
   print -u2 "audio-gateway: $TPL_PUBLISH does not resolve — starting WITHOUT Audiobookshelf publishing (seed op://vps/audiobookshelf/* and restart)."
 fi
 
-exec "$SECRETS_RUN" run --env-file="$TPL_BASE" --env-file="$TPL_MINI" "${PUBLISH_ARGS[@]}" -- bun src/index.ts
+# Same story for OpenTelemetry: the HyperDX ingestion key is its own seed.
+TPL_OTEL="$DIR/.env.mini.otel.tpl"
+OTEL_ARGS=()
+if [[ -f "$TPL_OTEL" ]] && timeout 20 "$SECRETS_RUN" export --env-file="$TPL_OTEL" >/dev/null 2>&1; then
+  OTEL_ARGS=(--env-file="$TPL_OTEL")
+else
+  print -u2 "audio-gateway: $TPL_OTEL does not resolve — starting WITHOUT OpenTelemetry export (seed op://vps/argo/HYPERDX_API_KEY_PROD and restart)."
+fi
+
+exec "$SECRETS_RUN" run --env-file="$TPL_BASE" --env-file="$TPL_MINI" "${PUBLISH_ARGS[@]}" "${OTEL_ARGS[@]}" -- bun src/index.ts

@@ -380,11 +380,32 @@ let lastFailureLogAt = 0;
  * deliberately bypassing `log.ts` (which itself feeds `emitLog`) so an
  * export failure can never route back through the exporter it's reporting on.
  */
+/** `OTEL_EXPORTER_OTLP_HEADERS` → header map; same `key=value,key=value` grammar as the resource attributes, values may contain `=`. */
+export function parseOtlpHeadersEnv(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const pair of raw.split(",")) {
+    const eq = pair.indexOf("=");
+    if (eq <= 0) continue;
+    const key = pair.slice(0, eq).trim();
+    const value = pair.slice(eq + 1).trim();
+    if (key && value) out[key] = value;
+  }
+  return out;
+}
+
+const EXPORT_HEADERS: Record<string, string> = {
+  "content-type": "application/json",
+  ...parseOtlpHeadersEnv(config.otelHeaders),
+  ...(config.otelAuthorization && {
+    authorization: config.otelAuthScheme ? `${config.otelAuthScheme} ${config.otelAuthorization}` : config.otelAuthorization,
+  }),
+};
+
 async function postBatch(url: string, body: unknown): Promise<void> {
   try {
     const res = await fetch(url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: EXPORT_HEADERS,
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     });

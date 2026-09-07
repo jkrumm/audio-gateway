@@ -30,6 +30,7 @@ const {
   buildTracesPayload,
   buildLogsPayload,
   emitLog,
+  parseOtlpHeadersEnv,
   parseResourceAttributesEnv,
   _test,
 } = await import("./otel");
@@ -278,5 +279,12 @@ describe("_test.postBatch — the network primitive, independent of ENABLED", ()
     } finally {
       restoreFetch(originalFetch);
     }
+  });
+});
+
+describe("parseOtlpHeadersEnv (OTEL_EXPORTER_OTLP_HEADERS)", () => {
+  test("parses key=value pairs, keeps '=' inside values, ignores junk", () => {
+    expect(parseOtlpHeadersEnv("authorization=abc=def, x-tenant=mini ,broken,=nokey")).toEqual({ authorization: "abc=def", "x-tenant": "mini" });
+    expect(parseOtlpHeadersEnv("")).toEqual({});
   });
 });

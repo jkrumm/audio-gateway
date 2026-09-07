@@ -301,6 +301,20 @@ export const config = {
    * entirely — see `otel.ts`.
    */
   otelEndpoint: (process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ?? "").replace(/\/+$/, ""),
+  /**
+   * Standard `OTEL_EXPORTER_OTLP_HEADERS` (`key=value,key=value`), sent on every
+   * OTLP POST — the VPS's public ingest (`otel.<domain>`) sits behind
+   * bearertokenauth, so the mini instance needs `authorization=<ingestion key>`.
+   */
+  otelHeaders: process.env["OTEL_EXPORTER_OTLP_HEADERS"] ?? "",
+  /**
+   * The `authorization` header value on its own, so a secret manager that only
+   * resolves whole-value `op://` refs (secrets-run, op run) can inject the
+   * ingestion key without string composition. Optional scheme ("Bearer") is
+   * prefixed when set; HyperDX's ingest takes the raw key.
+   */
+  otelAuthorization: process.env["OTEL_EXPORTER_OTLP_AUTHORIZATION"] ?? "",
+  otelAuthScheme: process.env["OTEL_EXPORTER_OTLP_AUTH_SCHEME"] ?? "",
   /** OTel resource `service.name` / scope name stamped on every span and log record. */
   otelServiceName: process.env["OTEL_SERVICE_NAME"] ?? "audio-gateway",
 
