@@ -151,23 +151,30 @@ export async function compressForStt(input: Uint8Array, opts: { bitrateKbps: num
 }
 
 /**
- * Cut `[startSec, startSec + durationSec)` — or `startSec` to the end when
- * `durationSec` is null — out of arbitrary input audio and re-encode it to
- * 16 kHz mono mp3. Used to time-slice an oversize STT upload into
- * upload-sized chunks that are each independently decodable.
+ * Cut `[startSec, startSec + durationSec)` out of arbitrary input audio and
+ * re-encode it to 16 kHz mono mp3. Used to time-slice an oversize STT upload
+ * into upload-sized chunks that are each independently decodable.
+ *
+ * `-t` is NOT optional, even for the final chunk that runs to the end of the
+ * input: a slice produced without it is decoded as near-silence by the IU
+ * upstream's gpt-4o-transcribe backend, which returns HTTP 200 and a
+ * one-sentence transcript for eight minutes of speech. Measured 2026-09-10 on
+ * an identical slice pair differing only in this flag — with `-t`, 99/99
+ * sentences; without, 0. Both files decode correctly to the same audio
+ * locally and carry identical ID3 frames (they differ only in ~180 bytes of
+ * ID3 padding), so the exact upstream trigger is unknown; the flag is the
+ * reproducible discriminator. Callers overshoot the end of the input for the
+ * final chunk rather than omitting `-t` — ffmpeg stops at EOF regardless.
  */
 export async function sliceAudio(
   input: Uint8Array,
   startSec: number,
-  durationSec: number | null,
+  durationSec: number,
   opts: { bitrateKbps: number },
 ): Promise<ArrayBuffer> {
-  // `durationSec: null` runs the slice to the end of the input — used for the
-  // last chunk, so float rounding in the per-chunk length never truncates the
-  // tail of the recording.
   return runFfmpegToBuffer(input, (tmp) => [
     "-ss", String(startSec),
-    ...(durationSec === null ? [] : ["-t", String(durationSec)]),
+    "-t", String(durationSec),
     "-i", tmp,
     ...sttEncodeArgs(opts.bitrateKbps),
   ], "sliceAudio");

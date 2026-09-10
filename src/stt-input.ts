@@ -32,6 +32,9 @@ export class SttChunkLimitError extends Error {}
  */
 export class SttChunkTooLargeError extends Error {}
 
+/** Seconds the final chunk's `-t` overshoots the end of the input, so float rounding can never clip the tail. */
+const TAIL_OVERSHOOT_SEC = 2;
+
 /** Slack applied to the chunk count so per-chunk rounding never leaves a chunk over the limit. */
 const CHUNK_COUNT_SLACK = 1.1;
 
@@ -155,15 +158,23 @@ export async function prepareSttInput(file: File): Promise<PreparedSttInput> {
       throw new Error(`internal error: chunk cut index ${i} out of range for ${chunkCount} chunks`);
     }
     const isLast = i === chunkCount - 1;
-    // Last chunk runs to the end of the file (no `-t`), so the tail of the
-    // recording is never truncated.
-    const durationSec = isLast ? null : endSec - startSec;
-    // Slice from the ORIGINAL upload, not the already-compressed mp3 — slicing
-    // the compressed buffer would put every multi-chunk recording through two
-    // lossy encodes. The compressed buffer is only used above for probing
-    // duration and detecting silence; its timeline is identical to the
-    // original's, so the boundaries transfer directly.
-    const sliceBytes = await sliceAudio(original, startSec, durationSec, {
+    // The final chunk overshoots the end of the input instead of omitting
+    // `-t` — ffmpeg stops at EOF anyway, so the tail is never truncated, and
+    // a slice cut WITHOUT `-t` is silently decoded as near-silence by the
+    // upstream (see sliceAudio). Every chunk therefore gets an explicit `-t`.
+    const durationSec = endSec - startSec + (isLast ? TAIL_OVERSHOOT_SEC : 0);
+    // Slice the COMPRESSED buffer, not the original upload. Slicing the
+    // original costs one lossy encode instead of two, but the combination
+    // "cut from the original container AND encode through to EOF" produces a
+    // final chunk that the upstream's gpt-4o-transcribe backend decodes as
+    // near-silence — HTTP 200, one sentence for eight minutes of speech.
+    // Measured 2026-09-10 on the same recording: from the compressed buffer
+    // 99/99 sentences, from the original 0. (Stopping short of EOF also
+    // avoids it, but only by trimming the tail against an upstream behaviour
+    // we cannot see into.) Both routes produced byte-identical transcript
+    // lengths here, so the second encode costs nothing measurable at 32 kbps
+    // mono. Boundaries were computed on this buffer's timeline anyway.
+    const sliceBytes = await sliceAudio(compressedU8, startSec, durationSec, {
       bitrateKbps: config.sttCompressBitrateKbps,
     });
     if (sliceBytes.byteLength > config.sttMaxUploadBytes) {
