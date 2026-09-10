@@ -40,6 +40,9 @@ pipeline (both retired 2026-06-17).
   oversize/overlong one is compressed to 16 kHz mono mp3 (lossless for STT) and, if still too big or
   too long, time-sliced into `config.sttMaxSttChunks`-bounded chunks whose cut points are snapped to
   nearby silence (`detectSilence`/`snapBoundaries`) so boundaries fall between words.
+  `config.sttMaxChunkSeconds` (240s) is set by measured MODEL OUTPUT QUALITY collapse on real audio
+  (past 240s, `gpt-4o-transcribe` degrades into repeated-sentence loops), not by any of the four
+  upstream limits above — those are independent and still enforced regardless of this setting.
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
   wav/pcm) before handing off.

@@ -42,6 +42,28 @@ export function extractTextAndUsage(
   };
 }
 
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Strip a verbatim echo of `prompt` out of `text`. OpenAI treats the STT
+ * `prompt` param as a preceding transcript segment, so a collapsed chunk can
+ * continue or echo it back verbatim into the output. Only removes the prompt
+ * where it stands as its OWN sentence — preceded by the start of the text or
+ * by a preceding sentence's `.`/`!`/`?`, followed by whitespace/end, and
+ * itself allowed a trailing `.`/`!`/`?` that differs from the prompt's own —
+ * a transcript that legitimately contains the same words mid-sentence (e.g.
+ * after a comma) is left untouched. No fuzzy matching; case-sensitive. Pure:
+ * no logging, no config reads — callers decide whether to log the occurrence.
+ */
+export function stripPromptEcho(text: string, prompt: string): string {
+  const core = prompt.trim().replace(/[.!?]+$/, "");
+  if (!core || !text.includes(core)) return text;
+
+  const pattern = new RegExp(`(^\\s*|[.!?]\\s+)${escapeRegExp(core)}[.!?]?(?=\\s|$)`, "g");
+  if (!pattern.test(text)) return text;
+  return text.replace(pattern, (_match, lead: string) => lead).replace(/\s+/g, " ").trim();
+}
+
 export interface TranscribePartsOptions {
   parts: File[];
   /** The requested model; each part tries this first. */

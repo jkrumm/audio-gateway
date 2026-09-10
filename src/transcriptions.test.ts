@@ -431,4 +431,53 @@ describe("handleTranscriptions", () => {
       }
     },
   );
+
+  test("strips a verbatim echoed prompt from a json response", async () => {
+    const mutableConfig = config as unknown as { sttPrompt: string };
+    const original = mutableConfig.sttPrompt;
+    mutableConfig.sttPrompt = "Die Aufnahme ist auf Deutsch oder Englisch.";
+    try {
+      setFetch(async () =>
+        new Response(JSON.stringify({ text: "Die Aufnahme ist auf Deutsch oder Englisch. Hallo Welt." }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      );
+
+      const form = new FormData();
+      form.append("file", new File([new Uint8Array(100)], "short.wav", { type: "audio/wav" }));
+      form.append("model", "gpt-4o-transcribe");
+      const req = new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form });
+
+      const res = await handleTranscriptions(req);
+      expect(res.status).toBe(200);
+      const json = (await res.json()) as { text: string };
+      expect(json.text).toBe("Hallo Welt.");
+    } finally {
+      mutableConfig.sttPrompt = original;
+    }
+  });
+
+  test("leaves the whisper raw-passthrough path unaffected by prompt stripping", async () => {
+    const mutableConfig = config as unknown as { sttPrompt: string };
+    const original = mutableConfig.sttPrompt;
+    mutableConfig.sttPrompt = "Die Aufnahme ist auf Deutsch oder Englisch.";
+    try {
+      const srtBody = "1\n00:00:00,000 --> 00:00:01,000\nDie Aufnahme ist auf Deutsch oder Englisch.\n";
+      setFetch(async () => new Response(srtBody, { status: 200, headers: { "content-type": "text/plain" } }));
+
+      const form = new FormData();
+      form.append("file", new File([new Uint8Array(100)], "short.wav", { type: "audio/wav" }));
+      form.append("model", "whisper");
+      form.append("response_format", "srt");
+      const req = new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form });
+
+      const res = await handleTranscriptions(req);
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).toBe(srtBody); // raw whisper passthrough — never run through stripPromptEcho
+    } finally {
+      mutableConfig.sttPrompt = original;
+    }
+  });
 });

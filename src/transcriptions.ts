@@ -4,7 +4,7 @@ import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveSttModel } from "./model-resolution";
 import { getActiveSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
-import { extractTextAndUsage, PartFailure, transcribeParts } from "./stt-dispatch";
+import { extractTextAndUsage, PartFailure, stripPromptEcho, transcribeParts } from "./stt-dispatch";
 import { prepareSttInput, SttChunkLimitError, SttChunkTooLargeError } from "./stt-input";
 import { getRequestMeta, inflightEnd, inflightStart, recordUsage, runWithRequestContext } from "./usage";
 
@@ -406,7 +406,7 @@ interface ResponseContext {
  */
 async function buildTranscriptionResponse(ctx: ResponseContext, model: string, result: AttemptResult): Promise<Response> {
   const { joined, clientFormat, file, finish, caller } = ctx;
-  const { status, body, contentType, text, language: detectedLangFromUpstream } = result;
+  const { status, body, contentType, language: detectedLangFromUpstream } = result;
   const detectedLang = ctx.language ?? detectedLangFromUpstream ?? (config.sttLanguage || null);
 
   if (!isOk(status)) {
@@ -419,6 +419,16 @@ async function buildTranscriptionResponse(ctx: ResponseContext, model: string, r
       return finish(Response.json({ error: { message, type: "upstream_error" } }, { status }), { model, status });
     }
     return finish(new Response(body, { status, headers: { "content-type": contentType } }), { model, status });
+  }
+
+  // A collapsed chunk can echo `config.sttPrompt` back verbatim (OpenAI treats
+  // `prompt` as a preceding transcript segment). Strip it from the text we
+  // build our own responses from; the raw-`body` passthrough below (whisper's
+  // native rich formats) is left untouched on purpose — stripping inside an
+  // already-framed SRT/VTT payload would corrupt its cue structure.
+  const text = stripPromptEcho(result.text, config.sttPrompt);
+  if (text !== result.text) {
+    log.warn("stt transcript echoed the prompt verbatim; stripped", { endpoint: "transcriptions", caller });
   }
 
   // Recompute for the model that actually served the response: a whisper
@@ -443,6 +453,8 @@ async function buildTranscriptionResponse(ctx: ResponseContext, model: string, r
     // text a "text"-format upstream response would be — render it as such.
     return finish(new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } }), { model, status, outputText: text });
   }
+  // Raw-body passthrough (whisper's native rich formats: verbose_json/srt/vtt
+  // framing, or plain "text"): deliberately untouched — never `text` here.
   return finish(new Response(body, { status, headers: { "content-type": contentType } }), { model, status, outputText: text });
 }
 

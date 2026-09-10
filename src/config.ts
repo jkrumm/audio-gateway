@@ -163,17 +163,27 @@ export const config = {
   sttMaxUploadBytes: num("STT_MAX_UPLOAD_BYTES", 24 * 1024 * 1024),
   /** Bitrate (kbps) `stt-input.ts` re-encodes an oversize upload to (16 kHz mono mp3). */
   sttCompressBitrateKbps: num("STT_COMPRESS_BITRATE_KBPS", 32),
-  /** Hard ceiling on how many time-sliced chunks an oversize upload may split into (~7h at 32 kbps). */
-  sttMaxSttChunks: num("STT_MAX_CHUNKS", 24),
   /**
-   * Upstream duration ceiling per STT chunk. Measured limits on the IU
-   * `/audio/transcriptions` upstream: `gpt-4o-transcribe` 400s over 1400s of
-   * audio, silently truncates output around 20 min, and plain `whisper` hits
-   * its ~230s processing timeout somewhere past 10 min (10 min took 136s).
-   * 600s (10 min) is safe on both models with margin: whisper 136s, 4o 28s,
-   * neither truncated. `stt-input.ts` chunks on this axis in addition to byte size.
+   * Hard ceiling on how many time-sliced chunks an oversize upload may split
+   * into. At the 240s default chunk size that's ~128 minutes of audio. The
+   * real ceiling in practice is `Bun.serve`'s 255s `idleTimeout` (see
+   * `src/index.ts`), not this number: at ~25s per chunk and
+   * `sttChunkConcurrency` 4, roughly 40 chunks fit in the socket budget.
    */
-  sttMaxChunkSeconds: num("STT_MAX_CHUNK_SECONDS", 600),
+  sttMaxSttChunks: num("STT_MAX_CHUNKS", 32),
+  /**
+   * Per-chunk duration ceiling — a MODEL OUTPUT QUALITY limit, not an upstream
+   * hard limit (those are separate and still documented elsewhere: the 1400s
+   * `gpt-4o-transcribe` duration ceiling and whisper's ~230s processing
+   * timeout). Measured on a real 21-minute muffled/bass-heavy German voice
+   * memo with `gpt-4o-transcribe`: 240s chunks came back 100% unique
+   * sentences with no repetition; 300s chunks collapsed into a degenerate
+   * loop (15% unique, one sentence repeated 75x in a row), and 400s chunks
+   * were worse still (8% unique, a 134x repeat). 240s is the largest chunk
+   * size still clear of that collapse zone. `stt-input.ts` chunks on this
+   * axis in addition to byte size.
+   */
+  sttMaxChunkSeconds: num("STT_MAX_CHUNK_SECONDS", 240),
   /** ffmpeg `silencedetect` noise floor (dBFS) used to find chunk-boundary silence. */
   sttSilenceNoiseDb: num("STT_SILENCE_NOISE_DB", -30),
   /**
