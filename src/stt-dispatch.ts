@@ -61,7 +61,17 @@ export function stripPromptEcho(text: string, prompt: string): string {
 
   const pattern = new RegExp(`(^\\s*|[.!?]\\s+)${escapeRegExp(core)}[.!?]?(?=\\s|$)`, "g");
   if (!pattern.test(text)) return text;
-  return text.replace(pattern, (_match, lead: string) => lead).replace(/\s+/g, " ").trim();
+  // Loop until stable: the pattern consumes the preceding sentence's
+  // terminator as its lead, so back-to-back echoes leave the second one
+  // without an anchor and a single pass removes only the first. Bounded so a
+  // pathological input can never spin.
+  let out = text;
+  for (let i = 0; i < 10; i++) {
+    const next = out.replace(pattern, (_match, lead: string) => lead);
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
 
 export interface TranscribePartsOptions {

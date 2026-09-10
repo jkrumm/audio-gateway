@@ -64,6 +64,18 @@ describe("stripPromptEcho", () => {
     expect(result).toBe(result.trim());
     expect(result).toBe("Danach kam noch etwas.");
   });
+
+  // Regression: the pattern consumes the preceding sentence's terminator as
+  // its lead, so a single pass left the second of two adjacent echoes in
+  // place — observed in production on a collapsed chunk.
+  test("removes back-to-back echoes, not just the first", () => {
+    const prompt = "Die Aufnahme ist auf Deutsch oder Englisch.";
+    const two = "Ein Satz. Die Aufnahme ist auf Deutsch oder Englisch. Die Aufnahme ist auf Deutsch oder Englisch. Danach.";
+    expect(stripPromptEcho(two, prompt)).toBe("Ein Satz. Danach.");
+    const three = "A. Die Aufnahme ist auf Deutsch oder Englisch. Die Aufnahme ist auf Deutsch oder Englisch. Die Aufnahme ist auf Deutsch oder Englisch. B.";
+    expect(stripPromptEcho(three, prompt)).toBe("A. B.");
+  });
+
 });
 
 describe("extractTextAndUsage", () => {
