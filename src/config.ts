@@ -153,6 +153,42 @@ export const config = {
   /** Default STT `prompt` injected when the client sends none — steers expected language. */
   sttPrompt: process.env["STT_PROMPT"] ?? "",
   /**
+   * Upload size the IU upstream tolerates before it hard-rejects a
+   * `/audio/transcriptions` body with an HTTP 500 and an empty response body
+   * (measured: 25,152,078 bytes → 200, 27,232,078 bytes → 500). Default is 24
+   * MiB — headroom under the observed 25 MiB (26,214,400-byte) upstream limit
+   * for multipart framing overhead. `stt-input.ts` compresses/splits anything
+   * larger before it reaches the upstream.
+   */
+  sttMaxUploadBytes: num("STT_MAX_UPLOAD_BYTES", 24 * 1024 * 1024),
+  /** Bitrate (kbps) `stt-input.ts` re-encodes an oversize upload to (16 kHz mono mp3). */
+  sttCompressBitrateKbps: num("STT_COMPRESS_BITRATE_KBPS", 32),
+  /** Hard ceiling on how many time-sliced chunks an oversize upload may split into (~7h at 32 kbps). */
+  sttMaxSttChunks: num("STT_MAX_CHUNKS", 24),
+  /**
+   * Upstream duration ceiling per STT chunk. Measured limits on the IU
+   * `/audio/transcriptions` upstream: `gpt-4o-transcribe` 400s over 1400s of
+   * audio, silently truncates output around 20 min, and plain `whisper` hits
+   * its ~230s processing timeout somewhere past 10 min (10 min took 136s).
+   * 600s (10 min) is safe on both models with margin: whisper 136s, 4o 28s,
+   * neither truncated. `stt-input.ts` chunks on this axis in addition to byte size.
+   */
+  sttMaxChunkSeconds: num("STT_MAX_CHUNK_SECONDS", 600),
+  /** ffmpeg `silencedetect` noise floor (dBFS) used to find chunk-boundary silence. */
+  sttSilenceNoiseDb: num("STT_SILENCE_NOISE_DB", -30),
+  /**
+   * Minimum silence duration (seconds) `silencedetect` must see to report a
+   * range. Measured on 32 min of speech: at 0.3 s only 8 ranges are found and
+   * every chunk boundary falls back to a hard cut; at 0.2 s, 1185 ranges land
+   * within 0.4 s of every target. Natural sentence gaps are 0.2-0.3 s, so this
+   * threshold — not the noise floor — is what decides whether snapping works.
+   */
+  sttSilenceMinSec: num("STT_SILENCE_MIN_SEC", 0.2),
+  /** How far (seconds) around a hard chunk boundary `stt-input.ts` looks for silence to snap to. */
+  sttSilenceWindowSec: num("STT_SILENCE_WINDOW_SEC", 90),
+  /** How many STT chunks `transcriptions.ts` transcribes concurrently (bounded via synthConcurrent). */
+  sttChunkConcurrency: num("STT_CHUNK_CONCURRENCY", 4),
+  /**
    * Gemini TTS prep model (OpenAI dialect) that rewrites text into Hermes-styled chunks.
    * This call dominates end-to-end TTS latency (measured 2026-08: ~9.5 s on
    * DeepSeek-V4-Pro vs ~2 s on gpt-5.6-luna for the same prompt), so the default is

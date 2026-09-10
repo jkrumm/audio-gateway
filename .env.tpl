@@ -32,6 +32,18 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 # Optional STT language steering (client-supplied values always win)
 STT_PROMPT=Die Aufnahme ist auf Deutsch oder Englisch.
 
+# Optional STT upload-size overrides — the IU upstream hard-rejects request
+# bodies over ~25 MiB with an empty-bodied 500; defaults in config.ts already
+# compress/chunk anything larger.
+# STT_MAX_UPLOAD_BYTES=25165824
+# STT_COMPRESS_BITRATE_KBPS=32
+# STT_MAX_CHUNKS=24
+# STT_MAX_CHUNK_SECONDS=600
+# STT_SILENCE_NOISE_DB=-30
+# STT_SILENCE_MIN_SEC=0.2
+# STT_SILENCE_WINDOW_SEC=90
+# STT_CHUNK_CONCURRENCY=4
+
 # Usage sink — 'sqlite' (default), 'http', or 'both' (enables the Argo push, requires ARGO_API_SECRET).
 USAGE_SINK=both
 USAGE_HTTP_URL=https://argo.jkrumm.com/api/usage/records

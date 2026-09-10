@@ -27,7 +27,19 @@ pipeline (both retired 2026-06-17).
 - `src/usage-report.ts` — pure parsing/rollup for `usage:tail`: joins a `*-request` row with its
   chunk/prep/stt siblings by `request_id` into one reviewable `RequestLine`, plus a per-lane/mode
   rollup. No SQLite, no network — hermetically tested.
-- `src/transcriptions.ts` — STT handler + verbose_json/srt/vtt envelope synthesis.
+- `src/transcriptions.ts` — STT handler + verbose_json/srt/vtt envelope synthesis. Oversize/overlong
+  uploads are routed through `stt-input.ts` before the first upstream attempt; a multi-part
+  (compressed and chunked) upload is transcribed up to `config.sttChunkConcurrency` parts at once
+  (via `gemini-tts-core.ts`'s `synthConcurrent`) and joined into one response, forcing envelope
+  synthesis for verbose_json/srt/vtt regardless of model. An empty-bodied upstream 5xx (the IU
+  25 MiB-oversize 500) gets a real JSON error message instead of an opaque empty proxy response.
+- `src/stt-input.ts` — makes an uploaded STT file fit the IU upstream's four measured limits (25 MiB
+  body, 1400s duration on `gpt-4o-transcribe`, whisper's ~230s processing timeout, and silent
+  truncation on `gpt-4o-transcribe` past ~20 min): a file under both the byte and
+  `config.sttMaxChunkSeconds` duration limit passes through untouched after one ffprobe call; an
+  oversize/overlong one is compressed to 16 kHz mono mp3 (lossless for STT) and, if still too big or
+  too long, time-sliced into `config.sttMaxSttChunks`-bounded chunks whose cut points are snapped to
+  nearby silence (`detectSilence`/`snapBoundaries`) so boundaries fall between words.
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
   wav/pcm) before handing off.

@@ -5,7 +5,11 @@ native TTS pipelines: **Gemini expressive TTS** and **Replicate/ElevenLabs TTS**
 
 - **STT** (`POST /v1/audio/transcriptions`) — downgrades `gpt-4o-transcribe` to `json` and
   synthesizes the rich envelope (`verbose_json`/`srt`/`vtt`) clients expect, with DE/EN language
-  steering. Whisper-style models pass through untouched.
+  steering. Whisper-style models pass through untouched. The IU upstream hard-rejects uploads over
+  ~25 MiB with an empty-bodied 500, and separately mishandles long audio (`gpt-4o-transcribe` errors
+  past 1400s and silently truncates its own output past ~20 min; whisper times out past ~10 min);
+  anything over either limit is automatically compressed and time-sliced into silence-snapped
+  chunks, transcribed concurrently, and joined back into one response.
 - **TTS** (`POST /v1/audio/speech`) — model-routed to one of three lanes:
   - a Gemini TTS model (`gemini*tts*`) → the native `generateContent` pipeline (prep-LLM chunking
     → per-chunk synth → ffmpeg transcode, default voice Charon);

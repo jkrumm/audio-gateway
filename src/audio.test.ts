@@ -13,7 +13,7 @@ process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
 process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=macwhisper-secret-token";
 process.env["TTS_PREP"] ??= "off";
 
-const { audioDuration, concatPcm, parseOutputFormat, pcmToWav, transcode } = await import("./audio");
+const { audioDuration, compressForStt, concatPcm, detectSilence, parseOutputFormat, pcmToWav, transcode } = await import("./audio");
 
 describe("parseOutputFormat", () => {
   test("empty string defaults to mp3", () => {
@@ -112,5 +112,58 @@ describe.skipIf(!hasFfmpeg)("transcode + audioDuration (real ffmpeg)", () => {
     const duration = await audioDuration(new Uint8Array(bytes));
     expect(duration).toBeGreaterThan(0.4);
     expect(duration).toBeLessThan(0.6);
+  });
+
+  test("runFfmpegToBuffer throws on a non-zero ffmpeg exit (undecodable input)", async () => {
+    const garbage = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    await expect(compressForStt(garbage, { bitrateKbps: 32 })).rejects.toThrow(/ffmpeg compressForStt failed/);
+  });
+
+  /** Generate `durationSec` of 44.1kHz mono sine-wave audio as a WAV `Uint8Array` via ffmpeg. */
+  async function genWavBytes(durationSec: number): Promise<Uint8Array> {
+    const proc = Bun.spawn(
+      [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "lavfi", "-i", `sine=frequency=440:duration=${durationSec}`,
+        "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const bytes = await new Response(proc.stdout).arrayBuffer();
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) throw new Error(`ffmpeg fixture generation failed (${exitCode})`);
+    return new Uint8Array(bytes);
+  }
+
+  test("detectSilence reports a range to EOF when silence_start has no matching silence_end", async () => {
+    // Real ffmpeg builds emit a paired silence_end at EOF, so this exercises
+    // the defensive "trailing unpaired silence_start" branch directly by
+    // faking just the silencedetect subprocess's stderr — everything else
+    // (writing the temp file, probing duration via a REAL ffprobe on the
+    // real bytes) still runs for real.
+    const bytes = await genWavBytes(2);
+
+    const originalSpawn = Bun.spawn;
+    (Bun as unknown as { spawn: typeof Bun.spawn }).spawn = ((cmd: string[], ...rest: unknown[]) => {
+      if (cmd[0] === "ffmpeg" && cmd.some((a) => typeof a === "string" && a.includes("silencedetect"))) {
+        return {
+          stdout: new Response("").body,
+          stderr: new Response("[silencedetect] silence_start: 0.500000\n").body,
+          exited: Promise.resolve(0),
+        } as unknown as ReturnType<typeof Bun.spawn>;
+      }
+      return originalSpawn(cmd as never, ...(rest as []));
+    }) as typeof Bun.spawn;
+
+    try {
+      const ranges = await detectSilence(bytes, { noiseDb: -30, minDurationSec: 0.2 });
+      expect(ranges).toHaveLength(1);
+      expect(ranges[0]!.start).toBeCloseTo(0.5, 1);
+      // end is the real clip duration (~2s), probed via ffprobe on `bytes`.
+      expect(ranges[0]!.end).toBeGreaterThan(1.8);
+      expect(ranges[0]!.end).toBeLessThan(2.2);
+    } finally {
+      (Bun as unknown as { spawn: typeof Bun.spawn }).spawn = originalSpawn;
+    }
   });
 });

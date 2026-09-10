@@ -132,6 +132,146 @@ export async function transcode(input: Uint8Array, from: TranscodeInput, to: Aud
   return { bytes, contentType: CONTENT_TYPES[to] };
 }
 
+/**
+ * Re-encode arbitrary input audio to 16 kHz mono mp3 at the given bitrate —
+ * the shape `stt-input.ts` sends an oversize STT upload through. 16 kHz mono
+ * is lossless for STT purposes: Whisper-class models resample internally to
+ * 16 kHz mono before transcribing, so nothing the upstream would have used is
+ * discarded.
+ */
+export async function compressForStt(input: Uint8Array, opts: { bitrateKbps: number }): Promise<ArrayBuffer> {
+  // Temp file, not `pipe:0`: an MP4/M4A upload (every iPhone voice memo) can
+  // carry its moov atom at the end of the file, and ffmpeg cannot demux that
+  // from a non-seekable pipe. These inputs are oversize by definition, so the
+  // write also keeps a >25 MiB body out of the stdin buffer.
+  return runFfmpegToBuffer(input, (tmp) => [
+    "-i", tmp,
+    ...sttEncodeArgs(opts.bitrateKbps),
+  ], "compressForStt");
+}
+
+/**
+ * Cut `[startSec, startSec + durationSec)` — or `startSec` to the end when
+ * `durationSec` is null — out of arbitrary input audio and re-encode it to
+ * 16 kHz mono mp3. Used to time-slice an oversize STT upload into
+ * upload-sized chunks that are each independently decodable.
+ */
+export async function sliceAudio(
+  input: Uint8Array,
+  startSec: number,
+  durationSec: number | null,
+  opts: { bitrateKbps: number },
+): Promise<ArrayBuffer> {
+  // `durationSec: null` runs the slice to the end of the input — used for the
+  // last chunk, so float rounding in the per-chunk length never truncates the
+  // tail of the recording.
+  return runFfmpegToBuffer(input, (tmp) => [
+    "-ss", String(startSec),
+    ...(durationSec === null ? [] : ["-t", String(durationSec)]),
+    "-i", tmp,
+    ...sttEncodeArgs(opts.bitrateKbps),
+  ], "sliceAudio");
+}
+
+/** 16 kHz mono mp3 encode args — the one shape every STT-bound re-encode uses. */
+const sttEncodeArgs = (bitrateKbps: number): string[] => [
+  "-ar", "16000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", `${bitrateKbps}k`, "-f", "mp3", "pipe:1",
+];
+
+/** Run ffmpeg over a temp-file copy of `input` and return stdout, throwing on a non-zero exit. */
+async function runFfmpegToBuffer(
+  input: Uint8Array,
+  args: (tmpPath: string) => string[],
+  label: string,
+): Promise<ArrayBuffer> {
+  const tmp = `/tmp/audio-gateway-${crypto.randomUUID()}`;
+  try {
+    await Bun.write(tmp, input);
+    const proc = Bun.spawn(["ffmpeg", "-hide_banner", "-loglevel", "error", ...args(tmp)], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const stdout = new Response(proc.stdout).arrayBuffer();
+    const stderr = new Response(proc.stderr).text();
+    const [bytes, errText, exitCode] = await Promise.all([stdout, stderr, proc.exited]);
+    if (exitCode !== 0) {
+      throw new Error(`ffmpeg ${label} failed (${exitCode}): ${errText.slice(0, 300)}`);
+    }
+    return bytes;
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
+}
+
+export interface SilenceRange {
+  start: number;
+  end: number;
+}
+
+const SILENCE_START_RE = /silence_start:\s*(-?[\d.]+)/;
+const SILENCE_END_RE = /silence_end:\s*(-?[\d.]+)/;
+
+/**
+ * Detect silent stretches via ffmpeg's `silencedetect` filter — used by
+ * `stt-input.ts` to snap hard chunk-boundary cuts to a nearby pause instead of
+ * slicing mid-word. Never throws: a parse miss or non-zero exit returns `[]`
+ * and the caller falls back to hard boundaries, since this is an optimisation,
+ * not a correctness requirement.
+ */
+export async function detectSilence(
+  input: Uint8Array,
+  opts: { noiseDb: number; minDurationSec: number },
+): Promise<SilenceRange[]> {
+  const tmp = `/tmp/audio-gateway-${crypto.randomUUID()}`;
+  try {
+    await Bun.write(tmp, input);
+    const proc = Bun.spawn(
+      [
+        "ffmpeg", "-hide_banner",
+        "-i", tmp,
+        "-af", `silencedetect=noise=${opts.noiseDb}dB:d=${opts.minDurationSec}`,
+        "-f", "null", "-",
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    // silencedetect prints at the default (info) log level, on stderr —
+    // deliberately no `-loglevel error` here, unlike the other ffmpeg calls
+    // in this module, since that would suppress the very output we parse.
+    const stderrText = await new Response(proc.stderr).text();
+    const exitCode = await proc.exited;
+    if (exitCode !== 0) return [];
+
+    const ranges: SilenceRange[] = [];
+    let pendingStart: number | null = null;
+    for (const line of stderrText.split("\n")) {
+      const startMatch = SILENCE_START_RE.exec(line);
+      if (startMatch?.[1] !== undefined) {
+        pendingStart = Number.parseFloat(startMatch[1]);
+        continue;
+      }
+      const endMatch = SILENCE_END_RE.exec(line);
+      if (endMatch?.[1] !== undefined && pendingStart !== null) {
+        const end = Number.parseFloat(endMatch[1]);
+        if (Number.isFinite(pendingStart) && Number.isFinite(end)) ranges.push({ start: pendingStart, end });
+        pendingStart = null;
+      }
+    }
+    if (pendingStart !== null) {
+      // Trailing unpaired silence_start — the silence runs to end of file.
+      // We don't know EOF from stderr alone; probe it via ffprobe.
+      const totalSeconds = await audioDuration(input);
+      if (Number.isFinite(pendingStart) && totalSeconds > pendingStart) {
+        ranges.push({ start: pendingStart, end: totalSeconds });
+      }
+    }
+    return ranges.sort((a, b) => a.start - b.start);
+  } catch {
+    return [];
+  } finally {
+    await unlink(tmp).catch(() => {});
+  }
+}
+
 /** Probe audio duration via ffprobe; 0 if unavailable (timing is best-effort). */
 export async function audioDuration(data: Blob | ArrayBuffer | Uint8Array): Promise<number> {
   const tmp = `/tmp/audio-gateway-${crypto.randomUUID()}`;
