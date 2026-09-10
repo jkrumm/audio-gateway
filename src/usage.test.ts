@@ -153,6 +153,66 @@ describe("podcast model rates", () => {
     expect(opus.costUsd).toBeCloseTo(7.5, 6);
     expect(computeCost("gpt-5.6-luna", { inputTokens: 1_000_000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(0.2, 6);
     expect(computeCost("gemini-3.1-pro-preview", { inputTokens: 0, outputTokens: 1_000_000, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(12, 6);
-    expect(computeCost("claude-opus-4-6-eu".replace(/-eu$/, ""), { inputTokens: 1000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costSource).toBe("estimated");
+    // No `verified` flag on this rate — an unconfirmed vendor list price stamps 'assumed', not 'estimated'.
+    expect(computeCost("claude-opus-4-6-eu".replace(/-eu$/, ""), { inputTokens: 1000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costSource).toBe("assumed");
+  });
+});
+
+describe("ElevenLabs pricing (per character at vendor list, contested unit)", () => {
+  test("a v3 prediction bills per character at $0.10/1k and stamps 'assumed'", async () => {
+    const { computeCost, normalizeModel } = await import("./usage");
+    const result = computeCost(normalizeModel("elevenlabs/v3"), {
+      inputTokens: null,
+      outputTokens: null,
+      audioTokens: null,
+      audioSeconds: null,
+      inputChars: 1000,
+    });
+    expect(result.costUsd).toBeCloseTo(0.1, 9);
+    // Never 'verified': IU stated "$0.0001" in a chat message without naming a
+    // unit, and per-prediction vs per-character differ by 200x. Only an actual
+    // invoice line earns the verified flag.
+    expect(result.costSource).toBe("assumed");
+  });
+
+  test("a v3 row with no character count is unpriced, not silently zero", async () => {
+    const { computeCost, normalizeModel } = await import("./usage");
+    const result = computeCost(normalizeModel("elevenlabs/v3"), {
+      inputTokens: null,
+      outputTokens: null,
+      audioTokens: null,
+      audioSeconds: null,
+      inputChars: null,
+    });
+    expect(result.costUsd).toBeNull();
+    expect(result.costSource).toBe("none");
+  });
+
+  test("turbo-v2.5 shares flash-v2.5's assumed rate", async () => {
+    const { computeCost, normalizeModel } = await import("./usage");
+    const result = computeCost(normalizeModel("elevenlabs/turbo-v2.5"), {
+      inputTokens: null,
+      outputTokens: null,
+      audioTokens: null,
+      audioSeconds: null,
+      inputChars: 1000,
+    });
+    expect(result.costUsd).toBeCloseTo(0.05, 9);
+    expect(result.costSource).toBe("assumed");
+  });
+
+  test("elevenlabs/v3 no longer collapses onto the bare key 'v3' (owner/name collision fix)", async () => {
+    const { normalizeModel, computeCost } = await import("./usage");
+    expect(normalizeModel("elevenlabs/v3")).toBe("elevenlabs/v3");
+    expect(normalizeModel("elevenlabs/v3")).not.toBe("v3");
+    // The bare 'v3' key no longer exists in RATES — a hypothetical future
+    // `someowner/v3` must not silently inherit ElevenLabs' rate.
+    expect(computeCost("v3", { inputTokens: null, outputTokens: null, audioTokens: null, audioSeconds: null, inputChars: null }).costSource).toBe("none");
+  });
+
+  test("non-slashed ids still normalize exactly as before (-eu / date-suffix stripping)", async () => {
+    const { normalizeModel } = await import("./usage");
+    expect(normalizeModel("claude-opus-4-6-eu")).toBe("claude-opus-4-6");
+    expect(normalizeModel("whisper-20260101")).toBe("whisper");
   });
 });

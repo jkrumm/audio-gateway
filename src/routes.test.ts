@@ -609,7 +609,8 @@ describe("Root span self-sufficiency", () => {
 
     const root = spans.find((s) => s.name === "audio.speech");
     expect(root).toBeDefined();
-    expect(attr(root, "audio.cost_source")).toEqual({ stringValue: "estimated" });
+    // elevenlabs/flash-v2.5 carries an unverified vendor list rate -> 'assumed'.
+    expect(attr(root, "audio.cost_source")).toEqual({ stringValue: "assumed" });
     const costUsd = attr(root, "audio.cost_usd") as { doubleValue?: number; intValue?: string } | undefined;
     expect(costUsd).toBeDefined();
     const charsBilled = attr(root, "audio.chars_billed") as { intValue?: string } | undefined;

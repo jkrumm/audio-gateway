@@ -170,13 +170,24 @@ function tokens(usage: unknown): {
 // ---------------------------------------------------------------------------
 
 /**
- * Lowercase, keep the segment after the last `/`, strip a trailing `-eu`,
- * strip a trailing `-YYYYMMDD` date suffix.
+ * Lowercase; for an `owner/name` id keep the vendor prefix (dropping it collapsed
+ * `elevenlabs/v3` onto the bare key `v3`, so any future `someowner/v3` would have
+ * silently inherited ElevenLabs' rate); strip a trailing `-eu`, strip a trailing
+ * `-YYYYMMDD` date suffix from the name segment.
+ *
+ * NOTE: this changes `model_norm` as written to Argo for `owner/name` ids (e.g.
+ * `elevenlabs/v3` now normalizes to `elevenlabs/v3` instead of `v3`) — intended,
+ * not a regression.
  */
-function normalizeModel(raw: string): string {
-  let m = raw.toLowerCase().trim();
-  if (m.includes("/")) m = m.split("/").pop() ?? m;
-  return m.replace(/-eu$/, "").replace(/-\d{8}$/, "");
+// Exported so tests can assert the owner/name key collision fix directly
+// (computeCost only takes an already-normalized key, so it can't see this).
+export function normalizeModel(raw: string): string {
+  const m = raw.toLowerCase().trim();
+  const slash = m.lastIndexOf("/");
+  if (slash === -1) return m.replace(/-eu$/, "").replace(/-\d{8}$/, "");
+  const owner = m.slice(0, slash);
+  const name = m.slice(slash + 1).replace(/-eu$/, "").replace(/-\d{8}$/, "");
+  return `${owner}/${name}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -189,10 +200,21 @@ interface Rate {
   output?: number; // output tokens, USD per 1M
   perMinute?: number; // whisper-style, USD per minute of audio
   perInputChars1k?: number; // Replicate ElevenLabs TTS, USD per 1,000 input characters
+  perPrediction?: number; // USD per Replicate prediction (one synthesis call) — how IU actually meters /replicate/v1
+  /**
+   * `true` only when the rate was confirmed against an actual invoice or an
+   * explicit statement from the billing provider. Absent/false means assumed
+   * (a vendor list price or an inference, not a measured bill) — see
+   * `computeCost`'s `cost_source` stamping below.
+   */
+  verified?: boolean;
 }
 
-// USD list prices used as ESTIMATES — IU's actual EU per-token rates may differ
-// (same caveat as usage-tracker/src/pricing.ts). cost_source is stamped 'estimated'.
+// USD prices below are a mix of confirmed billing statements and vendor list-price
+// ESTIMATES — IU's actual EU per-token rates may differ (same caveat as
+// usage-tracker/src/pricing.ts). cost_source is stamped 'verified' when `Rate.verified`
+// is true, 'assumed' when a rate exists but is unconfirmed, 'none' when there is no
+// rate or a required input is missing.
 const RATES: Record<string, Rate> = {
   "gpt-4o-transcribe": { input: 2.5, audioInput: 6, output: 10 },
   // Published rates (platform.openai.com/docs/pricing, verified 2026-07-24): a
@@ -212,17 +234,38 @@ const RATES: Record<string, Rate> = {
   "whisper": { perMinute: 0.006 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
-  // Replicate pricing page, verified 2026-08-26: $0.05 per 1,000 input characters.
-  "flash-v2.5": { perInputChars1k: 0.05 },
-  // Not published as a separate line item by Replicate — assumed identical to
-  // flash-v2.5 pending a dedicated rate. Re-check if turbo spend matters.
-  "turbo-v2.5": { perInputChars1k: 0.05 }, // unverified
-  // ElevenLabs' own API list price for Eleven v3 (elevenlabs.io/pricing/api,
-  // verified 2026-09-02): $0.10 per 1,000 characters. Replicate publishes no
-  // separate line for elevenlabs/v3, so this is the upstream price, not a
-  // measured Replicate invoice — good enough to stop podcast episodes
-  // reporting cost_usd = null.
-  "v3": { perInputChars1k: 0.1 },
+  // ElevenLabs via IU's `/replicate/v1` route. The unit here is contested, so
+  // read the arithmetic before changing it.
+  //
+  // On 2026-09-10 IU's cost tracker billed ~€8,412 for one week. Their wrong
+  // rate was $6.00, and only ONE unit reproduces that invoice:
+  //
+  // | unit applied to $6.00 | week's volume | implied bill |
+  // |-|-|-|
+  // | per prediction | 1,339 | **$8,034** ← matches |
+  // | per 1k chars | 275,004 | $1,650 |
+  // | per minute | 296 | $1,776 |
+  // | per second | 17,776 | $106,656 |
+  //
+  // So IU's tracker multiplies by PREDICTION count. IU then stated the rate
+  // "should be $0.0001". Read per-prediction that is $0.13 for 4.9 hours of
+  // speech — ~200x below any vendor's cost, i.e. not a real charge-back. Read
+  // per CHARACTER it is $27.50, which is exactly ElevenLabs v3's published
+  // retail of $0.10/1,000 chars. The second reading matches reality, and makes
+  // IU's bug a unit error (a per-char rate applied per call), which also
+  // explains the 60,000x magnitude.
+  //
+  // We therefore price per character at the vendor list rate — what this file
+  // did before 2026-09-10 — and keep `perPrediction` in `Rate` as the modelled
+  // form of how IU's tracker actually meters. NOTHING here is `verified`: that
+  // flag is for a confirmed invoice line, and one $0.0001 in a chat message is
+  // not one. Ask IU for the unit and quantity on the ElevenLabs line to settle it.
+  "elevenlabs/flash-v2.5": { perInputChars1k: 0.05 }, // unverified
+  // Not published as a separate Replicate line item — assumed identical to
+  // flash-v2.5. Re-check if turbo spend ever matters.
+  "elevenlabs/turbo-v2.5": { perInputChars1k: 0.05 }, // unverified
+  // elevenlabs.io/pricing/api, read 2026-09-02: $0.10 per 1,000 characters.
+  "elevenlabs/v3": { perInputChars1k: 0.1 }, // unverified
   // Podcast writers' room + TTS prep/summary models — list prices read off the
   // vendor pricing pages on 2026-09-02 (platform.claude.com/docs/en/about-claude/
   // pricing, developers.openai.com/api/docs/pricing, ai.google.dev/gemini-api/docs/
@@ -263,17 +306,25 @@ export function computeCost(
 ): { costUsd: number | null; costSource: string } {
   const rate = RATES[modelNorm];
   if (!rate) return { costUsd: null, costSource: "none" };
+  const costSource = rate.verified ? "verified" : "assumed";
+
+  // Per-prediction models (Replicate ElevenLabs TTS, how IU actually meters the
+  // route): one usage row is one prediction, no CostInputs needed. Checked first
+  // so a rate carrying both perPrediction and perMinute/perInputChars1k is unambiguous.
+  if (rate.perPrediction != null) {
+    return { costUsd: rate.perPrediction, costSource };
+  }
 
   // Per-minute models (whisper): need audio duration.
   if (rate.perMinute != null) {
     if (c.audioSeconds == null) return { costUsd: null, costSource: "none" };
-    return { costUsd: (c.audioSeconds / 60) * rate.perMinute, costSource: "estimated" };
+    return { costUsd: (c.audioSeconds / 60) * rate.perMinute, costSource };
   }
 
-  // Per-1k-input-chars models (Replicate ElevenLabs TTS): need input chars.
+  // Per-1k-input-chars models: need input chars.
   if (rate.perInputChars1k != null) {
     if (c.inputChars == null) return { costUsd: null, costSource: "none" };
-    return { costUsd: (c.inputChars / 1000) * rate.perInputChars1k, costSource: "estimated" };
+    return { costUsd: (c.inputChars / 1000) * rate.perInputChars1k, costSource };
   }
 
   const input = c.inputTokens ?? 0;
@@ -286,7 +337,7 @@ export function computeCost(
   const cost =
     (textIn * (rate.input ?? 0) + audioIn * (rate.audioInput ?? 0) + output * (rate.output ?? 0)) /
     1_000_000;
-  return { costUsd: cost, costSource: "estimated" };
+  return { costUsd: cost, costSource };
 }
 
 /**
@@ -332,8 +383,8 @@ function accumulateRequestCost(row: UsageRow): void {
   const cost = costForRow(row);
   if (cost.costUsd != null) {
     store.meta.costUsd = (store.meta.costUsd ?? 0) + cost.costUsd;
-    store.meta.costSource = "estimated";
-  } else if (store.meta.costSource !== "estimated") {
+    store.meta.costSource = cost.costSource;
+  } else if (store.meta.costSource == null) {
     store.meta.costSource = "none";
   }
 
