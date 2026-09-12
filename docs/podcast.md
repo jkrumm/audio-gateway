@@ -235,8 +235,7 @@ row.
 | `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
 | `PODCAST_RESEARCH_MODEL` | `gpt-5.6-terra` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
 | `PODCAST_EDITORIAL_MODEL` | `claude-opus-5` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
-| `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls the researcher may spend per job. |
-| `PODCAST_TOOL_MAX_ROUNDS` | `12` | Tool-loop rounds per job before the researcher is forced to conclude. |
+| `PODCAST_RESEARCH_MAX_CALLS` | `2` | Spend cap: research-gateway calls (each one real money) the researcher may spend per job — not a step cap. |
 | `PODCAST_HISTORY_DEPTH` | `8` | How many recent episode profiles the editor (and `past_episodes`) sees. |
 | `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | Number-word density above which a turn is synthesized slower. |
 | `PODCAST_DENSE_TURN_SLOWDOWN` | `0.06` | Speed delta applied to dense turns (clamped to the 0.7 floor). |

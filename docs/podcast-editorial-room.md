@@ -54,10 +54,11 @@ to make the writers' room *understand* it — not to rewrite it. Tools:
 | `brain_read` | `{ path: string }` | `{ path, frontmatter, body }` (body capped at 60k chars) | Path must resolve inside `BRAIN_DIR` (reject `..` and symlink escapes) |
 | `past_episodes` | `{ limit?: number }` | `[{ id, date, title, description, profile }]` for `done` jobs of the same series | `PodcastStore.recentEpisodes` |
 | `past_transcript` | `{ id: string }` | markdown transcript (capped at 40k chars) | `renderTranscriptMarkdown` over the persisted script |
-| `research` | `{ query: string, depth?: "quick" \| "standard" }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error`, 8-minute cap. Budget `config.podcastResearchMaxCalls` (default 2); the tool returns an error string once exhausted |
+| `research` | `{ query: string, depth?: "quick" \| "standard" }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error` — unbounded (research-gateway itself has no time cap), with a heartbeat log line once a minute so a human tailing logs sees it's alive. Budget `config.podcastResearchMaxCalls` (default 2, a spend cap on real research-gateway calls, not a step cap); the tool returns an error string once exhausted |
 
-The loop ends when the model returns a final JSON object (no tool call). Round cap
-`config.podcastToolMaxRounds` (default 12). Output:
+The loop ends when the model returns a final JSON object (no tool call) — no round
+cap (agent workers have no turn ceiling). Each round's model call is idle-guarded
+(a 30-minute hang guard on a single non-streaming round, not a budget). Output:
 
 ```ts
 interface Dossier {
@@ -224,8 +225,7 @@ The CLI (`scripts/podcast.ts`) gets `--path <brain path>` (repeatable), `--no-re
 | `RESEARCH_API_KEY` | `""` | `op://vps/research-gateway/API_SECRET`; empty disables the `research` tool |
 | `PODCAST_RESEARCH_MODEL` | `gpt-5.6-terra` | tool-calling researcher (Luna until 2026-09-07; Terra 3/3 tools in 4.3 s on the live benchmark, Gemini 3.8 Flash dropped a tool) |
 | `PODCAST_EDITORIAL_MODEL` | `claude-opus-5` | the editor |
-| `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls per job |
-| `PODCAST_TOOL_MAX_ROUNDS` | `12` | tool-loop rounds per job |
+| `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls per job (spend cap, not a step cap) |
 | `PODCAST_HISTORY_DEPTH` | `8` | episodes shown to the editor |
 | `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | number-word density that triggers the slowdown |
 | `PODCAST_DENSE_TURN_SLOWDOWN` | `0.06` | speed delta for dense turns |
@@ -276,7 +276,7 @@ the tool loop's rounds. Root span attributes add `podcast.format`, `podcast.lead
 ## Acceptance
 
 1. `bun test` green; new hermetic tests for: tool-loop message shaping (assistant message
-   echoed verbatim, tool results attached by `tool_call_id`, round cap), `brain_search`
+   echoed verbatim, tool results attached by `tool_call_id`, no round cap), `brain_search`
    scoring and path containment, dossier/brief/profile parsing incl. malformed input,
    `numberDensity` + speed application, `recentEpisodes`, brain-note rendering.
 2. A technical episode about this redesign (source: this document + the analysis), produced

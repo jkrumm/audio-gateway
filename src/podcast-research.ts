@@ -10,6 +10,7 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { readdir, readFile, realpath } from "node:fs/promises";
 import { rawFetch } from "./gemini-tts";
 import { runToolLoop, type ToolDef, type ToolLoopFetch } from "./llm-tools";
+import { log } from "./log";
 import type { Dossier, EpisodeHistory } from "./podcast-types";
 
 export interface ResearchInput {
@@ -27,14 +28,14 @@ export interface ResearchDeps {
   research?: { url: string; apiKey: string; maxCalls: number };
   history: EpisodeHistory;
   model: string;
-  maxRounds: number;
   /** Default `rawFetch`; tests inject a fake with the same `(url, init) => Promise<RawResponse>` shape. */
   fetchImpl?: ToolLoopFetch;
   /** Sleep between research-gateway polls, injectable for tests. Default 10_000 ms. */
   pollIntervalMs?: number;
 }
 
-const RESEARCH_POLL_TIMEOUT_MS = 8 * 60 * 1000;
+/** How often the still-`queued`/`running` poll loop logs a heartbeat, so a human tailing logs sees it's alive. Not a cap — see `researchTool`. */
+const RESEARCH_POLL_LOG_INTERVAL_MS = 60 * 1000;
 const BRAIN_READ_MAX_CHARS = 60_000;
 const PAST_TRANSCRIPT_MAX_CHARS = 40_000;
 const RESEARCH_REPORT_MAX_CHARS = 20_000;
@@ -325,8 +326,15 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
       used++;
       const { jobId } = JSON.parse(submitRes.body) as ResearchGatewaySubmitResponse;
 
-      const deadline = Date.now() + RESEARCH_POLL_TIMEOUT_MS;
-      while (Date.now() < deadline) {
+      // Unbounded wait — research-gateway itself no longer time-caps a job, so a
+      // healthy deep job may legitimately run well past any number picked here. The
+      // gateway's own heartbeat reaping (job-store.ts) already turns a stalled/dead
+      // job into a terminal "error" status, so this loop only needs to keep polling
+      // until the job reaches a terminal state and log a heartbeat so a human tailing
+      // logs can see it's still alive.
+      const startedAt = Date.now();
+      let lastLoggedAt = startedAt;
+      while (true) {
         const pollRes = await fetchImpl(`${research.url}/research/${jobId}`, { method: "GET", headers });
         if (pollRes.status < 200 || pollRes.status >= 300) {
           return `error: research poll failed HTTP ${pollRes.status} ${pollRes.body.slice(0, 300)}`;
@@ -341,9 +349,13 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
         if (parsed.status === "failed" || parsed.status === "error") {
           return `error: research failed: ${parsed.error ?? "unknown error"}`;
         }
+        const now = Date.now();
+        if (now - lastLoggedAt >= RESEARCH_POLL_LOG_INTERVAL_MS) {
+          log.info("podcast research: still waiting on research-gateway job", { jobId, status: parsed.status, waitedMs: now - startedAt });
+          lastLoggedAt = now;
+        }
         await Bun.sleep(pollIntervalMs);
       }
-      return "error: research timed out after 8 minutes";
     },
   };
 }
@@ -454,7 +466,6 @@ export async function runPodcastResearch(input: ResearchInput, deps: ResearchDep
     systemPrompt: buildSystemPrompt(input, deps),
     userContent: buildUserContent(input),
     tools,
-    maxRounds: deps.maxRounds,
     maxCompletionTokens: 8000,
     stage: "research",
     usageEndpoint: "podcast-research",

@@ -19,6 +19,16 @@ import { withSpan } from "./otel";
 import type { ToolCallRecord } from "./podcast-types";
 import { recordUsage, type UsageRow } from "./usage";
 
+/**
+ * Idle guard for a single (non-streaming) model round — not a step/round cap.
+ * Agent workers have no turn or wall-clock ceiling (`~/.claude/rules/agent-limits.md`);
+ * the researcher loop ends only when the model concludes on its own. `callChat` is
+ * non-streaming, so nothing can watch tokens inside one round — this is a hang guard
+ * on a single request, sized so a reasoning model on a hard round never trips it
+ * (the rule's real answer is streaming + idle; 30 min is the floor until then).
+ */
+const ROUND_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+
 export interface ToolDef<A = unknown> {
   name: string;
   description: string;
@@ -36,8 +46,6 @@ export interface ToolLoopParams {
   systemPrompt: string;
   userContent: string;
   tools: ToolDef[];
-  /** Rounds that may contain tool calls; after that one final call runs with `tool_choice: "none"`. */
-  maxRounds: number;
   maxCompletionTokens: number;
   /** Span attribute `audio.podcast.stage` (e.g. "research"). */
   stage: string;
@@ -45,6 +53,8 @@ export interface ToolLoopParams {
   usageEndpoint: string;
   /** Default `rawFetch` (tests inject a fake with the same `(url, init) => Promise<RawResponse>` shape). */
   fetchImpl?: ToolLoopFetch;
+  /** Abort a round whose (non-streaming) model call produces nothing within this window. Default 30 min (a hang guard, not a budget); tests override. */
+  roundIdleTimeoutMs?: number;
 }
 
 export interface ToolLoopResult {
@@ -86,7 +96,6 @@ async function callChat(params: {
   model: string;
   messages: ChatMessage[];
   tools: ToolDef[];
-  toolChoiceNone?: boolean;
   maxCompletionTokens: number;
   stage: string;
   round: number;
@@ -108,7 +117,6 @@ async function callChat(params: {
         max_completion_tokens: params.maxCompletionTokens,
       };
       if (params.tools.length > 0) body["tools"] = toolSchemas(params.tools);
-      if (params.toolChoiceNone) body["tool_choice"] = "none";
 
       let res: RawResponse;
       try {
@@ -183,13 +191,37 @@ async function runTool(tool: ToolDef, call: ToolCallRequest): Promise<{ content:
 }
 
 /**
+ * Race one `callChat` round against an idle timer — a round that produces nothing
+ * within `idleTimeoutMs` aborts the whole loop rather than hanging it forever.
+ */
+async function callChatWithIdleGuard(
+  params: Parameters<typeof callChat>[0],
+  idleTimeoutMs: number,
+): Promise<{ message: ChatMessage; finishReason?: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`Podcast ${params.stage} tool loop round ${params.round} produced no response for ${Math.round(idleTimeoutMs / 60_000)} minutes`));
+    }, idleTimeoutMs);
+  });
+  try {
+    return await Promise.race([callChat(params), idle]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Run a full tool-calling round trip: system + user message, then rounds of
  * assistant tool calls executed sequentially, until the model answers with no
- * tool call or `maxRounds` is exhausted (in which case one final call forces
- * `tool_choice: "none"`).
+ * tool call — no round cap; agent workers have no turn ceiling
+ * (`~/.claude/rules/agent-limits.md`). Each round's (non-streaming) model call is
+ * hang-guarded (default 30 min, see `ROUND_IDLE_TIMEOUT_MS`) so a stuck round
+ * aborts the loop instead of hanging it forever.
  */
 export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResult> {
   const fetchImpl = params.fetchImpl ?? rawFetch;
+  const idleTimeoutMs = params.roundIdleTimeoutMs ?? ROUND_IDLE_TIMEOUT_MS;
   const toolsByName = new Map(params.tools.map((t) => [t.name, t] as const));
   const messages: ChatMessage[] = [
     { role: "system", content: params.systemPrompt },
@@ -197,17 +229,20 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
   ];
   const calls: ToolCallRecord[] = [];
 
-  for (let round = 1; round <= params.maxRounds; round++) {
-    const { message } = await callChat({
-      model: params.model,
-      messages,
-      tools: params.tools,
-      maxCompletionTokens: params.maxCompletionTokens,
-      stage: params.stage,
-      round,
-      usageEndpoint: params.usageEndpoint,
-      fetchImpl,
-    });
+  for (let round = 1; ; round++) {
+    const { message } = await callChatWithIdleGuard(
+      {
+        model: params.model,
+        messages,
+        tools: params.tools,
+        maxCompletionTokens: params.maxCompletionTokens,
+        stage: params.stage,
+        round,
+        usageEndpoint: params.usageEndpoint,
+        fetchImpl,
+      },
+      idleTimeoutMs,
+    );
 
     if (!message.tool_calls || message.tool_calls.length === 0) {
       return { content: message.content ?? "", calls, rounds: round };
@@ -224,19 +259,4 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
       messages.push({ role: "tool", tool_call_id: call.id, content: result.content });
     }
   }
-
-  // Round cap exhausted and the model still wants tools: force a final answer.
-  messages.push({ role: "user", content: "Conclude now with your final answer." });
-  const { message } = await callChat({
-    model: params.model,
-    messages,
-    tools: params.tools,
-    toolChoiceNone: true,
-    maxCompletionTokens: params.maxCompletionTokens,
-    stage: params.stage,
-    round: params.maxRounds + 1,
-    usageEndpoint: params.usageEndpoint,
-    fetchImpl,
-  });
-  return { content: message.content ?? "", calls, rounds: params.maxRounds + 1 };
 }

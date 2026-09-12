@@ -377,10 +377,11 @@ export const config = {
 
   /**
    * Story pass only (through-line, hook, reveals, digressions, segments) —
-   * reasons long before answering, which is what the outline pays for. See
-   * modelpick docs/decisions/podcast-writer.md.
+   * structural planning, not the prose the listener actually hears, so it
+   * moves off Opus onto the cheap IU OpenAI-route default; the final wording
+   * is PODCAST_WRITE_MODEL's job alone. See modelpick docs/decisions/podcast-writer.md.
    */
-  podcastOutlineModel: process.env["PODCAST_OUTLINE_MODEL"] ?? "claude-opus-5",
+  podcastOutlineModel: process.env["PODCAST_OUTLINE_MODEL"] ?? "gpt-5.6-luna",
   /**
    * The VOICE OWNER: segment writers and every revision/tightening pass. No
    * other model ever writes or rewrites dialogue — practitioners (and
@@ -472,12 +473,15 @@ export const config = {
    * dropped a tool in the same run.
    */
   podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "gpt-5.6-terra",
-  /** The editor: decides format, roles, tone, humor, length and rhythm per episode against the history. */
-  podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "claude-opus-5",
-  /** research-gateway calls the researcher may spend per job. */
+  /**
+   * The editor: decides format, roles, tone, humor, length and rhythm per
+   * episode against the history — a judgment call over structure, not prose
+   * generation, so it moves off Opus; PODCAST_WRITE_MODEL alone keeps the
+   * final wording on claude-opus-4-6.
+   */
+  podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "gpt-5.6-luna",
+  /** Spend cap: research-gateway calls (each one real money) the researcher may spend per job. Not a step/round cap. */
   podcastResearchMaxCalls: num("PODCAST_RESEARCH_MAX_CALLS", 2),
-  /** Tool-loop rounds per job before the researcher is forced to conclude. */
-  podcastToolMaxRounds: num("PODCAST_TOOL_MAX_ROUNDS", 12),
   /** How many recent episode profiles the editor sees. */
   podcastHistoryDepth: num("PODCAST_HISTORY_DEPTH", 8),
   /** Number-word density (per word) above which a turn is synthesized slower. */

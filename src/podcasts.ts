@@ -607,7 +607,6 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
               : undefined,
             history,
             model: config.podcastResearchModel,
-            maxRounds: config.podcastToolMaxRounds,
           },
         ),
       );

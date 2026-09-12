@@ -51,7 +51,6 @@ describe("runToolLoop", () => {
       systemPrompt: "sys",
       userContent: "user",
       tools: [],
-      maxRounds: 3,
       maxCompletionTokens: 100,
       stage: "test",
       usageEndpoint: "podcast-research",
@@ -104,7 +103,6 @@ describe("runToolLoop", () => {
       systemPrompt: "sys",
       userContent: "user",
       tools: [toolA, toolB],
-      maxRounds: 5,
       maxCompletionTokens: 100,
       stage: "test",
       usageEndpoint: "podcast-research",
@@ -153,7 +151,6 @@ describe("runToolLoop", () => {
       systemPrompt: "sys",
       userContent: "user",
       tools: [boom],
-      maxRounds: 5,
       maxCompletionTokens: 100,
       stage: "test",
       usageEndpoint: "podcast-research",
@@ -181,7 +178,6 @@ describe("runToolLoop", () => {
       systemPrompt: "sys",
       userContent: "user",
       tools: [noopTool],
-      maxRounds: 5,
       maxCompletionTokens: 100,
       stage: "test",
       usageEndpoint: "podcast-research",
@@ -192,16 +188,16 @@ describe("runToolLoop", () => {
     expect(result.calls[0]?.ok).toBe(false);
   });
 
-  test("hitting the round cap forces a final tool_choice: none call", async () => {
+  test("is not force-concluded after many rounds — it keeps going until the model stops calling tools", async () => {
     const alwaysWantsTool = () => ({
       role: "assistant",
       content: null,
       tool_calls: [{ id: "call_x", type: "function", function: { name: "noop", arguments: "{}" } }],
     });
+    const roundsWantingTools = 15; // well past the old 12-round cap
     const { fetchImpl, calls } = scriptedFetch([
-      chatResponse(alwaysWantsTool()),
-      chatResponse(alwaysWantsTool()),
-      chatResponse({ role: "assistant", content: "final under cap" }),
+      ...Array.from({ length: roundsWantingTools }, () => chatResponse(alwaysWantsTool())),
+      chatResponse({ role: "assistant", content: "final after many rounds" }),
     ]);
 
     const result = await runToolLoop({
@@ -209,19 +205,39 @@ describe("runToolLoop", () => {
       systemPrompt: "sys",
       userContent: "user",
       tools: [noopTool],
-      maxRounds: 2,
       maxCompletionTokens: 100,
       stage: "test",
       usageEndpoint: "podcast-research",
       fetchImpl,
     });
 
-    expect(result.content).toBe("final under cap");
-    expect(result.rounds).toBe(3);
-    expect(calls).toHaveLength(3);
-    const finalRequestBody = calls[2]?.body as { tool_choice?: string; messages: Array<Record<string, unknown>> };
-    expect(finalRequestBody.tool_choice).toBe("none");
-    expect(finalRequestBody.messages.at(-1)).toEqual({ role: "user", content: "Conclude now with your final answer." });
+    expect(result.content).toBe("final after many rounds");
+    expect(result.rounds).toBe(roundsWantingTools + 1);
+    expect(calls).toHaveLength(roundsWantingTools + 1);
+    // No forced "tool_choice: none" / "Conclude now" round is ever injected.
+    for (const call of calls) {
+      const body = call.body as { tool_choice?: string; messages: Array<Record<string, unknown>> };
+      expect(body.tool_choice).toBeUndefined();
+      expect(body.messages.some((m) => m["content"] === "Conclude now with your final answer.")).toBe(false);
+    }
+  });
+
+  test("aborts when one round's model call produces nothing within the idle window", async () => {
+    const neverResolves: ToolLoopFetch = (() => new Promise(() => {})) as ToolLoopFetch;
+
+    await expect(
+      runToolLoop({
+        model: "test-model",
+        systemPrompt: "sys",
+        userContent: "user",
+        tools: [],
+        maxCompletionTokens: 100,
+        stage: "test",
+        usageEndpoint: "podcast-research",
+        fetchImpl: neverResolves,
+        roundIdleTimeoutMs: 20,
+      }),
+    ).rejects.toThrow(/round 1 produced no response/);
   });
 
   test("throws on a non-2xx response", async () => {
@@ -232,7 +248,6 @@ describe("runToolLoop", () => {
         systemPrompt: "sys",
         userContent: "user",
         tools: [],
-        maxRounds: 3,
         maxCompletionTokens: 100,
         stage: "test",
         usageEndpoint: "podcast-research",

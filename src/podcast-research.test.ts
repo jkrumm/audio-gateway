@@ -3,7 +3,7 @@
  * temp-dir filesystem, the research-gateway submit/poll flow against a
  * scripted fake fetch, dossier parsing, and one end-to-end tool-loop run.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,7 +67,7 @@ describe("brain_search / brain_read", () => {
 
   test("ranks notes by term occurrence and path hits, skips dotdirs, returns a snippet", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_search");
     const raw = await tool.execute({ query: "peptide" });
     const results = JSON.parse(raw) as Array<{ path: string; title: string; description: string; snippet: string; score: number }>;
@@ -87,7 +87,7 @@ describe("brain_search / brain_read", () => {
 
   test("returns [] when nothing matches", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_search");
     const raw = await tool.execute({ query: "xyznomatch" });
     expect(JSON.parse(raw)).toEqual([]);
@@ -95,7 +95,7 @@ describe("brain_search / brain_read", () => {
 
   test("brain_read returns frontmatter and body, capped and reported when truncated", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     const raw = await tool.execute({ path: "peptides.md" });
     const result = JSON.parse(raw) as { path: string; frontmatter: Record<string, string>; body: string };
@@ -105,14 +105,14 @@ describe("brain_search / brain_read", () => {
 
   test("brain_read rejects a path that escapes the vault via ..", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: "../outside.md" })).rejects.toThrow(/escapes the vault/);
   });
 
   test("brain_read rejects an absolute path", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: "/etc/passwd" })).rejects.toThrow(/relative to the vault/);
   });
@@ -122,7 +122,7 @@ describe("brain_search / brain_read", () => {
     const outsideDir = mkdtempSync(join(tmpdir(), "brain-outside-"));
     writeFileSync(join(outsideDir, "secret.md"), "top secret");
     symlinkSync(join(outsideDir, "secret.md"), join(vault, "escape.md"));
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: "escape.md" })).rejects.toThrow(/escapes the vault/);
     rmSync(outsideDir, { recursive: true, force: true });
@@ -137,14 +137,14 @@ describe("brain_search / brain_read", () => {
 
   test("brain_read rejects a dotfile inside a hidden directory", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: ".obsidian/plugins/x/data.json" })).rejects.toThrow(/markdown files outside hidden directories/);
   });
 
   test("brain_read rejects a bare dotfile", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: ".env" })).rejects.toThrow(/markdown files outside hidden directories/);
   });
@@ -153,7 +153,7 @@ describe("brain_search / brain_read", () => {
     vault = setupVault();
     mkdirSync(join(vault, "foo", ".hidden"), { recursive: true });
     writeFileSync(join(vault, "foo", ".hidden", "x.md"), "secret");
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: "foo/.hidden/x.md" })).rejects.toThrow(/markdown files outside hidden directories/);
   });
@@ -161,14 +161,14 @@ describe("brain_search / brain_read", () => {
   test("brain_read rejects a non-markdown file", async () => {
     vault = setupVault();
     writeFileSync(join(vault, "note.txt"), "not markdown");
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     await expect(tool.execute({ path: "note.txt" })).rejects.toThrow(/markdown files outside hidden directories/);
   });
 
   test("brain_read accepts an ordinary vault-relative markdown path", async () => {
     vault = setupVault();
-    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ brainDir: vault, history: noHistory, model: "m" });
     const tool = findTool(tools, "brain_read");
     const raw = await tool.execute({ path: "Areas/peptide-protocol.md" });
     const result = JSON.parse(raw) as { path: string };
@@ -188,14 +188,14 @@ describe("past_episodes / past_transcript", () => {
   };
 
   test("past_episodes returns history.recent(limit) as JSON", async () => {
-    const tools = buildResearchTools({ history, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ history, model: "m" });
     const tool = findTool(tools, "past_episodes");
     const raw = await tool.execute({ limit: 5 });
     expect(JSON.parse(raw)).toEqual([{ id: "ep-1", createdAt: "2026-01-01T00:00:00.000Z", title: "Episode One", description: "d", profile: null }]);
   });
 
   test("past_transcript returns the transcript or an error string", async () => {
-    const tools = buildResearchTools({ history, model: "m", maxRounds: 1 });
+    const tools = buildResearchTools({ history, model: "m" });
     const tool = findTool(tools, "past_transcript");
     expect(await tool.execute({ id: "ep-1" })).toContain("transcript body");
     expect(await tool.execute({ id: "missing" })).toMatch(/no transcript found/);
@@ -226,7 +226,6 @@ describe("research tool", () => {
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 1 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -250,7 +249,6 @@ describe("research tool", () => {
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 5 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -259,12 +257,43 @@ describe("research tool", () => {
     expect(result).toContain("final report");
   });
 
+  test("keeps waiting on a still-running job well past the old 8-minute cap", async () => {
+    const { fetchImpl } = scriptedFetch([
+      rawRes(200, { jobId: "job-1" }),
+      rawRes(200, { status: "queued" }),
+      rawRes(200, { status: "running" }),
+      rawRes(200, { status: "running" }),
+      rawRes(200, { status: "running" }),
+      rawRes(200, { status: "done", result: { report: "finished after a long wait" } }),
+    ]);
+    // Each Date.now() call advances the clock by 3 minutes, so by the last "running"
+    // poll wall time has passed the old RESEARCH_POLL_TIMEOUT_MS (8 min) several times over.
+    let simulatedNowMs = 0;
+    const dateNowSpy = spyOn(Date, "now").mockImplementation(() => {
+      simulatedNowMs += 3 * 60 * 1000;
+      return simulatedNowMs;
+    });
+    try {
+      const tools = buildResearchTools({
+        history: noHistory,
+        model: "m",
+        research: { url: "https://research.example.com", apiKey: "key", maxCalls: 5 },
+        fetchImpl,
+        pollIntervalMs: 0,
+      });
+      const result = await findTool(tools, "research").execute({ query: "q" });
+      expect(result).toContain("finished after a long wait");
+      expect(simulatedNowMs).toBeGreaterThan(8 * 60 * 1000);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   test("429 on submit returns a queue-full message", async () => {
     const { fetchImpl } = scriptedFetch([rawRes(429, { error: "full" })]);
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 5 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -278,7 +307,6 @@ describe("research tool", () => {
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 5 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -296,7 +324,6 @@ describe("research tool", () => {
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 1 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -317,7 +344,6 @@ describe("research tool", () => {
     const tools = buildResearchTools({
       history: noHistory,
       model: "m",
-      maxRounds: 1,
       research: { url: "https://research.example.com", apiKey: "key", maxCalls: 1 },
       fetchImpl,
       pollIntervalMs: 0,
@@ -402,12 +428,37 @@ describe("runPodcastResearch", () => {
 
     const dossier = await runPodcastResearch(
       { source: "some notes about peptides", language: "de", series: "Brain Sonderausgabe" },
-      { history, model: "test-model", maxRounds: 5, fetchImpl },
+      { history, model: "test-model", fetchImpl },
     );
 
     expect(dossier.summary).toBe("an episode about peptides was already covered");
     expect(dossier.priorCoverage).toEqual([{ episodeId: "ep-1", title: "Episode One", covered: "basics" }]);
     expect(dossier.toolCalls).toEqual([{ tool: "past_episodes", args: {}, ok: true, ms: expect.any(Number) }]);
     expect(call).toBe(2);
+  });
+
+  test("is not forced to conclude at the old 12-round cap — it keeps calling tools past it", async () => {
+    const history: EpisodeHistory = { recent: () => [], transcript: () => null };
+    const dossierJson = JSON.stringify({ summary: "concluded after many rounds", additions: [], glossary: [], priorCoverage: [], openQuestions: [] });
+    const roundsWantingTools = 14; // past the old PODCAST_TOOL_MAX_ROUNDS default of 12
+    let call = 0;
+    const fetchImpl: ToolLoopFetch = (async () => {
+      call++;
+      if (call <= roundsWantingTools) {
+        const assistantToolCall = {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: `call_${call}`, type: "function", function: { name: "past_episodes", arguments: "{}" } }],
+        };
+        return rawRes(200, { choices: [{ message: assistantToolCall, finish_reason: "tool_calls" }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+      }
+      return rawRes(200, { choices: [{ message: { role: "assistant", content: dossierJson }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+    }) as ToolLoopFetch;
+
+    const dossier = await runPodcastResearch({ source: "some notes", language: "de", series: "Brain Sonderausgabe" }, { history, model: "test-model", fetchImpl });
+
+    expect(dossier.summary).toBe("concluded after many rounds");
+    expect(dossier.toolCalls).toHaveLength(roundsWantingTools);
+    expect(call).toBe(roundsWantingTools + 1);
   });
 });
