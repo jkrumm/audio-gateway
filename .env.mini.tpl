@@ -17,7 +17,7 @@ BRAIN_DIR=../brain
 # research-gateway is tailnet-only; the mini is on the tailnet. Same ref
 # hermes-agent's .env.tpl uses for its own `research-gateway` skill.
 RESEARCH_API_KEY=op://vps/research-gateway/API_SECRET
-RESEARCH_GATEWAY_URL=https://research.jkrumm.com
+RESEARCH_GATEWAY_URL=https://research.mini.jkrumm.com
 
 # Usage/cost rows keep the mini instance distinguishable from the VPS one in
 # Argo's usage table.
