@@ -51,6 +51,8 @@ export interface ToolLoopParams {
   stage: string;
   /** Usage row endpoint (e.g. "podcast-research"). */
   usageEndpoint: string;
+  /** Top-level `reasoning_effort`, already resolved for `model` (see `resolveReasoningEffort` in model-resolution.ts); omitted entirely when unset. */
+  reasoningEffort?: string;
   /** Default `rawFetch` (tests inject a fake with the same `(url, init) => Promise<RawResponse>` shape). */
   fetchImpl?: ToolLoopFetch;
   /** Abort a round whose (non-streaming) model call produces nothing within this window. Default 30 min (a hang guard, not a budget); tests override. */
@@ -100,6 +102,7 @@ async function callChat(params: {
   stage: string;
   round: number;
   usageEndpoint: string;
+  reasoningEffort?: string;
   fetchImpl: ToolLoopFetch;
 }): Promise<{ message: ChatMessage; finishReason?: string }> {
   return withSpan(
@@ -117,6 +120,7 @@ async function callChat(params: {
         max_completion_tokens: params.maxCompletionTokens,
       };
       if (params.tools.length > 0) body["tools"] = toolSchemas(params.tools);
+      if (params.reasoningEffort) body["reasoning_effort"] = params.reasoningEffort;
 
       let res: RawResponse;
       try {
@@ -212,6 +216,44 @@ async function callChatWithIdleGuard(
 }
 
 /**
+ * Run one round and retry once, with a doubled budget, when it was cut off
+ * for budget reasons — mirroring `callPodcastLlm`'s empty-content retry
+ * (podcast-script.ts). Two shapes trigger it: a terminal (no tool call) reply
+ * with empty content, and ANY round — tool call or not — whose
+ * `finish_reason` is `"length"`, since a tool-call round can be truncated
+ * mid-`arguments` JSON just as easily as a terminal reply can be truncated
+ * mid-answer; checking tool-call presence alone (the old behaviour) missed
+ * that case entirely. Throws if the retry is STILL empty with no tool call,
+ * since an empty final answer here used to parse as `""` and fail silently
+ * downstream (`parseDossier` throwing on a missing JSON object, the research
+ * stage then quietly skipped) rather than surfacing as the failure it is.
+ */
+async function callTerminalRoundWithRetry(
+  params: Parameters<typeof callChat>[0],
+  idleTimeoutMs: number,
+): Promise<{ message: ChatMessage; finishReason?: string }> {
+  const first = await callChatWithIdleGuard(params, idleTimeoutMs);
+  const firstHasToolCalls = Boolean(first.message.tool_calls && first.message.tool_calls.length > 0);
+  const firstIsEmpty = !(first.message.content ?? "").trim();
+  if (first.finishReason !== "length" && (firstHasToolCalls || !firstIsEmpty)) return first;
+
+  log.warn("podcast tool loop round truncated by finish_reason=length or empty content, retrying with doubled budget", {
+    stage: params.stage,
+    round: params.round,
+    finishReason: first.finishReason ?? null,
+    hasToolCalls: firstHasToolCalls,
+    maxCompletionTokens: params.maxCompletionTokens,
+  });
+  const retried = await callChatWithIdleGuard({ ...params, maxCompletionTokens: params.maxCompletionTokens * 2 }, idleTimeoutMs);
+  const retriedHasToolCalls = Boolean(retried.message.tool_calls && retried.message.tool_calls.length > 0);
+  if (retriedHasToolCalls || (retried.message.content ?? "").trim()) return retried;
+
+  throw new Error(
+    `Podcast ${params.stage} tool loop round ${params.round} returned empty content (finish_reason=${retried.finishReason ?? "unknown"}) after retry with doubled budget`,
+  );
+}
+
+/**
  * Run a full tool-calling round trip: system + user message, then rounds of
  * assistant tool calls executed sequentially, until the model answers with no
  * tool call — no round cap; agent workers have no turn ceiling
@@ -230,7 +272,7 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
   const calls: ToolCallRecord[] = [];
 
   for (let round = 1; ; round++) {
-    const { message } = await callChatWithIdleGuard(
+    const { message } = await callTerminalRoundWithRetry(
       {
         model: params.model,
         messages,
@@ -239,6 +281,7 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
         stage: params.stage,
         round,
         usageEndpoint: params.usageEndpoint,
+        reasoningEffort: params.reasoningEffort,
         fetchImpl,
       },
       idleTimeoutMs,

@@ -2,6 +2,7 @@ import { synthConcurrent } from "./gemini-tts-core";
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
+import { resolveReasoningEffort } from "./model-resolution";
 import { withSpan } from "./otel";
 import type { Dossier, EpisodeBrief, EpisodeProfile } from "./podcast-types";
 import { recordUsage } from "./usage";
@@ -91,6 +92,15 @@ export interface ScriptWriterOptions {
    * description/cover prompt/genres/chapter titles after the script locks.
    */
   models: { outline: string; write: string; review: string[]; metadata: string };
+  /**
+   * Reasoning effort per role, each passed through `resolveReasoningEffort`
+   * (model-resolution.ts) at its own call site — a model outside the known
+   * reasoning-effort families omits the field regardless of what's set here.
+   * `write` has none: the voice owner is Claude, which never takes
+   * `reasoning_effort`. Optional — an omitted role sends no effort at all,
+   * which is also correct for a model that doesn't want one.
+   */
+  efforts?: { outline?: string; review?: string; metadata?: string };
   /** Parallel segment writes. */
   concurrency: number;
   /** Run the multi-angle review + revision passes after the segments are written. Default true. */
@@ -896,6 +906,18 @@ export async function callPodcastLlm(params: {
   usageEndpoint: "podcast-editorial" | "podcast-outline" | "podcast-segment" | "podcast-review" | "podcast-metadata";
   /** `<role>@<model>` — set only for review calls, so the span carries who reviewed. */
   reviewer?: string;
+  /** Top-level `reasoning_effort` for `model`, already resolved via `resolveReasoningEffort` (model-resolution.ts); omitted entirely when unset (Claude, Gemini). */
+  reasoningEffort?: string;
+  /**
+   * Set for the strict-JSON stages (outline/review/metadata): a `finish_reason:
+   * "length"` reply is truncated mid-JSON, and `extractJsonObject`'s naive
+   * last-`}` search can occasionally still find a syntactically valid (but
+   * semantically incomplete — e.g. missing trailing segments) slice, silently
+   * shipping a cut-off outline instead of retrying. Treat truncation exactly
+   * like the empty-content case so `callAndParse` retries with the next,
+   * larger `writerBudget` instead of accepting partial JSON/text.
+   */
+  retryOnTruncation?: boolean;
 }): Promise<string> {
   return withSpan(
     "audio.podcast.llm",
@@ -916,6 +938,7 @@ export async function callPodcastLlm(params: {
             { role: "user", content: params.userContent },
           ],
           max_completion_tokens: params.maxCompletionTokens,
+          ...(params.reasoningEffort && { reasoning_effort: params.reasoningEffort }),
           // Streamed on purpose: a 20-minute episode's outline over a 20k-char
           // source runs several minutes on the writer model, longer than the IU
           // proxy's non-streaming request timeout (observed as an HTML "500 - The
@@ -947,6 +970,14 @@ export async function callPodcastLlm(params: {
         // stage-health tile must see that this call produced nothing.
         span.setStatus("error", `empty content (finish_reason=${finishReason ?? "unknown"})`);
         log.warn("podcast writer returned no content", { stage: params.stage, finishReason, completionTokens: usage?.completion_tokens ?? null, latencyMs });
+      } else if (params.retryOnTruncation && finishReason === "length") {
+        // Non-empty but cut off mid-generation: hand back nothing so the caller's
+        // JSON/text parser fails fast on the empty-content path above (extractJsonObject
+        // throws on "") and callAndParse retries with a larger writerBudget, rather than
+        // risking a lenient parse accepting truncated content as a finished reply.
+        span.setStatus("error", `truncated content (finish_reason=length)`);
+        log.warn("podcast writer truncated, forcing retry", { stage: params.stage, finishReason, completionTokens: usage?.completion_tokens ?? null, latencyMs });
+        return "";
       }
       return content;
     },
@@ -973,12 +1004,14 @@ export async function callPodcastLlm(params: {
  * breakage is diagnosable from the logs alone.
  */
 /**
- * Output budget for a writer call. claude-sonnet-5 on the IU endpoint thinks
- * before it answers on heavy prompts and that reasoning is invisible in the
- * stream but counted against `max_completion_tokens` (measured 2026-09-02: a
- * 5.8k-char revision cost 8.7k completion tokens; at 10.4k the reply came back
- * EMPTY with finish_reason=length). Budgets are therefore sized for reasoning
- * plus text, and a retry gets double.
+ * Output budget for a writer call. claude-opus-4-6 (the voice owner — every
+ * segment and revision call) on the IU endpoint thinks before it answers on
+ * heavy prompts and that reasoning is invisible in the stream but counted
+ * against `max_completion_tokens` (measured 2026-09-02: a 5.8k-char revision
+ * cost 8.7k completion tokens; at 10.4k the reply came back EMPTY with
+ * finish_reason=length). Budgets are therefore sized for reasoning plus text,
+ * and a retry gets double. The same headroom is reused for the outline/review/
+ * metadata calls (deepseek-v4.1-flash, gemini-3.8-flash), which reason too.
  */
 function writerBudget(visibleTokens: number, attempt: number): number {
   const reasoningHeadroom = 16000;
@@ -1016,10 +1049,11 @@ async function reviewEpisode(params: {
   outline: Outline;
   segments: ScriptSegment[];
   reviewModels: string[];
+  reviewEffort?: string;
   showBible: string;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ReviewNote[]> {
-  const { req, outline, segments, reviewModels, showBible, onProgress } = params;
+  const { req, outline, segments, reviewModels, reviewEffort, showBible, onProgress } = params;
   const combos = REVIEWER_ROLES.flatMap((role) => reviewModels.map((model) => ({ role, model })));
   let done = 0;
   const perCombo = await synthConcurrent(combos.length, combos, async ({ role, model }) => {
@@ -1040,6 +1074,8 @@ async function reviewEpisode(params: {
             stage: "review",
             usageEndpoint: "podcast-review",
             reviewer,
+            reasoningEffort: resolveReasoningEffort(model, reviewEffort),
+            retryOnTruncation: true,
           }),
         (raw) => parseReviewNotes(raw, reviewer),
       );
@@ -1200,8 +1236,14 @@ export function parseEpisodeMetadata(raw: string, segmentCount: number): Episode
  * failure (after the usual retry) the caller falls back to the outline's
  * drafts and logs a warning rather than failing the job.
  */
-async function writeEpisodeMetadata(params: { req: PodcastScriptRequest; outline: Outline; segments: ScriptSegment[]; model: string }): Promise<EpisodeMetadata> {
-  const { req, outline, segments, model } = params;
+async function writeEpisodeMetadata(params: {
+  req: PodcastScriptRequest;
+  outline: Outline;
+  segments: ScriptSegment[];
+  model: string;
+  reasoningEffort?: string;
+}): Promise<EpisodeMetadata> {
+  const { req, outline, segments, model, reasoningEffort } = params;
   return callAndParse(
     "metadata",
     (attempt) =>
@@ -1212,6 +1254,8 @@ async function writeEpisodeMetadata(params: { req: PodcastScriptRequest; outline
         maxCompletionTokens: writerBudget(4000, attempt),
         stage: "metadata",
         usageEndpoint: "podcast-metadata",
+        reasoningEffort,
+        retryOnTruncation: true,
       }),
     (raw) => parseEpisodeMetadata(raw, segments.length),
   );
@@ -1274,6 +1318,8 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         maxCompletionTokens: writerBudget(8000, attempt),
         stage: "outline",
         usageEndpoint: "podcast-outline",
+        reasoningEffort: resolveReasoningEffort(opts.models.outline, opts.efforts?.outline),
+        retryOnTruncation: true,
       }),
     (raw) => normalizeOutlineTargets(pruneUnrequestedDevices(parseOutline(raw), req.episodeBrief), targetWords),
   );
@@ -1289,10 +1335,10 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
           model: opts.models.write,
           systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1], showBible }),
           userContent: buildSegmentUserContent({ req, outline, index }),
-          // Generous headroom (not just words*4): claude-sonnet-5 was observed truncating a
-          // segment reply mid-array under the tighter budget (words*4 + 1500), producing an
-          // unterminated JSON array — extractJsonObject's naive "last }" then grabs an inner
-          // object's closing brace and JSON.parse throws "Expected ']'" (smoke-tested 2026-09-01).
+          // Generous headroom (not just words*4): claude-opus-4-6 (the voice owner) was observed
+          // truncating a segment reply mid-array under the tighter budget (words*4 + 1500),
+          // producing an unterminated JSON array — extractJsonObject's naive "last }" then grabs
+          // an inner object's closing brace and JSON.parse throws "Expected ']'" (smoke-tested 2026-09-01).
           maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
           stage: "segment",
           usageEndpoint: "podcast-segment",
@@ -1306,7 +1352,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
 
   let finalSegments = segments;
   const reviewNotes = review
-    ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, showBible, onProgress: opts.onProgress })
+    ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, reviewEffort: opts.efforts?.review, showBible, onProgress: opts.onProgress })
     : [];
   const notes = [...reviewNotes, ...lengthNotes(segments, outline)];
   if (notes.length > 0) {
@@ -1332,7 +1378,13 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   if (metadataEnabled) {
     opts.onProgress?.("metadata", 0, 1);
     try {
-      const metadata = await writeEpisodeMetadata({ req, outline, segments: finalSegments, model: opts.models.metadata });
+      const metadata = await writeEpisodeMetadata({
+        req,
+        outline,
+        segments: finalSegments,
+        model: opts.models.metadata,
+        reasoningEffort: resolveReasoningEffort(opts.models.metadata, opts.efforts?.metadata),
+      });
       // Field by field: a structurally valid reply with a blank field must
       // not blank the episode — the outline's draft stands for that field.
       title = metadata.title || title;

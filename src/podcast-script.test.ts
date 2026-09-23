@@ -21,6 +21,7 @@ process.env["TTS_CONCURRENCY"] ??= "4";
 
 const {
   parseChatCompletionStream,
+  callPodcastLlm,
   planSegmentCount,
   parseOutline,
   parseSegmentTurns,
@@ -50,8 +51,11 @@ function jsonRes(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
 
-function chatCompletion(content: string): Response {
-  return jsonRes({ choices: [{ message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 50 } });
+function chatCompletion(content: string, finishReason?: string): Response {
+  return jsonRes({
+    choices: [{ message: { content }, finish_reason: finishReason }],
+    usage: { prompt_tokens: 100, completion_tokens: 50 },
+  });
 }
 
 const HOSTS: [import("./podcast-script").PodcastHost, import("./podcast-script").PodcastHost] = [
@@ -1064,6 +1068,62 @@ describe("length governor", () => {
     );
     expect(notes.map((n) => n.segmentIndex)).toEqual([1]);
     expect(notes[0]?.note).toContain("150 words against a target of 100");
+  });
+});
+
+describe("callPodcastLlm — truncation forces a retry like empty content", () => {
+  const baseParams = {
+    model: "outline-model",
+    systemPrompt: "sys",
+    userContent: "user",
+    maxCompletionTokens: 1000,
+    stage: "outline" as const,
+    usageEndpoint: "podcast-outline" as const,
+  };
+
+  test("retryOnTruncation + finish_reason=length + partial content returns empty, not the truncated text", async () => {
+    setFetch(async () => chatCompletion('{"title":"cut off mid', "length"));
+    const content = await callPodcastLlm({ ...baseParams, retryOnTruncation: true });
+    expect(content).toBe("");
+  });
+
+  test("without retryOnTruncation, a length finish still passes the truncated content through (segment/revise behaviour unchanged)", async () => {
+    setFetch(async () => chatCompletion('{"title":"cut off mid', "length"));
+    const content = await callPodcastLlm({ ...baseParams });
+    expect(content).toBe('{"title":"cut off mid');
+  });
+
+  test("retryOnTruncation with a normal 'stop' finish passes the content through untouched", async () => {
+    setFetch(async () => chatCompletion('{"title":"done"}', "stop"));
+    const content = await callPodcastLlm({ ...baseParams, retryOnTruncation: true });
+    expect(content).toBe('{"title":"done"}');
+  });
+});
+
+describe("writePodcastScript — outline truncation retries with a larger writerBudget", () => {
+  test("a truncated outline reply (finish_reason=length) is retried, not shipped half-parsed", async () => {
+    const outlineBodies: Array<{ max_completion_tokens: number }> = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }>; max_completion_tokens: number };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineBodies.push({ max_completion_tokens: body.max_completion_tokens });
+        // First attempt: cut off mid-JSON but still non-empty — extractJsonObject's
+        // naive last-"}" search could otherwise "successfully" parse a truncated slice.
+        if (outlineBodies.length === 1) return chatCompletion('{"title":"Der Roadtrip', "length");
+        return outlineResponse();
+      }
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      if (!match) throw new Error(`unexpected prompt: ${systemPrompt.slice(0, 100)}`);
+      return segmentResponse(Number(match[1]) - 1);
+    });
+
+    const script = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: false, metadata: false });
+
+    expect(script.title).toBe("Der Roadtrip-Plan");
+    expect(outlineBodies).toHaveLength(2);
+    // writerBudget(8000, attempt) = min(64000, (8000+16000)*attempt) — attempt 2 must be strictly larger.
+    expect(outlineBodies[1]!.max_completion_tokens).toBeGreaterThan(outlineBodies[0]!.max_completion_tokens);
   });
 });
 

@@ -6,6 +6,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuHeaders, iuReplicateUrl, iuUrl } from "./iu";
 import { log } from "./log";
+import { resolveReasoningEffort } from "./model-resolution";
 import { withSpan } from "./otel";
 import { recordUsage, setRequestMeta } from "./usage";
 
@@ -131,6 +132,10 @@ async function runReplicatePrep(
   }
 
   const userContent = instructions ? `${input}\n\n[delivery hint: ${instructions}]` : input;
+  // Only the full prep call gets an effort, mirroring gemini-tts.ts's runPrep —
+  // it has no tools, so gpt-5.6-luna's tools+reasoning_effort 503 never applies
+  // here; the summary model never gets one.
+  const reasoningEffort = summarize ? undefined : resolveReasoningEffort(prepModel, config.ttsPrepEffort);
 
   return withSpan(
     "audio.prep",
@@ -153,6 +158,7 @@ async function runReplicatePrep(
             { role: "user", content: userContent },
           ],
           max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
+          ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
         }),
       });
       const latencyMs = Date.now() - start;

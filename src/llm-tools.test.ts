@@ -240,6 +240,98 @@ describe("runToolLoop", () => {
     ).rejects.toThrow(/round 1 produced no response/);
   });
 
+  test("retries a terminal round with doubled budget when content is empty (finish_reason=length), then succeeds", async () => {
+    const { fetchImpl, calls } = scriptedFetch([
+      rawRes(200, { choices: [{ message: { role: "assistant", content: "" }, finish_reason: "length" }], usage: { completion_tokens: 100 } }),
+      chatResponse({ role: "assistant", content: "recovered after doubled budget" }),
+    ]);
+
+    const result = await runToolLoop({
+      model: "test-model",
+      systemPrompt: "sys",
+      userContent: "user",
+      tools: [],
+      maxCompletionTokens: 100,
+      stage: "test",
+      usageEndpoint: "podcast-research",
+      fetchImpl,
+    });
+
+    expect(result.content).toBe("recovered after doubled budget");
+    expect(calls).toHaveLength(2);
+    const secondBody = calls[1]?.body as { max_completion_tokens: number };
+    expect(secondBody.max_completion_tokens).toBe(200);
+  });
+
+  test("retries a round whose tool_calls arrived with finish_reason=length (possibly truncated arguments), then proceeds once the retry is complete", async () => {
+    const truncatedToolCall = {
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call_1", type: "function", function: { name: "noop", arguments: "{}" } }],
+    };
+    const { fetchImpl, calls } = scriptedFetch([
+      // Round 1, first attempt: tool_calls present but finish_reason=length — the
+      // old behaviour returned this as-is (no retry) purely because tool_calls
+      // were present, ignoring finish_reason entirely.
+      rawRes(200, { choices: [{ message: truncatedToolCall, finish_reason: "length" }], usage: {} }),
+      // Round 1, retry with doubled budget: same tool call, this time complete.
+      chatResponse(truncatedToolCall),
+      // Round 2: the model concludes.
+      chatResponse({ role: "assistant", content: "final answer" }),
+    ]);
+
+    const result = await runToolLoop({
+      model: "test-model",
+      systemPrompt: "sys",
+      userContent: "user",
+      tools: [noopTool],
+      maxCompletionTokens: 100,
+      stage: "test",
+      usageEndpoint: "podcast-research",
+      fetchImpl,
+    });
+
+    expect(calls).toHaveLength(3);
+    expect((calls[1]?.body as { max_completion_tokens: number }).max_completion_tokens).toBe(200);
+    expect(result.content).toBe("final answer");
+    expect(result.calls.map((c) => c.tool)).toEqual(["noop"]);
+  });
+
+  test("throws when the retry is still empty", async () => {
+    const empty = rawRes(200, { choices: [{ message: { role: "assistant", content: "" }, finish_reason: "length" }], usage: {} });
+    const { fetchImpl } = scriptedFetch([empty, empty]);
+
+    await expect(
+      runToolLoop({
+        model: "test-model",
+        systemPrompt: "sys",
+        userContent: "user",
+        tools: [],
+        maxCompletionTokens: 100,
+        stage: "test",
+        usageEndpoint: "podcast-research",
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/returned empty content.*after retry with doubled budget/);
+  });
+
+  test("passes reasoning_effort through to the request body when set", async () => {
+    const { fetchImpl, calls } = scriptedFetch([chatResponse({ role: "assistant", content: "done" })]);
+    await runToolLoop({
+      model: "deepseek-v4.1-flash",
+      systemPrompt: "sys",
+      userContent: "user",
+      tools: [],
+      maxCompletionTokens: 100,
+      stage: "test",
+      usageEndpoint: "podcast-research",
+      reasoningEffort: "high",
+      fetchImpl,
+    });
+    const body = calls[0]?.body as { reasoning_effort?: string };
+    expect(body.reasoning_effort).toBe("high");
+  });
+
   test("throws on a non-2xx response", async () => {
     const { fetchImpl } = scriptedFetch([rawRes(500, { error: "boom" })]);
     await expect(

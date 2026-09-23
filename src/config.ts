@@ -206,6 +206,14 @@ export const config = {
    */
   ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "gpt-5.6-luna",
   /**
+   * Reasoning effort for the Gemini TTS prep call above — `low` because this
+   * call dominates end-to-end TTS latency (see `ttsPrepModel`'s own comment)
+   * and prep has no tools, so gpt-5.6-luna's tools+reasoning_effort 503 never
+   * applies here. Passed through `resolveReasoningEffort` (model-resolution.ts),
+   * so it is a no-op for any non-`gpt-5.x`/deepseek/glm model.
+   */
+  ttsPrepEffort: process.env["TTS_PREP_EFFORT"] ?? "low",
+  /**
    * Model for the spoken-summary rewrite (`summarize: true`) — a short,
    * JSON-shaped task where a small model wins outright. Bake-off on the real
    * prompt, 2026-08-27: gemini-3.5-flash-lite 0.8–1.0 s, ministral-8b 0.8–1.2 s,
@@ -381,7 +389,9 @@ export const config = {
    * moves off Opus onto the cheap IU OpenAI-route default; the final wording
    * is PODCAST_WRITE_MODEL's job alone. See modelpick docs/decisions/podcast-writer.md.
    */
-  podcastOutlineModel: process.env["PODCAST_OUTLINE_MODEL"] ?? "gpt-5.6-luna",
+  podcastOutlineModel: process.env["PODCAST_OUTLINE_MODEL"] ?? "deepseek-v4.1-flash",
+  /** Reasoning effort for the outline call, passed through `resolveReasoningEffort` (omitted for non-reasoning-effort model families). */
+  podcastOutlineEffort: process.env["PODCAST_OUTLINE_EFFORT"] ?? "high",
   /**
    * The VOICE OWNER: segment writers and every revision/tightening pass. No
    * other model ever writes or rewrites dialogue — practitioners (and
@@ -395,9 +405,17 @@ export const config = {
    * catch what a single model's blind spots miss, and reviewers only point,
    * they never draft.
    */
-  podcastReviewModels: csvList("PODCAST_REVIEW_MODELS", "gemini-3.8-flash,gpt-5.6-luna"),
+  podcastReviewModels: csvList("PODCAST_REVIEW_MODELS", "gemini-3.8-flash,deepseek-v4.1-flash"),
+  /**
+   * Reasoning effort applied to every reviewer call, resolved per-model via
+   * `resolveReasoningEffort` — deepseek-v4.1-flash accepts it, gemini-3.8-flash
+   * (on this OpenAI-compat leg) does not and omits it regardless of this value.
+   */
+  podcastReviewEffort: process.env["PODCAST_REVIEW_EFFORT"] ?? "high",
   /** Final metadata pass (title/description/cover prompt/genres/chapter titles) after the script is locked. */
-  podcastMetadataModel: process.env["PODCAST_METADATA_MODEL"] ?? "gpt-5.6-luna",
+  podcastMetadataModel: process.env["PODCAST_METADATA_MODEL"] ?? "deepseek-v4.1-flash",
+  /** Reasoning effort for the metadata call, passed through `resolveReasoningEffort`. */
+  podcastMetadataEffort: process.env["PODCAST_METADATA_EFFORT"] ?? "high",
   /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Missing file → empty (logged once). */
   podcastShowBible: process.env["PODCAST_SHOW_BIBLE"] ?? "./docs/show-bible.md",
   /** Replicate model id used to synthesize each podcast turn. */
@@ -467,19 +485,22 @@ export const config = {
   researchApiKey: process.env["RESEARCH_API_KEY"] ?? "",
   /**
    * Tool-calling researcher (brain search/read, past episodes, research gateway).
-   * Terra: 3/3 tools in 4.3 s on modelpick's live benchmark (2026-09-07), the
-   * fastest of the six candidates and a tier above Luna in judgment at a cost
-   * that is noise per episode (~60k input tokens → ~$0.15). Gemini 3.8 Flash
-   * dropped a tool in the same run.
+   * Moved off gpt-5.6-terra onto deepseek-v4.1-flash in the 2026-09-13 rollout
+   * (OpenAI leg, `reasoning_effort: high`, function tools alongside it —
+   * live-probed to accept both together, unlike gpt-5.6-luna).
    */
-  podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "gpt-5.6-terra",
+  podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "deepseek-v4.1-flash",
+  /** Reasoning effort for the research tool loop's model calls, passed through `resolveReasoningEffort`. */
+  podcastResearchEffort: process.env["PODCAST_RESEARCH_EFFORT"] ?? "high",
   /**
    * The editor: decides format, roles, tone, humor, length and rhythm per
    * episode against the history — a judgment call over structure, not prose
    * generation, so it moves off Opus; PODCAST_WRITE_MODEL alone keeps the
    * final wording on claude-opus-4-6.
    */
-  podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "gpt-5.6-luna",
+  podcastEditorialModel: process.env["PODCAST_EDITORIAL_MODEL"] ?? "deepseek-v4.1-flash",
+  /** Reasoning effort for the editorial call, passed through `resolveReasoningEffort`. */
+  podcastEditorialEffort: process.env["PODCAST_EDITORIAL_EFFORT"] ?? "high",
   /** Spend cap: research-gateway calls (each one real money) the researcher may spend per job. Not a step/round cap. */
   podcastResearchMaxCalls: num("PODCAST_RESEARCH_MAX_CALLS", 2),
   /** How many recent episode profiles the editor sees. */

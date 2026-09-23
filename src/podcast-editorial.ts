@@ -244,7 +244,7 @@ function buildEditorialUserContent(input: EditorialInput): string {
  * warning and yields {@link defaultEpisodeBrief}, because an episode written
  * to a neutral brief beats no episode.
  */
-export async function decideEpisodeBrief(input: EditorialInput, opts: { model: string }): Promise<EpisodeBrief> {
+export async function decideEpisodeBrief(input: EditorialInput, opts: { model: string; reasoningEffort?: string }): Promise<EpisodeBrief> {
   try {
     const brief = await callAndParse(
       "editorial",
@@ -256,6 +256,7 @@ export async function decideEpisodeBrief(input: EditorialInput, opts: { model: s
           maxCompletionTokens: EDITORIAL_TOKEN_BUDGET * attempt,
           stage: "editorial",
           usageEndpoint: "podcast-editorial",
+          reasoningEffort: opts.reasoningEffort,
         }),
       (raw) => parseEpisodeBrief(raw, input),
       EDITORIAL_ATTEMPTS,

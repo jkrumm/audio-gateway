@@ -11,6 +11,7 @@
  */
 
 import { config } from "./config";
+import { log } from "./log";
 
 /** Models served by the native Gemini `generateContent` route, not OpenAI `/audio/speech`. */
 export const GEMINI_TTS = /gemini.*tts/i;
@@ -88,4 +89,63 @@ export function resolveSttModel(requested: string): ModelResolution {
     requested,
     overridden: requested.length > 0,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Reasoning effort (2026-09-13 model rollout — rollout-brief-common.md)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reasoning-effort families reachable through the OpenAI-compat
+ * `/chat/completions` leg, and the effort values each accepts (live-probed
+ * 2026-09-13). Claude (the podcast voice owner) and Gemini (in the review
+ * roster) are deliberately absent — neither has a probed `reasoning_effort`
+ * contract on this leg — so both fall through to "no family" and get
+ * the field omitted entirely rather than guessed at.
+ */
+const REASONING_EFFORT_ALLOWED = {
+  "gpt-5": ["none", "low", "medium", "high", "xhigh", "max"],
+  deepseek: ["low", "high", "xhigh", "max"],
+  glm: ["low", "high", "max"],
+} as const satisfies Record<string, readonly string[]>;
+
+type ReasoningEffortFamily = keyof typeof REASONING_EFFORT_ALLOWED;
+
+// Family matching is by PREFIX (a bare `gpt-5`/`deepseek`/`glm` string test) —
+// every model whose id starts with one of these is assumed to share that
+// family's probed effort set, not individually verified.
+function reasoningEffortFamily(model: string): ReasoningEffortFamily | undefined {
+  if (/^gpt-5/.test(model)) return "gpt-5";
+  if (/^deepseek/.test(model)) return "deepseek";
+  if (/^glm/.test(model)) return "glm";
+  return undefined;
+}
+
+/**
+ * Resolve the `reasoning_effort` value a call site should actually send for
+ * `model`, given the configured `effort`, or `undefined` to omit the field
+ * entirely. A model outside the three known reasoning-effort families (Claude,
+ * Gemini, anything else) always omits it. An `effort` value outside the
+ * model's own accepted set (e.g. "medium" for glm-5.3-flash, which the
+ * upstream rejects) is dropped with a warning rather than sent — a stale or
+ * typo'd env override should degrade to the model's own default, not break
+ * the call. The one place this logic lives; callers never duplicate it.
+ */
+export function resolveReasoningEffort(model: string, effort: string | undefined): string | undefined {
+  if (!effort) return undefined;
+  const family = reasoningEffortFamily(model);
+  if (!family) {
+    // Not a silent no-op: a configured PODCAST_*_EFFORT that never lands
+    // (e.g. pointed at claude/gemini, or a model id that doesn't match any
+    // known prefix) should be visible, just not at warning level — this is
+    // the expected outcome for Claude/Gemini, not a misconfiguration.
+    log.info("reasoning_effort configured but model matches no known family, omitting", { model, effort });
+    return undefined;
+  }
+  const allowed: readonly string[] = REASONING_EFFORT_ALLOWED[family];
+  if (!allowed.includes(effort)) {
+    log.warn("reasoning_effort not valid for this model family, omitting", { model, family, effort, allowed });
+    return undefined;
+  }
+  return effort;
 }

@@ -5,6 +5,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { config } from "./config";
 import { log } from "./log";
+import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { buildEpisodeProfile, loadShowBible, type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
@@ -607,6 +608,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
               : undefined,
             history,
             model: config.podcastResearchModel,
+            reasoningEffort: resolveReasoningEffort(config.podcastResearchModel, config.podcastResearchEffort),
           },
         ),
       );
@@ -637,7 +639,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
         history: store.recentEpisodes(request.series, config.podcastHistoryDepth),
         showBible,
       },
-      { model: config.podcastEditorialModel },
+      { model: config.podcastEditorialModel, reasoningEffort: resolveReasoningEffort(config.podcastEditorialModel, config.podcastEditorialEffort) },
     ),
   );
   files.brief = join(dir, "brief.json");
@@ -663,6 +665,11 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
         write: config.podcastWriteModel,
         review: config.podcastReviewModels,
         metadata: config.podcastMetadataModel,
+      },
+      efforts: {
+        outline: config.podcastOutlineEffort,
+        review: config.podcastReviewEffort,
+        metadata: config.podcastMetadataEffort,
       },
       concurrency: 3,
       showBiblePath: config.podcastShowBible,

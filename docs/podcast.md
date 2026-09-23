@@ -211,16 +211,16 @@ row.
 
 | Env var | Default | Effect |
 |-|-|-|
-| `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
-| `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | The voice owner — segment writers and every revision/tightening pass. |
-| `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,gpt-5.6-luna` | Comma list; every reviewer role runs on every listed model. |
-| `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | Final title/description/cover-prompt/genres/chapter-titles pass. |
+| `PODCAST_OUTLINE_MODEL` / `PODCAST_OUTLINE_EFFORT` | `deepseek-v4.1-flash` / `high` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
+| `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | The voice owner — segment writers and every revision/tightening pass. No `reasoning_effort` (Claude ignores it). |
+| `PODCAST_REVIEW_MODELS` / `PODCAST_REVIEW_EFFORT` | `gemini-3.8-flash,deepseek-v4.1-flash` / `high` | Comma list; every reviewer role runs on every listed model. Effort is resolved per-model — gemini-3.8-flash omits it regardless. |
+| `PODCAST_METADATA_MODEL` / `PODCAST_METADATA_EFFORT` | `deepseek-v4.1-flash` / `high` | Final title/description/cover-prompt/genres/chapter-titles pass. |
 | `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
 | `PODCAST_TTS_MODEL` | `elevenlabs/v3` | Replicate model for per-turn synthesis. |
 | `PODCAST_VOICES` | `Mark,Sarah` | The two hosts' ElevenLabs voices, in host order. |
 | `PODCAST_HOST_NAMES` | `Jonas,Lena` | The two hosts' display names, same order. |
 | `PODCAST_DEFAULT_MINUTES` | `20` | Episode length when a request omits `minutes` (clamped 3–60). |
-| `PODCAST_STABILITY` | `0.45` | ElevenLabs v3 stability — lower is more tag-responsive. |
+| `PODCAST_STABILITY` | `0.5` | ElevenLabs v3 stability — lower is more tag-responsive. |
 | `PODCAST_MP3_BITRATE` | `64` | Output MP3 bitrate (kbps) — mono speech, no music headroom needed. |
 | `PODCAST_GAP_MS` / `PODCAST_SHORT_GAP_MS` | `380` / `160` | Silence between turns; short before an interjection. |
 | `PODCAST_DATA_DIR` | `./data/podcasts` | Where per-job artifacts (`script.json`, `episode.mp3`, `cover.png`) are staged. |
@@ -233,8 +233,8 @@ row.
 | `BRAIN_DIR` | unset | Vault checkout the research tools read and the episode note is written into; empty disables both. |
 | `RESEARCH_GATEWAY_URL` | `https://research.jkrumm.com` | research-gateway base (tailnet-only). |
 | `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
-| `PODCAST_RESEARCH_MODEL` | `gpt-5.6-terra` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
-| `PODCAST_EDITORIAL_MODEL` | `claude-opus-5` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
+| `PODCAST_RESEARCH_MODEL` / `PODCAST_RESEARCH_EFFORT` | `deepseek-v4.1-flash` / `high` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
+| `PODCAST_EDITORIAL_MODEL` / `PODCAST_EDITORIAL_EFFORT` | `deepseek-v4.1-flash` / `high` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
 | `PODCAST_RESEARCH_MAX_CALLS` | `2` | Spend cap: research-gateway calls (each one real money) the researcher may spend per job — not a step cap. |
 | `PODCAST_HISTORY_DEPTH` | `8` | How many recent episode profiles the editor (and `past_episodes`) sees. |
 | `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | Number-word density above which a turn is synthesized slower. |
@@ -269,16 +269,19 @@ docs and a research pass on production practice:
 
 ## Writer budgets and reasoning (2026-09-02)
 
-claude-sonnet-5 on the IU endpoint reasons before answering on heavy prompts,
-and that reasoning is invisible in the stream but counted against
-`max_completion_tokens` (a 5.8k-char revision: 8.7k completion tokens; at a
-10.4k cap the reply came back empty with `finish_reason=length`). Budgets are
-therefore `writerBudget(visible, attempt)` = (visible text + 16k headroom) ×
-attempt, capped at 64k, so a parse-failure retry automatically doubles.
-There is deliberately no `reasoning_effort` cap: an episode is not latency-
-bound, and the writer's deliberation is what the quality pays for (the proxy
-does honour `reasoning_effort: low` — measured ~45 % fewer output tokens for
-the same text — if speed ever matters more).
+claude-opus-4-6 (the voice owner, every segment and revision call) on the IU
+endpoint reasons before answering on heavy prompts, and that reasoning is
+invisible in the stream but counted against `max_completion_tokens` (a
+5.8k-char revision: 8.7k completion tokens; at a 10.4k cap the reply came back
+empty with `finish_reason=length`). Budgets are therefore
+`writerBudget(visible, attempt)` = (visible text + 16k headroom) × attempt,
+capped at 64k, so a parse-failure retry automatically doubles; the same
+headroom covers the outline/review/metadata calls.
+`PODCAST_OUTLINE_EFFORT`/`PODCAST_REVIEW_EFFORT`/`PODCAST_METADATA_EFFORT`
+(default `high`) set `reasoning_effort` on those calls, resolved per-model via
+`resolveReasoningEffort` (model-resolution.ts) — deepseek-v4.1-flash honours
+it, gemini-3.8-flash and claude-opus-4-6 do not and never get the field. An
+episode is not latency-bound, so `high` is the default rather than a cost cap.
 `llm.finish_reason` is recorded on every writer span and usage row.
 Review and revision are polish: a reviewer that fails twice is skipped, a
 revision that fails keeps the draft segment. A running episode survives a
@@ -294,10 +297,10 @@ polishes the metadata:
 
 | Role | Env var | Default | Why |
 |-|-|-|-|
-| Outline | `PODCAST_OUTLINE_MODEL` | `claude-opus-5` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering, which the outline pays for and nothing downstream needs to match. |
-| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue — practitioners (and Anthropic's own prompting guide) name this version for organic voice and dialogue, where Opus 5 runs longer and more metaphor-heavy by default. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. |
-| Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,gpt-5.6-luna` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. |
-| Metadata | `PODCAST_METADATA_MODEL` | `gpt-5.6-luna` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. |
+| Outline | `PODCAST_OUTLINE_MODEL` | `deepseek-v4.1-flash` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering (`PODCAST_OUTLINE_EFFORT`, default `high`), which the outline pays for and nothing downstream needs to match. |
+| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue — practitioners (and Anthropic's own prompting guide) name this version for organic voice and dialogue, where Opus 5 runs longer and more metaphor-heavy by default. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. Never gets `reasoning_effort` — Claude ignores it. |
+| Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,deepseek-v4.1-flash` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. `PODCAST_REVIEW_EFFORT` (default `high`) applies only to models that accept it. |
+| Metadata | `PODCAST_METADATA_MODEL` | `deepseek-v4.1-flash` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. `PODCAST_METADATA_EFFORT` defaults to `high`. |
 
 **The voice-owner rule**: exactly one model (`PODCAST_WRITE_MODEL`) ever
 produces dialogue. Splitting the writer across models mid-episode would

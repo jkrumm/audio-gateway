@@ -28,6 +28,8 @@ export interface ResearchDeps {
   research?: { url: string; apiKey: string; maxCalls: number };
   history: EpisodeHistory;
   model: string;
+  /** Top-level `reasoning_effort` for `model`, already resolved via `resolveReasoningEffort`; omitted entirely when unset. */
+  reasoningEffort?: string;
   /** Default `rawFetch`; tests inject a fake with the same `(url, init) => Promise<RawResponse>` shape. */
   fetchImpl?: ToolLoopFetch;
   /** Sleep between research-gateway polls, injectable for tests. Default 10_000 ms. */
@@ -466,9 +468,15 @@ export async function runPodcastResearch(input: ResearchInput, deps: ResearchDep
     systemPrompt: buildSystemPrompt(input, deps),
     userContent: buildUserContent(input),
     tools,
-    maxCompletionTokens: 8000,
+    // Was a fixed 8000 (gpt-5.6-terra); deepseek-v4.1-flash's reasoning at
+    // `high` effort spends generously against the same budget, and a
+    // budget-starved round now retries with double before throwing
+    // (llm-tools.ts) rather than silently returning "" — 32000 gives that
+    // retry real headroom instead of doubling from an already-tight number.
+    maxCompletionTokens: 32000,
     stage: "research",
     usageEndpoint: "podcast-research",
+    reasoningEffort: deps.reasoningEffort,
     fetchImpl: deps.fetchImpl,
   });
   const dossier = parseDossier(result.content);

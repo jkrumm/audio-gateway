@@ -23,7 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { synthChunksConcurrent } = await import("./gemini-tts");
+const { synthChunksConcurrent, handleGeminiSpeech } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -76,6 +76,37 @@ describe("synthChunksConcurrent", () => {
     });
 
     await expect(synthChunksConcurrent("gemini-tts", "Charon", chunks(3))).rejects.toThrow(/Gemini TTS failed/);
+  });
+});
+
+describe("handleGeminiSpeech — spoken summary", () => {
+  test("summarize call never sends reasoning_effort (config.ttsSummaryModel is Gemini, outside the known families)", async () => {
+    let summaryBody: { reasoning_effort?: string } | undefined;
+    setFetch(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/chat/completions")) {
+        summaryBody = JSON.parse(String(init?.body ?? "{}")) as { reasoning_effort?: string };
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({ lang: "de", title: "Kurztitel", chunks: [{ style: "warm", text: "Kurzer Satz." }] }) } }],
+            usage: { prompt_tokens: 10, completion_tokens: 5 },
+          }),
+          { status: 200 },
+        );
+      }
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+
+    const res = await handleGeminiSpeech({
+      model: "gemini-3.1-flash-tts-preview",
+      input: "Ein längerer Satz, der zusammengefasst werden soll.",
+      voice: "Charon",
+      responseFormat: "mp3",
+      summarize: true,
+    });
+
+    expect(res.status).toBe(200);
+    expect(summaryBody?.reasoning_effort).toBeUndefined();
   });
 });
 

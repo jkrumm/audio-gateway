@@ -134,10 +134,12 @@ describe("handleReplicateSpeech — success paths", () => {
 
   test("prep runs for a listed model (v3) — chat/completions is called and x-audio-title is set", async () => {
     let sawPrepCall = false;
-    setFetch(async (url) => {
+    let prepBody: { reasoning_effort?: string } | undefined;
+    setFetch(async (url, init) => {
       const u = String(url);
       if (u.includes("/chat/completions")) {
         sawPrepCall = true;
+        prepBody = JSON.parse(String(init?.body)) as { reasoning_effort?: string };
         return jsonRes({
           choices: [{ message: { content: JSON.stringify({
             lang: "de", title: "Kurzer Titel",
@@ -164,6 +166,9 @@ describe("handleReplicateSpeech — success paths", () => {
     expect(res.status).toBe(200);
     expect(sawPrepCall).toBe(true);
     expect(res.headers.get("x-audio-title")).toBe(encodeURIComponent("Kurzer Titel"));
+    // config.ttsPrepModel defaults to gpt-5.6-luna, config.ttsPrepEffort to "low" —
+    // the full prep call (no tools) sends reasoning_effort, unlike the summary call.
+    expect(prepBody?.reasoning_effort).toBe("low");
   });
 
   test("previous_text/next_text wiring for 2 chunks (long prep-off input, sentence-split)", async () => {
@@ -301,11 +306,13 @@ describe("handleReplicateSpeech — success paths", () => {
 describe("handleReplicateSpeech — spoken summary", () => {
   test("summarize on a prep-off model uses the SUMMARY prompt, one prediction, title header", async () => {
     let systemPrompt = "";
+    let summaryBody: { reasoning_effort?: string } | undefined;
     setFetch(async (url, init) => {
       const u = String(url);
       if (u.includes("/chat/completions")) {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ role: string; content: string }> };
+        const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ role: string; content: string }>; reasoning_effort?: string };
         systemPrompt = body.messages[0]?.content ?? "";
+        summaryBody = body;
         return jsonRes({
           choices: [{ message: { content: JSON.stringify({
             lang: "de", title: "Todo erstellt",
@@ -333,6 +340,9 @@ describe("handleReplicateSpeech — spoken summary", () => {
     expect(systemPrompt).toContain("what should be SPOKEN aloud");
     expect(res.headers.get("x-audio-title")).toBe(encodeURIComponent("Todo erstellt"));
     expect(res.headers.get("content-type")).toBe("audio/pcm");
+    // Summary model (gemini-3.5-flash-lite) never gets an effort — the full
+    // prep call does, the summary call deliberately doesn't ask.
+    expect(summaryBody?.reasoning_effort).toBeUndefined();
   });
 });
 

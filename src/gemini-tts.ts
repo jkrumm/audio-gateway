@@ -5,6 +5,7 @@ import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
 import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
+import { resolveReasoningEffort } from "./model-resolution";
 import { withSpan } from "./otel";
 import { recordRetry, recordUsage, setRequestMeta } from "./usage";
 
@@ -143,6 +144,12 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
   }
 
   const systemPrompt = summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT;
+  // Only the full prep call gets an effort — it has no tools, so gpt-5.6-luna's
+  // tools+reasoning_effort 503 never applies here. The summary model
+  // (gemini-3.5-flash-lite) never gets one: resolveReasoningEffort would omit
+  // it anyway (outside the known reasoning-effort families), but not asking in
+  // the first place keeps this call's intent explicit.
+  const reasoningEffort = summarize ? undefined : resolveReasoningEffort(prepModel, config.ttsPrepEffort);
 
   return withSpan(
     "audio.prep",
@@ -160,6 +167,7 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
           ],
           // Reasoning-capable OpenAI models reject `max_tokens`; the modern field works.
           max_completion_tokens: Math.min(32000, Math.max(2000, input.length + 1000)),
+          ...(reasoningEffort && { reasoning_effort: reasoningEffort }),
         }),
       });
       const latencyMs = Date.now() - start;

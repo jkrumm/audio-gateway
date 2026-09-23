@@ -29,8 +29,24 @@ import { mkdir } from "node:fs/promises";
 const BASE = process.env["RT_BASE_URL"] ?? "";
 const TEXT = process.env["RT_TEXT"]
   ?? "Hallo, das ist ein Test des Audio-Gateways. Es ist Viertel nach neun, und ich habe heute neunzig Kilo gehoben.";
-const TTS_MODEL = process.env["RT_TTS_MODEL"] ?? "gemini-3.1-flash-tts-preview";
-const STT_MODEL = process.env["RT_STT_MODEL"] ?? "gpt-4o-transcribe";
+
+/**
+ * Default to the gateway's own configured default rather than duplicating the
+ * literal here — but only in in-process mode. Live mode (`RT_BASE_URL` set)
+ * must stay creds-free (see file header): `./config` fails fast on missing IU
+ * env vars, and `test:roundtrip:prod` runs with none set, so `config` is only
+ * ever imported when we're already about to import `./index` (in-process mode
+ * needs the same creds anyway).
+ */
+async function defaultModel(envOverride: string, configKey: "ttsModel" | "sttModel", liveFallback: string): Promise<string> {
+  const override = process.env[envOverride];
+  if (override) return override;
+  if (BASE) return liveFallback;
+  return (await import("./config")).config[configKey];
+}
+
+const TTS_MODEL = await defaultModel("RT_TTS_MODEL", "ttsModel", "gemini-3.1-flash-tts-preview");
+const STT_MODEL = await defaultModel("RT_STT_MODEL", "sttModel", "gpt-4o-transcribe");
 const VOICE = process.env["RT_VOICE"] ?? "Charon";
 const PROXY_KEY = process.env["PROXY_API_KEY"] ?? "";
 

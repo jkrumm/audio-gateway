@@ -461,4 +461,20 @@ describe("runPodcastResearch", () => {
     expect(dossier.toolCalls).toHaveLength(roundsWantingTools);
     expect(call).toBe(roundsWantingTools + 1);
   });
+
+  test("passes deps.reasoningEffort through to the tool loop's request body", async () => {
+    const dossierJson = JSON.stringify({ summary: "s", additions: [], glossary: [], priorCoverage: [], openQuestions: [] });
+    let sentBody: { reasoning_effort?: string } | undefined;
+    const fetchImpl: ToolLoopFetch = (async (_url: string, init: RequestInit) => {
+      sentBody = JSON.parse(String(init.body)) as { reasoning_effort?: string };
+      return rawRes(200, { choices: [{ message: { role: "assistant", content: dossierJson }, finish_reason: "stop" }], usage: {} });
+    }) as ToolLoopFetch;
+
+    await runPodcastResearch(
+      { source: "some notes", language: "de", series: "Brain Sonderausgabe" },
+      { history: noHistory, model: "deepseek-v4.1-flash", reasoningEffort: "high", fetchImpl },
+    );
+
+    expect(sentBody?.reasoning_effort).toBe("high");
+  });
 });

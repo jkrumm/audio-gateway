@@ -31,6 +31,8 @@ export interface UsageRow {
   responseFormat?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  /** Prompt-cache hit portion of `inputTokens` (subset, not additive) — see `tokens()`. */
+  cachedTokens?: number | null;
   audioTokens?: number | null;
   audioSeconds?: number | null;
   inputChars?: number | null;
@@ -151,15 +153,21 @@ export function inflightEnd(): void {
 function tokens(usage: unknown): {
   input: number | null;
   output: number | null;
+  cachedTokens: number | null;
   audioTokens: number | null;
   audioSeconds: number | null;
 } {
   const u = (usage ?? {}) as Record<string, unknown>;
   const details = (u["input_token_details"] ?? {}) as Record<string, unknown>;
+  // Prompt-cache hit count — OpenAI-shaped chat completions report it under
+  // `prompt_tokens_details.cached_tokens`, a subset of `input_tokens`/`prompt_tokens`,
+  // not additional tokens.
+  const promptDetails = (u["prompt_tokens_details"] ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
   return {
     input: num(u["input_tokens"]) ?? num(u["prompt_tokens"]),
     output: num(u["output_tokens"]) ?? num(u["completion_tokens"]),
+    cachedTokens: num(promptDetails["cached_tokens"]),
     audioTokens: num(details["audio_tokens"]),
     audioSeconds: num(u["prompt_audio_seconds"]),
   };
@@ -196,6 +204,7 @@ export function normalizeModel(raw: string): string {
 
 interface Rate {
   input?: number; // text input, USD per 1M tokens
+  cachedInput?: number; // prompt-cache-hit portion of text input, USD per 1M (subset of `input`, not additive)
   audioInput?: number; // audio input tokens, USD per 1M (STT split)
   output?: number; // output tokens, USD per 1M
   perMinute?: number; // whisper-style, USD per minute of audio
@@ -234,6 +243,13 @@ const RATES: Record<string, Rate> = {
   "whisper": { perMinute: 0.006 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
+  // 2026-09-13 model rollout: podcast outline/review/metadata/editorial/research.
+  // Rates measured 2026-09-13 against the IU unified endpoint's own `usage.cost`
+  // (USD per 1M tokens) — supersedes the earlier .30/—/1.20 vendor-list guess.
+  "deepseek-v4.1-flash": { input: 0.5, cachedInput: 0.05, output: 1.5 },
+  // glm-5.3-flash: routing/reasoning-effort model (see model-resolution.ts), no
+  // prior rate entry. Measured 2026-09-13 against IU's own `usage.cost`.
+  "glm-5.3-flash": { input: 0.15, cachedInput: 0.03, output: 0.5 },
   // ElevenLabs via IU's `/replicate/v1` route. The unit here is contested, so
   // read the arithmetic before changing it.
   //
@@ -281,7 +297,8 @@ const RATES: Record<string, Rate> = {
   "claude-haiku-4-5": { input: 1, output: 5 },
   "claude-fable-5-1": { input: 10, output: 50 },
   "claude-fable-5": { input: 10, output: 50 },
-  "gpt-5.6-luna": { input: 0.2, output: 1.2 },
+  // Measured 2026-09-13 against IU's own `usage.cost` — adds the cached-input rate.
+  "gpt-5.6-luna": { input: 0.2, cachedInput: 0.02, output: 1.2 },
   "gpt-5.6-terra": { input: 2, output: 12 },
   "gpt-5.6-sol": { input: 4, output: 20 },
   "gpt-5.5": { input: 5, output: 30 },
@@ -295,6 +312,8 @@ const RATES: Record<string, Rate> = {
 interface CostInputs {
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Prompt-cache hit portion of `inputTokens` (subset, not additive). */
+  cachedInputTokens?: number | null;
   audioTokens: number | null;
   audioSeconds: number | null;
   inputChars: number | null;
@@ -334,8 +353,17 @@ export function computeCost(
   // audio (conservative — STT input is audio-dominated).
   const audioIn = rate.audioInput != null ? (c.audioTokens ?? input) : 0;
   const textIn = rate.audioInput != null ? input - audioIn : input;
+  // Prompt-cache split: `cachedInputTokens` is a SUBSET of `textIn` (upstream
+  // reports one combined input_tokens/prompt_tokens figure that already
+  // includes cache hits) — bill it at the cached rate and only the remainder
+  // at the full input rate, rather than at the full rate twice.
+  const cachedIn = rate.cachedInput != null ? Math.min(c.cachedInputTokens ?? 0, textIn) : 0;
+  const uncachedTextIn = textIn - cachedIn;
   const cost =
-    (textIn * (rate.input ?? 0) + audioIn * (rate.audioInput ?? 0) + output * (rate.output ?? 0)) /
+    (uncachedTextIn * (rate.input ?? 0) +
+      cachedIn * (rate.cachedInput ?? 0) +
+      audioIn * (rate.audioInput ?? 0) +
+      output * (rate.output ?? 0)) /
     1_000_000;
   return { costUsd: cost, costSource };
 }
@@ -357,6 +385,7 @@ function costForRow(row: UsageRow): { costUsd: number | null; costSource: string
   return computeCost(normalizeModel(row.model), {
     inputTokens: row.inputTokens ?? t.input,
     outputTokens: row.outputTokens ?? t.output,
+    cachedInputTokens: row.cachedTokens ?? t.cachedTokens,
     audioTokens: row.audioTokens ?? t.audioTokens,
     audioSeconds: row.audioSeconds ?? t.audioSeconds,
     inputChars: row.inputChars ?? null,
@@ -516,7 +545,9 @@ export function buildSqliteSink(dbPath: string): UsageSink {
 // HTTP adapter — Phase-3 (Decision 3)
 // ---------------------------------------------------------------------------
 
-function buildHttpSink(url: string, sourceLabel: string): UsageSink {
+// Exported so tests can exercise the argo payload shape (uncached-input
+// convention) directly, mirroring buildSqliteSink's export above.
+export function buildHttpSink(url: string, sourceLabel: string): UsageSink {
   // No-op guard: HTTP sink is optional; both URL and auth secret must be set.
   if (!url || !config.argoApiSecret) {
     return { record(_row: UsageRow): void {} };
@@ -529,6 +560,12 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
       const outputTokens = row.outputTokens ?? t.output;
       const audioTokens = row.audioTokens ?? t.audioTokens;
       const audioSeconds = row.audioSeconds ?? t.audioSeconds;
+      // Argo's convention (apps/api/src/routes/usage.ts): `input_tokens` is the
+      // UNCACHED remainder, `cache_read_tokens` the prompt-cache-hit portion —
+      // the two are summed for cache-hit-ratio math, so double-counting the hit
+      // portion in both would overstate total tokens.
+      const cacheReadTokens = Math.min(row.cachedTokens ?? t.cachedTokens ?? 0, inputTokens ?? 0);
+      const uncachedInputTokens = (inputTokens ?? 0) - cacheReadTokens;
 
       const modelNorm = normalizeModel(row.model);
       // The *-request summary rows are a correlation/reporting artifact — the
@@ -554,9 +591,9 @@ function buildHttpSink(url: string, sourceLabel: string): UsageSink {
         machine: config.machine,
         billing: "iu",
         outcome: row.status < 400 ? "ok" : "error",
-        input_tokens: inputTokens ?? 0,
+        input_tokens: uncachedInputTokens,
         output_tokens: outputTokens ?? 0,
-        cache_read_tokens: 0,
+        cache_read_tokens: cacheReadTokens,
         cache_write_tokens: 0,
         reasoning_tokens: 0,
         duration_ms: row.latencyMs,

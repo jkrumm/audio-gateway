@@ -18,7 +18,7 @@ process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
 process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=macwhisper-secret-token";
 process.env["TTS_PREP"] ??= "off";
 
-const { resolveSttModel, resolveTtsRoute, STT_MODELS } = await import("./model-resolution");
+const { resolveSttModel, resolveTtsRoute, resolveReasoningEffort, STT_MODELS } = await import("./model-resolution");
 
 describe("resolveSttModel", () => {
   test("honours known-good STT models as-is", () => {
@@ -88,5 +88,28 @@ describe("resolveTtsRoute", () => {
     const r = resolveTtsRoute("gemini-3.1-flash");
     expect(r.provider).toBe("gemini");
     expect(r.model).toBe("gemini-3.1-flash-tts-preview");
+  });
+});
+
+describe("resolveReasoningEffort", () => {
+  test("omits the field when no effort is configured", () => {
+    expect(resolveReasoningEffort("deepseek-v4.1-flash", undefined)).toBeUndefined();
+    expect(resolveReasoningEffort("deepseek-v4.1-flash", "")).toBeUndefined();
+  });
+
+  test("passes through a valid effort for each known reasoning-effort family", () => {
+    expect(resolveReasoningEffort("gpt-5.6-luna", "low")).toBe("low");
+    expect(resolveReasoningEffort("deepseek-v4.1-flash", "high")).toBe("high");
+    expect(resolveReasoningEffort("glm-5.3-flash", "max")).toBe("max");
+  });
+
+  test("omits an effort value outside the model's own accepted set", () => {
+    // glm rejects "medium" upstream — omit rather than send a value that 400s.
+    expect(resolveReasoningEffort("glm-5.3-flash", "medium")).toBeUndefined();
+  });
+
+  test("omits entirely for models outside the known reasoning-effort families (Claude, Gemini)", () => {
+    expect(resolveReasoningEffort("claude-opus-4-6", "high")).toBeUndefined();
+    expect(resolveReasoningEffort("gemini-3.8-flash", "high")).toBeUndefined();
   });
 });
