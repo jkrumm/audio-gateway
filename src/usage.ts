@@ -299,6 +299,8 @@ const RATES: Record<string, Rate> = {
   "claude-fable-5": { input: 10, output: 50 },
   // Measured 2026-09-13 against IU's own `usage.cost` — adds the cached-input rate.
   "gpt-5.6-luna": { input: 0.2, cachedInput: 0.02, output: 1.2 },
+  // OpenAI list price, short-context tier (developers.openai.com/api/docs/pricing, 2026-09-23).
+  "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
   "gpt-5.6-terra": { input: 2, output: 12 },
   "gpt-5.6-sol": { input: 4, output: 20 },
   "gpt-5.5": { input: 5, output: 30 },

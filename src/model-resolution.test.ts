@@ -99,6 +99,7 @@ describe("resolveReasoningEffort", () => {
 
   test("passes through a valid effort for each known reasoning-effort family", () => {
     expect(resolveReasoningEffort("gpt-5.6-luna", "low")).toBe("low");
+    expect(resolveReasoningEffort("gpt-6-luna", "low")).toBe("low");
     expect(resolveReasoningEffort("deepseek-v4.1-flash", "high")).toBe("high");
     expect(resolveReasoningEffort("glm-5.3-flash", "max")).toBe("max");
   });
@@ -106,6 +107,8 @@ describe("resolveReasoningEffort", () => {
   test("omits an effort value outside the model's own accepted set", () => {
     // glm rejects "medium" upstream — omit rather than send a value that 400s.
     expect(resolveReasoningEffort("glm-5.3-flash", "medium")).toBeUndefined();
+    // gpt-6-luna rejects "max" upstream (live-probed 2026-09-23).
+    expect(resolveReasoningEffort("gpt-6-luna", "max")).toBeUndefined();
   });
 
   test("omits entirely for models outside the known reasoning-effort families (Claude, Gemini)", () => {

@@ -105,17 +105,20 @@ export function resolveSttModel(requested: string): ModelResolution {
  */
 const REASONING_EFFORT_ALLOWED = {
   "gpt-5": ["none", "low", "medium", "high", "xhigh", "max"],
+  // gpt-6-luna live-probed 2026-09-23: "max" is rejected upstream.
+  "gpt-6": ["none", "low", "medium", "high", "xhigh"],
   deepseek: ["low", "high", "xhigh", "max"],
   glm: ["low", "high", "max"],
 } as const satisfies Record<string, readonly string[]>;
 
 type ReasoningEffortFamily = keyof typeof REASONING_EFFORT_ALLOWED;
 
-// Family matching is by PREFIX (a bare `gpt-5`/`deepseek`/`glm` string test) —
+// Family matching is by PREFIX (a bare `gpt-5`/`gpt-6`/`deepseek`/`glm` string test) —
 // every model whose id starts with one of these is assumed to share that
 // family's probed effort set, not individually verified.
 function reasoningEffortFamily(model: string): ReasoningEffortFamily | undefined {
   if (/^gpt-5/.test(model)) return "gpt-5";
+  if (/^gpt-6/.test(model)) return "gpt-6";
   if (/^deepseek/.test(model)) return "deepseek";
   if (/^glm/.test(model)) return "glm";
   return undefined;
@@ -124,7 +127,7 @@ function reasoningEffortFamily(model: string): ReasoningEffortFamily | undefined
 /**
  * Resolve the `reasoning_effort` value a call site should actually send for
  * `model`, given the configured `effort`, or `undefined` to omit the field
- * entirely. A model outside the three known reasoning-effort families (Claude,
+ * entirely. A model outside the known reasoning-effort families (Claude,
  * Gemini, anything else) always omits it. An `effort` value outside the
  * model's own accepted set (e.g. "medium" for glm-5.3-flash, which the
  * upstream rejects) is dropped with a warning rather than sent — a stale or

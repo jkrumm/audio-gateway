@@ -200,6 +200,21 @@ describe("prompt-cache pricing (cached_tokens is a subset of input_tokens, not a
     expect(result.costUsd).toBeCloseTo(0.02, 6);
   });
 
+  test("gpt-6-luna (TTS prep since 2026-09-23) prices at its own list rate; gpt-5.6-luna rows keep theirs", async () => {
+    const { computeCost } = await import("./usage");
+    const result = computeCost("gpt-6-luna", {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 400_000,
+      outputTokens: 1_000_000,
+      audioTokens: null,
+      audioSeconds: null,
+      inputChars: null,
+    });
+    // 600k uncached × $0.10 + 400k cached × $0.01 + 1M out × $0.50
+    expect(result.costUsd).toBeCloseTo(0.06 + 0.004 + 0.5, 6);
+    expect(computeCost("gpt-5.6-luna", { inputTokens: 0, outputTokens: 1_000_000, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(1.2, 6);
+  });
+
   test("a model with no cachedInput rate ignores cachedInputTokens and bills everything at the full input rate", async () => {
     const { computeCost } = await import("./usage");
     const result = computeCost("claude-opus-4-6", {

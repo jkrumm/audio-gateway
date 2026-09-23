@@ -144,7 +144,7 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
   }
 
   const systemPrompt = summarize ? SUMMARY_SYSTEM_PROMPT : PREP_SYSTEM_PROMPT;
-  // Only the full prep call gets an effort — it has no tools, so gpt-5.6-luna's
+  // Only the full prep call gets an effort — it has no tools, so gpt-6-luna's
   // tools+reasoning_effort 503 never applies here. The summary model
   // (gemini-3.5-flash-lite) never gets one: resolveReasoningEffort would omit
   // it anyway (outside the known reasoning-effort families), but not asking in

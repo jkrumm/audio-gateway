@@ -166,7 +166,7 @@ describe("handleReplicateSpeech — success paths", () => {
     expect(res.status).toBe(200);
     expect(sawPrepCall).toBe(true);
     expect(res.headers.get("x-audio-title")).toBe(encodeURIComponent("Kurzer Titel"));
-    // config.ttsPrepModel defaults to gpt-5.6-luna, config.ttsPrepEffort to "low" —
+    // config.ttsPrepModel defaults to gpt-6-luna, config.ttsPrepEffort to "low" —
     // the full prep call (no tools) sends reasoning_effort, unlike the summary call.
     expect(prepBody?.reasoning_effort).toBe("low");
   });

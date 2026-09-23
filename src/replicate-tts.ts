@@ -133,7 +133,7 @@ async function runReplicatePrep(
 
   const userContent = instructions ? `${input}\n\n[delivery hint: ${instructions}]` : input;
   // Only the full prep call gets an effort, mirroring gemini-tts.ts's runPrep —
-  // it has no tools, so gpt-5.6-luna's tools+reasoning_effort 503 never applies
+  // it has no tools, so gpt-6-luna's tools+reasoning_effort rejection never applies
   // here; the summary model never gets one.
   const reasoningEffort = summarize ? undefined : resolveReasoningEffort(prepModel, config.ttsPrepEffort);
 

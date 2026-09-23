@@ -203,14 +203,16 @@ export const config = {
    * This call dominates end-to-end TTS latency (measured 2026-08: ~9.5 s on
    * DeepSeek-V4-Pro vs ~2 s on gpt-5.6-luna for the same prompt), so the default is
    * the fastest EU-resident model that still follows the chunking contract.
+   * gpt-6-luna since 2026-09-23: ~4x faster decode than gpt-5.6-luna at similar
+   * TTFT, and cheaper per token.
    */
-  ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "gpt-5.6-luna",
+  ttsPrepModel: process.env["TTS_PREP_MODEL"] ?? "gpt-6-luna",
   /**
    * Reasoning effort for the Gemini TTS prep call above — `low` because this
    * call dominates end-to-end TTS latency (see `ttsPrepModel`'s own comment)
-   * and prep has no tools, so gpt-5.6-luna's tools+reasoning_effort 503 never
+   * and prep has no tools, so gpt-6-luna's tools+reasoning_effort rejection never
    * applies here. Passed through `resolveReasoningEffort` (model-resolution.ts),
-   * so it is a no-op for any non-`gpt-5.x`/deepseek/glm model.
+   * so it is a no-op for any non-`gpt-5.x`/`gpt-6.x`/deepseek/glm model.
    */
   ttsPrepEffort: process.env["TTS_PREP_EFFORT"] ?? "low",
   /**
@@ -487,7 +489,7 @@ export const config = {
    * Tool-calling researcher (brain search/read, past episodes, research gateway).
    * Moved off gpt-5.6-terra onto deepseek-v4.1-flash in the 2026-09-13 rollout
    * (OpenAI leg, `reasoning_effort: high`, function tools alongside it —
-   * live-probed to accept both together, unlike gpt-5.6-luna).
+   * live-probed to accept both together, unlike gpt-5.6-luna/gpt-6-luna).
    */
   podcastResearchModel: process.env["PODCAST_RESEARCH_MODEL"] ?? "deepseek-v4.1-flash",
   /** Reasoning effort for the research tool loop's model calls, passed through `resolveReasoningEffort`. */
