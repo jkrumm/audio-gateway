@@ -31,8 +31,8 @@ add/commit/push) when `BRAIN_DIR` is set and the request's `brainNote` isn't `fa
 
 The pipeline itself stays in this repo, but it now runs on **two instances**: the VPS keeps
 serving STT/TTS, and the Mac mini runs a second instance (`:7719`) for podcasts specifically —
-the brain is a filesystem checkout that only exists there, and `research.jkrumm.com` is
-tailnet-only. `PODCAST_ENABLED=false` turns the VPS instance's `/v1/podcasts*` into a `410` pointing
+the brain is a filesystem checkout that only exists there, and the research gateway now runs
+only on the mini. `PODCAST_ENABLED=false` turns the VPS instance's `/v1/podcasts*` into a `410` pointing
 at the mini. Full design + decisions: `docs/podcast-editorial-room.md`.
 
 ## Two-pass writer (`src/podcast-script.ts`) — pre-v2 history
@@ -231,7 +231,7 @@ row.
 | `IMAGE_GEN_URL` / `IMAGE_GEN_API_KEY` | unset / unset | image-gen gateway for cover art — unset disables covers entirely. |
 | `PODCAST_ENABLED` | `true` | Serve `/v1/podcasts*` at all; `false` → every route `410`s with a pointer to the mini instance. |
 | `BRAIN_DIR` | unset | Vault checkout the research tools read and the episode note is written into; empty disables both. |
-| `RESEARCH_GATEWAY_URL` | `https://research.jkrumm.com` | research-gateway base (tailnet-only). |
+| `RESEARCH_GATEWAY_URL` | `http://127.0.0.1:7780` | research-gateway base (mini-only). |
 | `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
 | `PODCAST_RESEARCH_MODEL` / `PODCAST_RESEARCH_EFFORT` | `deepseek-v4.1-flash` / `high` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
 | `PODCAST_EDITORIAL_MODEL` / `PODCAST_EDITORIAL_EFFORT` | `deepseek-v4.1-flash` / `high` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |

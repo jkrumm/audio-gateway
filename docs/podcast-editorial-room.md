@@ -221,7 +221,7 @@ The CLI (`scripts/podcast.ts`) gets `--path <brain path>` (repeatable), `--no-re
 | Var | Default | |
 |-|-|-|
 | `BRAIN_DIR` | `""` | vault checkout; empty disables brain tools and the note |
-| `RESEARCH_GATEWAY_URL` | `https://research.jkrumm.com` | |
+| `RESEARCH_GATEWAY_URL` | `http://127.0.0.1:7780` | |
 | `RESEARCH_API_KEY` | `""` | `op://vps/research-gateway/API_SECRET`; empty disables the `research` tool |
 | `PODCAST_RESEARCH_MODEL` / `PODCAST_RESEARCH_EFFORT` | `deepseek-v4.1-flash` / `high` | tool-calling researcher (2026-09-13 rollout; Luna until 2026-09-07, then Terra, now deepseek-v4.1-flash — see `docs/podcast.md`) |
 | `PODCAST_EDITORIAL_MODEL` / `PODCAST_EDITORIAL_EFFORT` | `deepseek-v4.1-flash` / `high` | the editor |

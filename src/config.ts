@@ -482,7 +482,7 @@ export const config = {
     return raw ? resolve(raw) : "";
   })(),
   /** research-gateway base URL (tailnet-only). */
-  researchGatewayUrl: (process.env["RESEARCH_GATEWAY_URL"] ?? "https://research.jkrumm.com").replace(/\/+$/, ""),
+  researchGatewayUrl: (process.env["RESEARCH_GATEWAY_URL"] ?? "http://127.0.0.1:7780").replace(/\/+$/, ""),
   /** Bearer for the research gateway; empty disables the `research` tool. */
   researchApiKey: process.env["RESEARCH_API_KEY"] ?? "",
   /**
