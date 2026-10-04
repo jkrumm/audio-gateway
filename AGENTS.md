@@ -130,6 +130,60 @@ pipeline (both retired 2026-06-17).
   `audio.cover` (cover generation), and `audio.publish.abs` (Audiobookshelf upload/scan/poll) —
   same join-on-id story as a regular request.
 
+## Validate
+- `make check` — `bun run typecheck` + `bun test`; non-zero on failure, no side effects.
+- The hermetic route/unit tests are what `bun test` runs. The **live** checks are excluded
+  from `check` on purpose because they need IU credentials and network: `bun run test:e2e`
+  (`RUN_E2E=1`, hits the real upstream) and `bun run test:roundtrip:prod`
+  (`RT_BASE_URL=https://audio-gateway.jkrumm.com`).
+- `make verify` (below) is the production probe, not part of `check`.
+
+## Deploy
+Two instances, two channels — the **VPS container** (production STT/TTS) and the **Mac mini
+LaunchAgent** (podcast pipeline, `:7719`).
+- **VPS.** Push to `master` → GitHub Actions (`.github/workflows/deploy.yml`) → RollHook
+  builds the image and does a zero-downtime rolling replace (the 60 s `SHUTDOWN_DRAIN_MS`
+  finishes in-flight requests; `stop_grace_period` is 90 s). There is no `make deploy` for the
+  VPS: it is a `deployed by CI on push` repo. **Rollback:** RollHook keeps the previous
+  image; re-run the workflow against the prior commit (nothing here rolls back automatically).
+- **Mac mini.** `make deploy` pulls `master` (`--ff-only`), runs
+  `bun install --frozen-lockfile`, then restarts the LaunchAgent (`launchd-restart`). It
+  **refuses while a podcast job is running** (a restart kills it, and a killed job does not
+  resume) and on a dirty working tree (the LaunchAgent runs *this* checkout). A push to
+  `master` does **not** redeploy the mini — `make deploy` is manual.
+
+## Verify & Monitor
+- `make verify` — `curl -fsS https://audio-gateway.jkrumm.com/health` (VPS production),
+  non-zero unless the body carries `"ok":true`. Exit 0 = live and healthy.
+- Health URL: `https://audio-gateway.jkrumm.com/health` (VPS, tailnet-only via Traefik;
+  grey-cloud DNS → the VPS). The mini answers `http://localhost:7719/health` (tailnet door
+  `podcasts.mini.jkrumm.com` for the MacBook); its `degraded: [...]` names any launcher overlay
+  that did not resolve (`publish`, `otel`).
+- Kuma monitor: `Audio Gateway - HTTP` (keyword `"ok":true`, every 150 s). The mini has no
+  Kuma HTTP monitor — Kuma cannot reach the tailnet mini; the `MacMini Dev Host - Push`
+  heartbeat covers the host.
+- OTel `service.name`: `audio-gateway` (the default; `OTEL_SERVICE_NAME` is unset). Both
+  instances share it and are told apart by the `host.name` attribute (`MACHINE=vps`/`mini`).
+- `make logs` — bounded tail (last 100 lines) of the local podcast-instance logs
+  (`~/Library/Logs/audio-gateway.{log,err}`), then exits; unlike `make launchd-logs` it does
+  not follow. VPS logs are the container's (`docker logs audio-gateway` on the VPS).
+
+## Gotchas
+- **`make deploy` refuses while a job runs and on a dirty tree** — a restart kills the
+  running podcast (no resume), and the LaunchAgent runs this checkout, so a pull would ship
+  uncommitted edits.
+- **Never point the LaunchAgent at a Homebrew `bun` binary** — macOS BTM silently refuses it;
+  the `scripts/launch.sh` wrapper is required (it also resolves the env overlays).
+- **An unresolved launcher overlay is a degraded instance, not a boot failure** —
+  `GET /health` returns `degraded: ["publish"|"otel"]`; seed the missing refs, then
+  `make launchd-restart`.
+- **`make launchd-logs` follows (`-f`); `make logs` is the bounded one** — use `make logs` in
+  scripts.
+- **`make verify` probes the VPS, not the local mini** — the mini is tailnet-only, so a green
+  `make verify` does not prove the podcast instance is up (use `make launchd-status`).
+- **The VPS answers `/v1/podcasts*` with a 410** (`PODCAST_ENABLED=false`); podcasts only run
+  on the mini.
+
 ## Conventions
 - Deep modules, **ports & adapters** (the usage sink is the canonical example), early returns, no `any`.
 - All env parsing stays in `config.ts`.
@@ -138,13 +192,12 @@ pipeline (both retired 2026-06-17).
 ## Run
 - Dev: `bun run dev` (`secrets-run` injects secrets from `.env.tpl` — drop-in op shim: live `op` on the MacBook, encrypted cache on the mini; listens on `:7714`).
 - VPS prod: Docker (see `Dockerfile`); secrets injected as env at runtime. Serves STT/TTS;
-  `PODCAST_ENABLED=false` once the mini instance owns the podcast pipeline.
+  `PODCAST_ENABLED=false` (podcasts are the mini's job). Ships via CI — see `## Deploy`.
 - Mac mini prod: a LaunchAgent instance dedicated to podcasts (`launchd/`, `.env.mini.tpl`, port
-  `7719`). `make deploy` (pull + restart; refuses while a job runs — a restart kills it, no resume —
-  and on a dirty working tree, since the LaunchAgent runs this checkout),
-  `make launchd-install | launchd-status | launchd-restart | launchd-logs | launchd-uninstall`
-  manage it; `make seed-ledger` copies the VPS podcast job ledger + episode artifacts onto the mini
-  so it starts with existing episodes as editorial memory.
+  `7719`), shipped by `make deploy` (see `## Deploy`); `make launchd-install | launchd-status |
+  launchd-restart | launchd-logs | launchd-uninstall` manage it, and `make seed-ledger` copies
+  the VPS podcast job ledger + episode artifacts onto the mini so it starts with existing
+  episodes as editorial memory.
 - `bun run podcast -- --source <file.md|-> [--path <brain path>]... [--minutes N] [--publish]
   [--no-research] [--pin-minutes] [--no-brain-note] [...]` — CLI for the long-form podcast pipeline
   (submit, poll progress, download the finished episode), talks to the mini instance by default; see

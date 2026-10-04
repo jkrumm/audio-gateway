@@ -5,6 +5,7 @@ LAUNCHAGENTS := $(HOME)/Library/LaunchAgents
 PLIST        := $(LAUNCHAGENTS)/$(LABEL).plist
 LOG          := $(HOME)/Library/Logs/audio-gateway.log
 ERR          := $(HOME)/Library/Logs/audio-gateway.err
+LINES        ?= 100
 
 # ============================================================================
 # LaunchAgent — the podcast-pipeline instance on :7719 (mini only). STT/TTS
@@ -64,6 +65,23 @@ check: ## typecheck + test
 	@bun run typecheck && bun test
 
 # ============================================================================
+# Repo contract (dotfiles/docs/agent-platform.md §Repo contract) — probe
+# production and read its logs. `check` and `deploy` live above/below.
+# Production is the VPS container (STT/TTS); the local mini instance (:7719) is
+# the podcast pipeline this checkout deploys and writes its logs.
+# ============================================================================
+
+.PHONY: verify
+verify: ## Probe the VPS /health (exit 0 = live and healthy)
+	@curl -fsS https://audio-gateway.jkrumm.com/health | /usr/bin/grep -q '"ok":true' \
+		|| { echo "  ✗ audio-gateway not healthy"; exit 1; }
+	@echo "  ✓ audio-gateway healthy"
+
+.PHONY: logs
+logs: ## Bounded tail of the local podcast-instance logs, then exits (LINES=N lines, default 100)
+	@tail -n $(LINES) "$(LOG)" "$(ERR)"
+
+# ============================================================================
 # Help
 # ============================================================================
 
@@ -73,6 +91,8 @@ help:
 	@echo "  audio-gateway"
 	@echo ""
 	@echo "  make check              typecheck + test"
+	@echo "  make verify             curl https://audio-gateway.jkrumm.com/health (exit 0 = healthy)"
+	@echo "  make logs               Bounded tail of ~/Library/Logs/audio-gateway.{log,err}, then exit"
 	@echo ""
 	@echo "  Mini podcast-pipeline instance (:7719) — see docs/podcast-editorial-room.md"
 	@echo "  make deploy             Pull master + restart (refuses while a job runs or the tree is dirty)"
