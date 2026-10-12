@@ -1,7 +1,7 @@
 /**
- * Unit tests for the image-gen cover client. Stubs globalThis.fetch — no
+ * Unit tests for the image-gateway cover client. Stubs globalThis.fetch — no
  * network, no creds. See replicate-tts.test.ts for the same fetch-stub
- * pattern. `config.imageGenUrl`/`imageGenApiKey` are set by directly mutating
+ * pattern. `config.imageGatewayUrl`/`imageGatewayApiKey` are set by directly mutating
  * the config singleton (its `as const` is a compile-time assertion only, not
  * a runtime freeze) rather than via env vars — env vars race with whichever
  * OTHER config-touching test file's import wins the process-wide module
@@ -25,7 +25,7 @@ const { coverConfigured, CoverError, generateCover } = await import("./cover");
 const { config } = await import("./config");
 const { _sink: usageSink } = await import("./usage");
 
-type MutableConfig = { imageGenUrl: string; imageGenApiKey: string };
+type MutableConfig = { imageGatewayUrl: string; imageGatewayApiKey: string };
 const mutableConfig = config as unknown as MutableConfig;
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -35,8 +35,8 @@ function setFetch(impl: FetchImpl): void {
 }
 
 beforeEach(() => {
-  mutableConfig.imageGenUrl = "https://image-gen.example.com";
-  mutableConfig.imageGenApiKey = "test-image-gen-key";
+  mutableConfig.imageGatewayUrl = "https://image-gateway.example.com";
+  mutableConfig.imageGatewayApiKey = "test-image-gateway-key";
 });
 
 afterEach(() => {
@@ -62,10 +62,10 @@ describe("coverConfigured", () => {
   });
 
   test("false when either is missing", () => {
-    mutableConfig.imageGenUrl = "";
+    mutableConfig.imageGatewayUrl = "";
     expect(coverConfigured()).toBe(false);
-    mutableConfig.imageGenUrl = "https://image-gen.example.com";
-    mutableConfig.imageGenApiKey = "";
+    mutableConfig.imageGatewayUrl = "https://image-gateway.example.com";
+    mutableConfig.imageGatewayApiKey = "";
     expect(coverConfigured()).toBe(false);
   });
 });
@@ -75,7 +75,7 @@ describe("generateCover — success", () => {
     let sawAuth = "";
     let sawBody: Record<string, unknown> = {};
     setFetch(async (url, init) => {
-      expect(String(url)).toBe("https://image-gen.example.com/generate");
+      expect(String(url)).toBe("https://image-gateway.example.com/generate");
       sawAuth = (init?.headers as Record<string, string>)?.["Authorization"] ?? "";
       sawBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(
@@ -94,7 +94,7 @@ describe("generateCover — success", () => {
     const rows = spyOnUsage();
     const result = await generateCover("A calm podcast cover, minimalist, warm colors");
 
-    expect(sawAuth).toBe("Bearer test-image-gen-key");
+    expect(sawAuth).toBe("Bearer test-image-gateway-key");
     expect(sawBody["prompt"]).toBe("A calm podcast cover, minimalist, warm colors");
     expect(sawBody["size"]).toBe("1024x1024");
     expect(sawBody["quality"]).toBe("medium");
@@ -130,8 +130,8 @@ describe("generateCover — failure", () => {
   });
 
   test("unconfigured gateway throws CoverError without calling fetch", async () => {
-    mutableConfig.imageGenUrl = "";
-    mutableConfig.imageGenApiKey = "";
+    mutableConfig.imageGatewayUrl = "";
+    mutableConfig.imageGatewayApiKey = "";
 
     let fetchCalled = false;
     setFetch(async () => {

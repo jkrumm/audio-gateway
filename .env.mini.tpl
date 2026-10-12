@@ -35,9 +35,9 @@ PODCAST_NOTIFY_CHANNEL=media
 # overlay only when it resolves, so an unseeded cache still yields a running
 # instance that merely skips publishing.
 
-# image-gen gateway (episode cover art) — same item as the VPS instance.
-IMAGE_GEN_URL=https://image-gateway.jkrumm.com
-IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET
+# image-gateway (episode cover art) — same item as the VPS instance.
+IMAGE_GATEWAY_URL=https://image-gateway.jkrumm.com
+IMAGE_GATEWAY_API_KEY=op://vps/image-gateway/API_SECRET
 
 # Job ledger + episode artifacts live under the repo on this machine, not a
 # Docker volume (see scripts/seed-ledger.ts for copying the VPS's history over).

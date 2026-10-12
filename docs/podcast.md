@@ -159,7 +159,7 @@ mastering, not after.
 
 ## Cover (`src/cover.ts`) and publish (`src/audiobookshelf.ts`)
 
-Cover art is a single call to the image-gen gateway's `/generate` endpoint using the outline's
+Cover art is a single call to the image-gateway's `/generate` endpoint using the outline's
 `coverPrompt`. It is entirely best-effort: any failure (unconfigured, non-2xx, malformed response)
 is logged and the episode masters without a cover — a missing picture must never fail a job.
 
@@ -201,7 +201,7 @@ A ~20-minute episode is roughly: one outline call (`PODCAST_OUTLINE_MODEL`) + 5�
 [Writer roles](#writer-roles-2026-09-02)) — cheap, a few dollars at most — plus ~60–120 ElevenLabs v3
 turn syntheses (the dominant cost — v3 has no published
 per-character rate, so this reports `cost_source: none` in the usage row even though it's the real
-spend), and one optional image-gen cover call. Expect low-single-digit USD per episode depending on
+spend), and one optional image-gateway cover call. Expect low-single-digit USD per episode depending on
 length and host chattiness; review actual spend per job via the `cost_usd` field on
 `GET /v1/podcasts/:id` (accumulated across every billed call made during that job's request context —
 see `usage.ts`'s `accumulateRequestCost`) or `bun run usage:tail` for the `podcast-request` summary
@@ -228,7 +228,7 @@ row.
 | `PODCAST_SERIES` | `Hermes Briefings` | Default show name when a request omits `series`. |
 | `PODCAST_AUTHOR` | `Hermes` | Author/artist tag on published episodes. |
 | `ABS_URL` / `ABS_API_KEY` / `ABS_LIBRARY` | unset / unset / `Podcasts` | Audiobookshelf base URL, API key, and target podcast library — unset disables publishing entirely. |
-| `IMAGE_GEN_URL` / `IMAGE_GEN_API_KEY` | unset / unset | image-gen gateway for cover art — unset disables covers entirely. |
+| `IMAGE_GATEWAY_URL` / `IMAGE_GATEWAY_API_KEY` | unset / unset | image-gateway for cover art — unset disables covers entirely. |
 | `PODCAST_ENABLED` | `true` | Serve `/v1/podcasts*` at all; `false` → every route `410`s with a pointer to the mini instance. |
 | `BRAIN_DIR` | unset | Vault checkout the research tools read and the episode note is written into; empty disables both. |
 | `RESEARCH_GATEWAY_URL` | `http://127.0.0.1:7780` | research-gateway base (mini-only). |

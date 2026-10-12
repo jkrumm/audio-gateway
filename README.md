@@ -71,7 +71,7 @@ brief (`PODCAST_EDITORIAL_MODEL`, decides format/roles/tone/humor/length/rhythm 
 outline (`PODCAST_OUTLINE_MODEL`) → per-segment dialogue by the voice owner (`PODCAST_WRITE_MODEL`) →
 reviews (`PODCAST_REVIEW_MODELS`) → revisions → metadata (`PODCAST_METADATA_MODEL`) → per-turn
 ElevenLabs synthesis (`PODCAST_TTS_MODEL`, one voice per host, number-dense turns slowed) → gapped
-concat → loudness-normalised, chaptered MP3 → optional cover art (image-gen gateway) → optional
+concat → loudness-normalised, chaptered MP3 → optional cover art (image-gateway) → optional
 Audiobookshelf publish → optional transcript note back into the brain. Only one job's pipeline runs
 at a time (bounds Replicate fan-out/memory); design + cost expectations + every knob are in
 `docs/podcast.md` and `docs/podcast-editorial-room.md`.
@@ -119,7 +119,7 @@ Audiobookshelf model: one SHOW = one library item (folder), one EPISODE = one up
 inside it — chapters and cover art are embedded directly in the MP3 (ABS reads them from the file,
 not from its own metadata), so a single upload + scan carries everything. `ABS_URL`/`ABS_API_KEY`
 unset disables publishing entirely (the job still completes, just without an `abs` link);
-`IMAGE_GEN_URL`/`IMAGE_GEN_API_KEY` unset disables cover art the same way.
+`IMAGE_GATEWAY_URL`/`IMAGE_GATEWAY_API_KEY` unset disables cover art the same way.
 
 ## Develop
 ```bash

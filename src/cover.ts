@@ -2,19 +2,19 @@ import { config } from "./config";
 import { recordUsage } from "./usage";
 import { withSpan } from "./otel";
 
-// Thin client for the image-gen gateway's `/generate` endpoint — the source of
+// Thin client for the image-gateway's `/generate` endpoint — the source of
 // podcast episode cover art. Slow (10–60s per image) and billed, so every call
 // is a client-kind span plus a usage row, mirroring the Replicate TTS lane's
 // pattern (see replicate-tts.ts's synthReplicateChunk).
 
 const REQUEST_TIMEOUT_MS = 180_000;
 
-/** Any non-2xx response, network failure, or malformed body from the image-gen gateway. */
+/** Any non-2xx response, network failure, or malformed body from the image-gateway. */
 export class CoverError extends Error {}
 
 /** Whether both the gateway URL and API key are set — unset disables cover generation entirely. */
 export function coverConfigured(): boolean {
-  return config.imageGenUrl !== "" && config.imageGenApiKey !== "";
+  return config.imageGatewayUrl !== "" && config.imageGatewayApiKey !== "";
 }
 
 interface GenerateResponse {
@@ -37,14 +37,14 @@ export interface CoverResult {
 }
 
 /**
- * Generate a 1024x1024 PNG cover via the image-gen gateway. Throws
+ * Generate a 1024x1024 PNG cover via the image-gateway. Throws
  * {@link CoverError} on any failure (unconfigured, non-2xx, malformed
  * response) — callers decide whether a missing cover blocks publishing or is
  * skipped.
  */
 export async function generateCover(prompt: string): Promise<CoverResult> {
   if (!coverConfigured()) {
-    throw new CoverError("image-gen gateway not configured (IMAGE_GEN_URL/IMAGE_GEN_API_KEY unset)");
+    throw new CoverError("image-gateway not configured (IMAGE_GATEWAY_URL/IMAGE_GATEWAY_API_KEY unset)");
   }
 
   return withSpan(
@@ -54,10 +54,10 @@ export async function generateCover(prompt: string): Promise<CoverResult> {
       const start = Date.now();
       let res: Response;
       try {
-        res = await fetch(`${config.imageGenUrl}/generate`, {
+        res = await fetch(`${config.imageGatewayUrl}/generate`, {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${config.imageGenApiKey}`,
+            Authorization: `Bearer ${config.imageGatewayApiKey}`,
             "content-type": "application/json",
           },
           body: JSON.stringify({
@@ -73,8 +73,8 @@ export async function generateCover(prompt: string): Promise<CoverResult> {
       } catch (err) {
         const latencyMs = Date.now() - start;
         const errorText = (err instanceof Error ? err.message : String(err)).slice(0, 500);
-        recordUsage({ endpoint: "podcast-cover", model: "image-gen", status: 0, latencyMs, inputChars: prompt.length, errorText });
-        throw new CoverError(`image-gen request failed: ${errorText}`);
+        recordUsage({ endpoint: "podcast-cover", model: "image-gateway", status: 0, latencyMs, inputChars: prompt.length, errorText });
+        throw new CoverError(`image-gateway request failed: ${errorText}`);
       }
 
       const latencyMs = Date.now() - start;
@@ -89,26 +89,26 @@ export async function generateCover(prompt: string): Promise<CoverResult> {
         } catch {
           // fall through with the raw body
         }
-        recordUsage({ endpoint: "podcast-cover", model: "image-gen", status: res.status, latencyMs, inputChars: prompt.length, errorText });
-        throw new CoverError(`image-gen failed: HTTP ${res.status} ${message}`);
+        recordUsage({ endpoint: "podcast-cover", model: "image-gateway", status: res.status, latencyMs, inputChars: prompt.length, errorText });
+        throw new CoverError(`image-gateway failed: HTTP ${res.status} ${message}`);
       }
 
       let json: GenerateResponse;
       try {
         json = JSON.parse(bodyText) as GenerateResponse;
       } catch {
-        recordUsage({ endpoint: "podcast-cover", model: "image-gen", status: res.status, latencyMs, inputChars: prompt.length, errorText: "malformed JSON response" });
-        throw new CoverError("image-gen returned malformed JSON");
+        recordUsage({ endpoint: "podcast-cover", model: "image-gateway", status: res.status, latencyMs, inputChars: prompt.length, errorText: "malformed JSON response" });
+        throw new CoverError("image-gateway returned malformed JSON");
       }
 
       const image = json.images?.[0];
       if (!image?.b64_json) {
-        recordUsage({ endpoint: "podcast-cover", model: json.model ?? "image-gen", status: res.status, latencyMs, inputChars: prompt.length, errorText: "no image in response" });
-        throw new CoverError("image-gen response contained no image");
+        recordUsage({ endpoint: "podcast-cover", model: json.model ?? "image-gateway", status: res.status, latencyMs, inputChars: prompt.length, errorText: "no image in response" });
+        throw new CoverError("image-gateway response contained no image");
       }
 
       const png = new Uint8Array(Buffer.from(image.b64_json, "base64"));
-      const model = json.model ?? "image-gen";
+      const model = json.model ?? "image-gateway";
       const costUsd = json.cost?.usd ?? null;
 
       recordUsage({

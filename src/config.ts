@@ -516,7 +516,7 @@ export const config = {
   absApiKey: process.env["ABS_API_KEY"] ?? "",
   /** Podcast library NAME or id in Audiobookshelf that new episodes are uploaded into. */
   absLibrary: process.env["ABS_LIBRARY"] ?? "Podcasts",
-  /** image-gen gateway base URL; empty disables cover generation entirely (see cover.ts). */
-  imageGenUrl: (process.env["IMAGE_GEN_URL"] ?? "").replace(/\/+$/, ""),
-  imageGenApiKey: process.env["IMAGE_GEN_API_KEY"] ?? "",
+  /** image-gateway base URL; empty disables cover generation entirely (see cover.ts). */
+  imageGatewayUrl: (process.env["IMAGE_GATEWAY_URL"] ?? "").replace(/\/+$/, ""),
+  imageGatewayApiKey: process.env["IMAGE_GATEWAY_API_KEY"] ?? "",
 } as const;

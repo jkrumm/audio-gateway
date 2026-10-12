@@ -100,7 +100,7 @@ pipeline (both retired 2026-06-17).
   breaks, so `speed` is the only lever.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
   (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
-- `src/cover.ts` — episode cover art via the image-gen gateway; best-effort, never fails a job.
+- `src/cover.ts` — episode cover art via the image-gateway; best-effort, never fails a job.
 - `src/audiobookshelf.ts` — Audiobookshelf publish client: upload → scan → poll → patch metadata/cover/episode.
 - `src/brain-note.ts` — writes a finished episode's transcript back into the second brain
   (`Areas/Podcasts/<date> <title>.md`, plus a regenerated `Areas/Podcasts/Podcasts.md` folder note),

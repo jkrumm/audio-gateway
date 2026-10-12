@@ -249,7 +249,7 @@ the tool loop's rounds. Root span attributes add `podcast.format`, `podcast.lead
 - `.env.mini.tpl`: `PORT=7719`, `BRAIN_DIR=../brain` (relative to the LaunchAgent's
   WorkingDirectory — no tracked file carries the real home path; `config.ts` resolves it),
   `RESEARCH_API_KEY=op://vps/research-gateway/API_SECRET`, `PODCAST_DB`/`PODCAST_DATA_DIR`
-  under `./data`, image-gen + Argo refs as on the VPS, `PODCAST_NOTIFY_CHANNEL=media`,
+  under `./data`, image-gateway + Argo refs as on the VPS, `PODCAST_NOTIFY_CHANNEL=media`,
   `USAGE_SOURCE_LABEL=audio-gateway-mini`. The two Audiobookshelf refs sit in their own
   overlay `.env.mini.publish.tpl`, which the launcher adds only when it resolves — `secrets-run`
   fails closed on any unseeded ref, and those two are seeded separately (`make secrets-seed`

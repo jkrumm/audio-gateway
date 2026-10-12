@@ -377,7 +377,7 @@ export function computeCost(
  * and the root-span attributes always report the same number.
  */
 function costForRow(row: UsageRow): { costUsd: number | null; costSource: string } {
-  // The image-gen gateway prices its own call (cost.usd in its response, carried
+  // The image-gateway prices its own call (cost.usd in its response, carried
   // here as usage_json.cost_usd) — take it as-is rather than re-deriving it.
   const reported = (row.usageJson ?? {}) as Record<string, unknown>;
   if (typeof reported["cost_usd"] === "number" && Number.isFinite(reported["cost_usd"]) && row.endpoint === "podcast-cover") {

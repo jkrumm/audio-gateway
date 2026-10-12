@@ -89,9 +89,9 @@ ARGO_API_SECRET=op://common/api/SECRET
 # ABS_API_KEY=op://<vault>/audiobookshelf/API_KEY
 # ABS_LIBRARY=Podcasts
 
-# image-gen gateway (episode cover art). Unset IMAGE_GEN_URL disables covers entirely.
-# IMAGE_GEN_URL=https://<image-gen-gateway>
-# IMAGE_GEN_API_KEY=op://vps/image-gen-gateway/API_SECRET
+# image-gateway (episode cover art). Unset IMAGE_GATEWAY_URL disables covers entirely.
+# IMAGE_GATEWAY_URL=https://<image-gateway>
+# IMAGE_GATEWAY_API_KEY=op://vps/image-gateway/API_SECRET
 
 # Announce finished/failed podcast jobs in a Slack channel via Argo (Bearer = ARGO_API_SECRET;
 # the channel NAME is resolved through Argo's channel list, so no id needs storing):
