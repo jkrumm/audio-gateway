@@ -97,38 +97,93 @@ export interface RawResponse {
  */
 const MAX_RETRY_DELAY_MS = 15_000;
 
+/** A delay in seconds as non-negative ms, or null when it is not a finite number. */
+function secondsToMs(value: unknown): number | null {
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : null;
+}
+
 /** Parse an RFC 9110 Retry-After value: delay-seconds or an HTTP-date. */
 function parseRetryAfter(value: string): number | null {
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const seconds = secondsToMs(value);
+  if (seconds !== null) return seconds;
   const date = Date.parse(value);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
 }
 
-/**
- * The server's own backoff hint for a 429/503, in ms — the standard
- * `Retry-After` header (delay-seconds or HTTP-date), else a `retry_after` JSON
- * field, else Replicate's documented "resets in ~30s" prose (Replicate sends no
- * header, only that sentence). Null when the body carries no usable hint. Pure
- * — the caller reads the body first.
- */
-export function retryHintMs(headers: Headers, body: string): number | null {
+/** The server's retry hint from the `Retry-After` header alone, in ms, or null. */
+export function retryHintFromHeaders(headers: Headers): number | null {
   const header = headers.get("retry-after");
-  if (header !== null) {
-    const parsed = parseRetryAfter(header);
-    if (parsed !== null) return parsed;
-  }
+  return header === null ? null : parseRetryAfter(header);
+}
+
+/**
+ * The server's retry hint from a 429/503 body alone, in ms — a `retry_after`
+ * JSON field, else Replicate's documented "resets in ~30s" prose (it sends no
+ * header, only that sentence). Null when the body carries no usable hint.
+ */
+export function retryHintFromBody(body: string): number | null {
   try {
     const field = (JSON.parse(body) as { retry_after?: unknown } | null)?.retry_after;
     if (field !== undefined && field !== null && field !== "") {
-      const seconds = Number(field);
-      if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+      const ms = secondsToMs(field);
+      if (ms !== null) return ms;
     }
   } catch {
     // not JSON — fall through to the prose form below
   }
   const prose = /resets in\s*~?\s*([\d.]+)\s*s/i.exec(body);
-  return prose?.[1] ? Number(prose[1]) * 1000 : null;
+  return secondsToMs(prose?.[1]);
+}
+
+/**
+ * The server's own backoff hint for a 429/503, in ms — the standard
+ * `Retry-After` header (delay-seconds or HTTP-date), else a `retry_after` JSON
+ * field, else Replicate's "resets in ~30s" prose. Null when neither source
+ * carries a usable hint. Kept for callers that already hold the body;
+ * `rawFetch` checks the header first so it can skip reading the body at all.
+ */
+export function retryHintMs(headers: Headers, body: string): number | null {
+  return retryHintFromHeaders(headers) ?? retryHintFromBody(body);
+}
+
+/**
+ * Upper bound on how long the fallback body read may take. A stalled or
+ * indefinitely-streaming error body must not delay a retry that the status
+ * alone already justifies.
+ */
+const RETRY_HINT_BODY_TIMEOUT_MS = 2_000;
+
+/**
+ * Read a 429/503 body to extract its retry hint, bounded by
+ * {@link RETRY_HINT_BODY_TIMEOUT_MS} and cancelled on timeout so a stream that
+ * never ends cannot hang the caller. Returns the hint in ms, or null when the
+ * body gave none (or arrived too slowly).
+ */
+async function readBodyHint(res: Response, timeoutMs = RETRY_HINT_BODY_TIMEOUT_MS): Promise<number | null> {
+  const body = res.body;
+  if (!body) return null;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const result = await Promise.race([reader.read(), Bun.sleep(remaining).then(() => null)]);
+      if (result === null) break; // timed out
+      if (result.done) {
+        text += decoder.decode();
+        return retryHintFromBody(text);
+      }
+      text += decoder.decode(result.value, { stream: true });
+    }
+  } catch {
+    // unreadable body — fall through to the fixed backoff
+  }
+  await reader.cancel().catch(() => {});
+  return text ? retryHintFromBody(text) : null;
 }
 
 /**
@@ -145,7 +200,9 @@ export async function rawFetch(url: string, init: RequestInit, attempts = 3): Pr
       const res = await fetch(url, init);
       if ((res.status === 503 || res.status === 429) && attempt < attempts) {
         recordRetry();
-        const hinted = retryHintMs(res.headers, await res.text());
+        // The header alone usually answers it; only when it does not do we touch
+        // the body (bounded), so a stalled error stream cannot delay the retry.
+        const hinted = retryHintFromHeaders(res.headers) ?? (await readBodyHint(res));
         await Bun.sleep(Math.min(MAX_RETRY_DELAY_MS, Math.max(500 * attempt, hinted ?? 0)));
         continue;
       }
