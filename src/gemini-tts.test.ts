@@ -135,6 +135,11 @@ describe("retryHintMs", () => {
   test("is null when the response carries no hint", () => {
     expect(retryHintMs(new Headers(), '{"error":"boom"}')).toBeNull();
   });
+
+  test("is null when the prose capture is not a number (never NaN)", () => {
+    expect(retryHintMs(new Headers(), '{"detail":"Your rate limit resets in .s."}')).toBeNull();
+    expect(retryHintMs(new Headers(), '{"detail":"resets in 1.2.3s"}')).toBeNull();
+  });
 });
 
 describe("rawFetch transport retry", () => {
@@ -173,6 +178,30 @@ describe("rawFetch transport retry", () => {
       expect(calls).toBe(2);
       // 600ms hint honored; the old fixed backoff would have slept only 500ms.
       expect(Date.now() - start).toBeGreaterThanOrEqual(550);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("does not wait on a stalled error body when a Retry-After header is present", async () => {
+    const { rawFetch } = await import("./gemini-tts");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) {
+        // A body that never ends: reading it would hang forever.
+        const stalled = new ReadableStream({ start() {} });
+        return new Response(stalled, { status: 429, headers: { "retry-after": "0.05" } });
+      }
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const start = Date.now();
+      const res = await rawFetch("https://example.test/x", { method: "GET" }, 3);
+      expect(res.status).toBe(200);
+      expect(calls).toBe(2);
+      expect(Date.now() - start).toBeLessThan(2000);
     } finally {
       globalThis.fetch = original;
     }
