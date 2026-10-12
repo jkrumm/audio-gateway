@@ -23,7 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { synthChunksConcurrent, handleGeminiSpeech } = await import("./gemini-tts");
+const { synthChunksConcurrent, handleGeminiSpeech, retryHintMs } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -110,6 +110,33 @@ describe("handleGeminiSpeech — spoken summary", () => {
   });
 });
 
+describe("retryHintMs", () => {
+  test("reads Retry-After delay-seconds", () => {
+    expect(retryHintMs(new Headers({ "retry-after": "8" }), "")).toBe(8000);
+  });
+
+  test("reads Retry-After as an HTTP-date", () => {
+    const headers = new Headers({ "retry-after": new Date(Date.now() + 5000).toUTCString() });
+    const hint = retryHintMs(headers, "");
+    expect(hint).not.toBeNull();
+    expect(hint!).toBeGreaterThan(4000);
+    expect(hint!).toBeLessThanOrEqual(5000);
+  });
+
+  test("reads a retry_after JSON field", () => {
+    expect(retryHintMs(new Headers(), '{"detail":"throttled","retry_after":12}')).toBe(12000);
+  });
+
+  test("reads Replicate's documented 'resets in ~30s' prose (no header, no field)", () => {
+    const body = JSON.stringify({ detail: "Request was throttled. Your rate limit resets in ~30s." });
+    expect(retryHintMs(new Headers(), body)).toBe(30000);
+  });
+
+  test("is null when the response carries no hint", () => {
+    expect(retryHintMs(new Headers(), '{"error":"boom"}')).toBeNull();
+  });
+});
+
 describe("rawFetch transport retry", () => {
   test("retries once when fetch throws (socket closed mid-stream) and returns the next reply", async () => {
     const { rawFetch } = await import("./gemini-tts");
@@ -125,6 +152,27 @@ describe("rawFetch transport retry", () => {
       expect(res.status).toBe(200);
       expect(res.body).toBe("ok");
       expect(calls).toBe(2);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("waits out the server's retry hint on 429 instead of the fixed 500ms backoff", async () => {
+    const { rawFetch } = await import("./gemini-tts");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response("throttled", { status: 429, headers: { "retry-after": "0.6" } });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const start = Date.now();
+      const res = await rawFetch("https://example.test/x", { method: "GET" }, 3);
+      expect(res.status).toBe(200);
+      expect(calls).toBe(2);
+      // 600ms hint honored; the old fixed backoff would have slept only 500ms.
+      expect(Date.now() - start).toBeGreaterThanOrEqual(550);
     } finally {
       globalThis.fetch = original;
     }
