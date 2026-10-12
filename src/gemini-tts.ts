@@ -155,10 +155,19 @@ export function retryHintMs(headers: Headers, body: string): number | null {
 const RETRY_HINT_BODY_TIMEOUT_MS = 2_000;
 
 /**
+ * Cap on how much of a 429/503 body is buffered while scanning for a retry
+ * hint. Only the hint prefix matters (a `retry_after` field or a short prose
+ * sentence), so a fast upstream streaming a huge body cannot OOM the service
+ * before the timeout fires.
+ */
+const RETRY_HINT_BODY_MAX_CHARS = 8_192;
+
+/**
  * Read a 429/503 body to extract its retry hint, bounded by
- * {@link RETRY_HINT_BODY_TIMEOUT_MS} and cancelled on timeout so a stream that
- * never ends cannot hang the caller. Returns the hint in ms, or null when the
- * body gave none (or arrived too slowly).
+ * {@link RETRY_HINT_BODY_TIMEOUT_MS} and {@link RETRY_HINT_BODY_MAX_CHARS} and
+ * cancelled once either is exceeded so a stream that never ends (or streams an
+ * unbounded body) cannot hang or exhaust the caller. Returns the hint in ms, or
+ * null when the body gave none (or arrived too slowly).
  */
 async function readBodyHint(res: Response, timeoutMs = RETRY_HINT_BODY_TIMEOUT_MS): Promise<number | null> {
   const body = res.body;
@@ -178,6 +187,7 @@ async function readBodyHint(res: Response, timeoutMs = RETRY_HINT_BODY_TIMEOUT_M
         return retryHintFromBody(text);
       }
       text += decoder.decode(result.value, { stream: true });
+      if (text.length > RETRY_HINT_BODY_MAX_CHARS) break; // hint prefix already captured
     }
   } catch {
     // unreadable body — fall through to the fixed backoff
