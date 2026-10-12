@@ -92,8 +92,52 @@ export interface RawResponse {
 }
 
 /**
+ * Upper bound on a server-requested retry delay. A throttled request waits at
+ * most this long, so a bogus or huge hint cannot stall a caller indefinitely.
+ */
+const MAX_RETRY_DELAY_MS = 15_000;
+
+/** Parse an RFC 9110 Retry-After value: delay-seconds or an HTTP-date. */
+function parseRetryAfter(value: string): number | null {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : null;
+}
+
+/**
+ * The server's own backoff hint for a 429/503, in ms — the standard
+ * `Retry-After` header (delay-seconds or HTTP-date), else a `retry_after` JSON
+ * field, else Replicate's documented "resets in ~30s" prose (Replicate sends no
+ * header, only that sentence). Null when the body carries no usable hint. Pure
+ * — the caller reads the body first.
+ */
+export function retryHintMs(headers: Headers, body: string): number | null {
+  const header = headers.get("retry-after");
+  if (header !== null) {
+    const parsed = parseRetryAfter(header);
+    if (parsed !== null) return parsed;
+  }
+  try {
+    const field = (JSON.parse(body) as { retry_after?: unknown } | null)?.retry_after;
+    if (field !== undefined && field !== null && field !== "") {
+      const seconds = Number(field);
+      if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+    }
+  } catch {
+    // not JSON — fall through to the prose form below
+  }
+  const prose = /resets in\s*~?\s*([\d.]+)\s*s/i.exec(body);
+  return prose?.[1] ? Number(prose[1]) * 1000 : null;
+}
+
+/**
  * fetch with backoff retry on 503/429 (mirrors modelpick's transient-failure
- * handling). Exported — shared with the Replicate lane's create/poll calls.
+ * handling). A 429/503 honors the server's own retry hint (`Retry-After` /
+ * `retry_after` / Replicate's "resets in ~Ns") when it gives one — the fixed
+ * 500·attempt ms backoff misses a throttled window entirely — capped at
+ * {@link MAX_RETRY_DELAY_MS}. Exported — shared with the Replicate lane's
+ * create/poll calls.
  */
 export async function rawFetch(url: string, init: RequestInit, attempts = 3): Promise<RawResponse> {
   for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -101,7 +145,8 @@ export async function rawFetch(url: string, init: RequestInit, attempts = 3): Pr
       const res = await fetch(url, init);
       if ((res.status === 503 || res.status === 429) && attempt < attempts) {
         recordRetry();
-        await Bun.sleep(500 * attempt);
+        const hinted = retryHintMs(res.headers, await res.text());
+        await Bun.sleep(Math.min(MAX_RETRY_DELAY_MS, Math.max(500 * attempt, hinted ?? 0)));
         continue;
       }
       return { status: res.status, body: await res.text() };
