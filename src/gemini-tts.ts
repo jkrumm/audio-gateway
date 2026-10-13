@@ -97,7 +97,8 @@ export interface RawResponse {
  */
 const MAX_RETRY_DELAY_MS = 15_000;
 
-/** A delay in seconds as non-negative ms, or null when it is not a finite number. */
+/** A delay in seconds as non-negative ms, or null when the scaled ms are not finite (an overflowing
+ *  hint of either sign is nonsense input: no hint, so the caller falls back to its fixed backoff). */
 function secondsToMs(value: unknown): number | null {
   if (typeof value === "string" ? value.trim() === "" : typeof value !== "number") return null;
   const ms = Number(value) * 1000;

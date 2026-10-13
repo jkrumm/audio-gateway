@@ -155,6 +155,8 @@ describe("blank hints are absent, not zero", () => {
   test("a retry_after that overflows when scaled to ms is no hint, never Infinity", () => {
     expect(retryHintMs(new Headers(), '{"retry_after":1e306}')).toBeNull();
     expect(retryHintMs(new Headers({ "retry-after": "1e306" }), "")).toBeNull();
+    expect(retryHintMs(new Headers(), '{"retry_after":-1e306}')).toBeNull();
+    expect(retryHintMs(new Headers({ "retry-after": "1e306" }), '{"retry_after":7}')).toBe(7000);
   });
 
   test("blank or non-numeric retry_after JSON field is no hint", () => {
