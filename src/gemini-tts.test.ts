@@ -23,7 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { synthChunksConcurrent, handleGeminiSpeech, retryHintMs } = await import("./gemini-tts");
+const { synthChunksConcurrent, handleGeminiSpeech, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -142,6 +142,77 @@ describe("retryHintMs", () => {
   });
 });
 
+describe("blank hints are absent, not zero", () => {
+  test("empty or whitespace-only Retry-After header is no hint", () => {
+    expect(retryHintMs(new Headers({ "retry-after": "" }), "")).toBeNull();
+    expect(retryHintMs(new Headers({ "retry-after": "   " }), "")).toBeNull();
+  });
+
+  test("a blank header falls through to the body hint", () => {
+    expect(retryHintMs(new Headers({ "retry-after": " " }), '{"retry_after":7}')).toBe(7000);
+  });
+
+  test("blank or non-numeric retry_after JSON field is no hint", () => {
+    expect(retryHintMs(new Headers(), '{"retry_after":"  "}')).toBeNull();
+    expect(retryHintMs(new Headers(), '{"retry_after":true}')).toBeNull();
+    expect(retryHintMs(new Headers(), '{"retry_after":[]}')).toBeNull();
+  });
+});
+
+describe("readBodyHint", () => {
+  const enc = new TextEncoder();
+  const chunked = (parts: string[]) =>
+    new Response(
+      new ReadableStream({
+        start(c) {
+          for (const p of parts) c.enqueue(enc.encode(p));
+          c.close();
+        },
+      }),
+      { status: 429 },
+    );
+
+  test("reads a hint from a small body split across chunks", async () => {
+    expect(await readBodyHint(chunked(['{"retry_', 'after":4}']))).toBe(4000);
+  });
+
+  test("a body over the byte cap yields no hint, even with retry_after up front", async () => {
+    const body = JSON.stringify({ retry_after: 3, pad: "x".repeat(RETRY_HINT_BODY_MAX_BYTES) });
+    expect(await readBodyHint(new Response(body, { status: 429 }))).toBeNull();
+  });
+
+  test("a body over the cap whose JSON is cut mid-token yields no hint, not a wrong one", async () => {
+    // Cut after "retry_after":1 of "retry_after":15 would parse as 1s if truncated.
+    const head = `{"pad":"${"x".repeat(100)}","retry_after":1`;
+    const res = chunked([head, "5" + " ".repeat(200)]);
+    expect(await readBodyHint(res, 2000, head.length)).toBeNull();
+  });
+
+  test("a body that stalls past the timeout yields no hint", async () => {
+    const stalled = new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode('{"retry_after":9'));
+      },
+    });
+    const start = Date.now();
+    expect(await readBodyHint(new Response(stalled, { status: 429 }), 100)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  test("an errored stream yields no hint", async () => {
+    const broken = new ReadableStream({
+      start(c) {
+        c.error(new Error("socket closed"));
+      },
+    });
+    expect(await readBodyHint(new Response(broken, { status: 429 }))).toBeNull();
+  });
+
+  test("no body yields no hint", async () => {
+    expect(await readBodyHint(new Response(null, { status: 429 }))).toBeNull();
+  });
+});
+
 describe("rawFetch transport retry", () => {
   test("retries once when fetch throws (socket closed mid-stream) and returns the next reply", async () => {
     const { rawFetch } = await import("./gemini-tts");
@@ -202,6 +273,25 @@ describe("rawFetch transport retry", () => {
       expect(res.status).toBe(200);
       expect(calls).toBe(2);
       expect(Date.now() - start).toBeLessThan(2000);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("an empty Retry-After header does not cause an immediate retry", async () => {
+    const { rawFetch } = await import("./gemini-tts");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response("throttled", { status: 429, headers: { "retry-after": "" } });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const start = Date.now();
+      const res = await rawFetch("https://example.test/x", { method: "GET" }, 3);
+      expect(res.status).toBe(200);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(450); // fixed 500ms backoff, not 0
     } finally {
       globalThis.fetch = original;
     }
