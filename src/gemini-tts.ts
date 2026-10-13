@@ -193,10 +193,14 @@ export async function readBodyHint(
   const deadline = new Promise<typeof timedOut>((resolve) => {
     timer = setTimeout(() => resolve(timedOut), timeoutMs);
   });
+  const deadlineAt = Date.now() + timeoutMs;
   let text = "";
   let bytes = 0;
   try {
     for (;;) {
+      // The timer is a macrotask: a source answering every read() with an empty
+      // chunk could starve it, so the clock is checked on every pass too.
+      if (Date.now() >= deadlineAt) break;
       const result = await Promise.race([reader.read(), deadline]);
       if (result === timedOut) break;
       if (result.done) {
