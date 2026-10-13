@@ -179,7 +179,14 @@ export async function readBodyHint(
 ): Promise<number | null> {
   const body = res.body;
   if (!body) return null;
-  const reader = body.getReader();
+  const reader = (() => {
+    try {
+      return body.getReader();
+    } catch {
+      return null; // already locked or consumed — no hint, never a throw
+    }
+  })();
+  if (!reader) return null;
   const decoder = new TextDecoder();
   const timedOut = Symbol("timeout");
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -205,7 +212,8 @@ export async function readBodyHint(
   } finally {
     clearTimeout(timer);
   }
-  await reader.cancel().catch(() => {});
+  // Fire and forget: a stream whose cancel() never settles must not hold the retry.
+  void reader.cancel().catch(() => {});
   return null;
 }
 
@@ -225,7 +233,9 @@ export async function rawFetch(url: string, init: RequestInit, attempts = 3): Pr
         recordRetry();
         // The header alone usually answers it; only when it does not do we touch
         // the body (bounded), so a stalled error stream cannot delay the retry.
-        const hinted = retryHintFromHeaders(res.headers) ?? (await readBodyHint(res));
+        const headerHint = retryHintFromHeaders(res.headers);
+        if (headerHint !== null) void res.body?.cancel().catch(() => {}); // release the unread body
+        const hinted = headerHint ?? (await readBodyHint(res));
         await Bun.sleep(Math.min(MAX_RETRY_DELAY_MS, Math.max(500 * attempt, hinted ?? 0)));
         continue;
       }
