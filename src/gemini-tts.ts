@@ -100,8 +100,8 @@ const MAX_RETRY_DELAY_MS = 15_000;
 /** A delay in seconds as non-negative ms, or null when it is not a finite number. */
 function secondsToMs(value: unknown): number | null {
   if (typeof value === "string" ? value.trim() === "" : typeof value !== "number") return null;
-  const seconds = Number(value);
-  return Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : null;
+  const ms = Number(value) * 1000;
+  return Number.isFinite(ms) ? Math.max(0, ms) : null;
 }
 
 /** Parse an RFC 9110 Retry-After value: delay-seconds or an HTTP-date. Blank is absent. */
@@ -209,7 +209,7 @@ export async function readBodyHint(
       // chunk could starve it, so the clock is checked on every pass too.
       if (Date.now() >= deadlineAt) break;
       const result = await Promise.race([reader.read(), deadline]);
-      if (result === timedOut) break;
+      if (result === timedOut || Date.now() >= deadlineAt) break;
       if (result.done) {
         text += decoder.decode();
         return retryHintFromBody(text);
