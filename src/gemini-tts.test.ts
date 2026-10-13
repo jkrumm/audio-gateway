@@ -220,6 +220,17 @@ describe("readBodyHint", () => {
     expect(Date.now() - start).toBeLessThan(1500);
   });
 
+  test("a source of endless empty chunks cannot starve the timeout", async () => {
+    const empties = new ReadableStream({
+      pull(c) {
+        c.enqueue(new Uint8Array(0));
+      },
+    });
+    const start = Date.now();
+    expect(await readBodyHint(new Response(empties, { status: 429 }), 100)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
   test("an already-consumed body yields no hint instead of throwing", async () => {
     const res = new Response('{"retry_after":3}', { status: 429 });
     await res.text();
