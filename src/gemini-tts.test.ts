@@ -208,6 +208,24 @@ describe("readBodyHint", () => {
     expect(await readBodyHint(new Response(broken, { status: 429 }))).toBeNull();
   });
 
+  test("a stream whose cancel() never settles does not hold the read", async () => {
+    const stuck = new ReadableStream({
+      start(c) {
+        c.enqueue(enc.encode("{"));
+      },
+      cancel: () => new Promise<void>(() => {}),
+    });
+    const start = Date.now();
+    expect(await readBodyHint(new Response(stuck, { status: 429 }), 100)).toBeNull();
+    expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  test("an already-consumed body yields no hint instead of throwing", async () => {
+    const res = new Response('{"retry_after":3}', { status: 429 });
+    await res.text();
+    expect(await readBodyHint(res)).toBeNull();
+  });
+
   test("no body yields no hint", async () => {
     expect(await readBodyHint(new Response(null, { status: 429 }))).toBeNull();
   });
