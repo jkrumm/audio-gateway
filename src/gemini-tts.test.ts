@@ -220,6 +220,11 @@ describe("readBodyHint", () => {
     expect(Date.now() - start).toBeLessThan(1500);
   });
 
+  test("a declared Content-Length over the cap is refused without reading", async () => {
+    const res = new Response('{"retry_after":3}', { status: 429, headers: { "content-length": String(RETRY_HINT_BODY_MAX_BYTES + 1) } });
+    expect(await readBodyHint(res)).toBeNull();
+  });
+
   test("a source of endless empty chunks cannot starve the timeout", async () => {
     const empties = new ReadableStream({
       pull(c) {
@@ -302,6 +307,26 @@ describe("rawFetch transport retry", () => {
       expect(res.status).toBe(200);
       expect(calls).toBe(2);
       expect(Date.now() - start).toBeLessThan(2000);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("honors a body-only hint (no header) on a 503", async () => {
+    const { rawFetch } = await import("./gemini-tts");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response('{"retry_after":0.6}', { status: 503 });
+      return new Response("ok", { status: 200 });
+    }) as unknown as typeof fetch;
+    try {
+      const start = Date.now();
+      const res = await rawFetch("https://example.test/x", { method: "GET" }, 3);
+      expect(res.status).toBe(200);
+      expect(calls).toBe(2);
+      expect(Date.now() - start).toBeGreaterThanOrEqual(550);
     } finally {
       globalThis.fetch = original;
     }

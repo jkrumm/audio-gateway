@@ -179,6 +179,13 @@ export async function readBodyHint(
 ): Promise<number | null> {
   const body = res.body;
   if (!body) return null;
+  // A declared oversize body is refused up front; the per-chunk count below
+  // covers chunked/undeclared ones (a runtime chunk is network-sized, not unbounded).
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void body.cancel().catch(() => {});
+    return null;
+  }
   const reader = (() => {
     try {
       return body.getReader();
