@@ -99,12 +99,14 @@ const MAX_RETRY_DELAY_MS = 15_000;
 
 /** A delay in seconds as non-negative ms, or null when it is not a finite number. */
 function secondsToMs(value: unknown): number | null {
+  if (typeof value === "string" ? value.trim() === "" : typeof value !== "number") return null;
   const seconds = Number(value);
   return Number.isFinite(seconds) ? Math.max(0, seconds * 1000) : null;
 }
 
-/** Parse an RFC 9110 Retry-After value: delay-seconds or an HTTP-date. */
+/** Parse an RFC 9110 Retry-After value: delay-seconds or an HTTP-date. Blank is absent. */
 function parseRetryAfter(value: string): number | null {
+  if (value.trim() === "") return null;
   const seconds = secondsToMs(value);
   if (seconds !== null) return seconds;
   const date = Date.parse(value);
@@ -155,45 +157,56 @@ export function retryHintMs(headers: Headers, body: string): number | null {
 const RETRY_HINT_BODY_TIMEOUT_MS = 2_000;
 
 /**
- * Cap on how much of a 429/503 body is buffered while scanning for a retry
- * hint. Only the hint prefix matters (a `retry_after` field or a short prose
- * sentence), so a fast upstream streaming a huge body cannot OOM the service
- * before the timeout fires.
+ * Cap on the bytes of a 429/503 body read while looking for a retry hint.
+ * Generous for any real throttle error (a few hundred bytes), small enough that
+ * a fast upstream cannot exhaust memory. A body that does not end within the cap
+ * is NOT parsed: its `retry_after` could sit past the cutoff or the JSON be cut
+ * mid-token, and a guess from a fragment is worse than the fixed backoff.
  */
-const RETRY_HINT_BODY_MAX_CHARS = 8_192;
+export const RETRY_HINT_BODY_MAX_BYTES = 65_536;
 
 /**
- * Read a 429/503 body to extract its retry hint, bounded by
- * {@link RETRY_HINT_BODY_TIMEOUT_MS} and {@link RETRY_HINT_BODY_MAX_CHARS} and
- * cancelled once either is exceeded so a stream that never ends (or streams an
- * unbounded body) cannot hang or exhaust the caller. Returns the hint in ms, or
- * null when the body gave none (or arrived too slowly).
+ * Read a 429/503 body to extract its retry hint, bounded in time
+ * ({@link RETRY_HINT_BODY_TIMEOUT_MS}) and bytes ({@link RETRY_HINT_BODY_MAX_BYTES}).
+ * Only a body read to its end within both bounds is parsed; otherwise the stream
+ * is cancelled and the result is null (the caller falls back to its fixed
+ * backoff). Never throws.
  */
-async function readBodyHint(res: Response, timeoutMs = RETRY_HINT_BODY_TIMEOUT_MS): Promise<number | null> {
+export async function readBodyHint(
+  res: Response,
+  timeoutMs = RETRY_HINT_BODY_TIMEOUT_MS,
+  maxBytes = RETRY_HINT_BODY_MAX_BYTES,
+): Promise<number | null> {
   const body = res.body;
   if (!body) return null;
   const reader = body.getReader();
   const decoder = new TextDecoder();
+  const timedOut = Symbol("timeout");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof timedOut>((resolve) => {
+    timer = setTimeout(() => resolve(timedOut), timeoutMs);
+  });
   let text = "";
+  let bytes = 0;
   try {
-    const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      const result = await Promise.race([reader.read(), Bun.sleep(remaining).then(() => null)]);
-      if (result === null) break; // timed out
+      const result = await Promise.race([reader.read(), deadline]);
+      if (result === timedOut) break;
       if (result.done) {
         text += decoder.decode();
         return retryHintFromBody(text);
       }
+      bytes += result.value.byteLength;
+      if (bytes > maxBytes) break;
       text += decoder.decode(result.value, { stream: true });
-      if (text.length > RETRY_HINT_BODY_MAX_CHARS) break; // hint prefix already captured
     }
   } catch {
     // unreadable body — fall through to the fixed backoff
+  } finally {
+    clearTimeout(timer);
   }
   await reader.cancel().catch(() => {});
-  return text ? retryHintFromBody(text) : null;
+  return null;
 }
 
 /**
