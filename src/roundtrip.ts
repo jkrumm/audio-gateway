@@ -16,7 +16,7 @@
  *   RT_BASE_URL   — when set, fetch this origin over HTTP instead of in-process
  *   RT_TEXT       — the sentence to synthesize (default exercises German + numbers/times)
  *   RT_TTS_MODEL  — Gemini TTS model; MUST be a live IU model matching /gemini.*tts/i
- *   RT_STT_MODEL  — transcription model (default gpt-4o-transcribe)
+ *   RT_STT_MODEL  — transcription model (default gpt-transcribe)
  *   RT_VOICE      — Gemini voice (default Charon)
  *   RT_NO_PLAY=1  — skip afplay (for headless runs)
  *
@@ -46,7 +46,7 @@ async function defaultModel(envOverride: string, configKey: "ttsModel" | "sttMod
 }
 
 const TTS_MODEL = await defaultModel("RT_TTS_MODEL", "ttsModel", "gemini-3.1-flash-tts-preview");
-const STT_MODEL = await defaultModel("RT_STT_MODEL", "sttModel", "gpt-4o-transcribe");
+const STT_MODEL = await defaultModel("RT_STT_MODEL", "sttModel", "gpt-transcribe");
 const VOICE = process.env["RT_VOICE"] ?? "Charon";
 const PROXY_KEY = process.env["PROXY_API_KEY"] ?? "";
 

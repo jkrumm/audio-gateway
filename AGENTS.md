@@ -43,6 +43,8 @@ pipeline (both retired 2026-06-17).
   `config.sttMaxChunkSeconds` (240s) is set by measured MODEL OUTPUT QUALITY collapse on real audio
   (past 240s, `gpt-4o-transcribe` degrades into repeated-sentence loops), not by any of the four
   upstream limits above — those are independent and still enforced regardless of this setting.
+  `gpt-transcribe` (default since 2026-10-15) showed no collapse up to 1500 s; the 240s ceiling is
+  kept for concurrency within the socket budget and the `whisper` fallback's ~230s timeout.
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
   wav/pcm) before handing off.

@@ -169,7 +169,7 @@ function tokens(usage: unknown): {
     output: num(u["output_tokens"]) ?? num(u["completion_tokens"]),
     cachedTokens: num(promptDetails["cached_tokens"]),
     audioTokens: num(details["audio_tokens"]),
-    audioSeconds: num(u["prompt_audio_seconds"]),
+    audioSeconds: num(u["prompt_audio_seconds"]) ?? (u["type"] === "duration" ? num(u["seconds"]) : null),
   };
 }
 
@@ -241,6 +241,9 @@ const RATES: Record<string, Rate> = {
   // model. Unpriced reports as `cost_source: 'none'`, which is the honest
   // answer. Don't invent a number to make the row look complete.
   "whisper": { perMinute: 0.006 },
+  // OpenAI list price, 2026-10-15 (not invoice-verified): per minute, duration-billed
+  // (upstream usage is `{type:"duration",seconds}`, no tokens).
+  "gpt-transcribe": { perMinute: 0.0045 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
   // 2026-09-13 model rollout: podcast outline/review/metadata/editorial/research.

@@ -85,6 +85,14 @@ describe("extractTextAndUsage", () => {
     expect(out.language).toBe("de");
   });
 
+  test("reads language from gpt-transcribe's languages[].code and keeps its duration usage", () => {
+    const body = JSON.stringify({ text: "hallo", languages: [{ code: "de" }], usage: { type: "duration", seconds: 240 } });
+    const out = extractTextAndUsage(body, "application/json");
+    expect(out.text).toBe("hallo");
+    expect(out.language).toBe("de");
+    expect(out.usage).toEqual({ type: "duration", seconds: 240 });
+  });
+
   test("passes a non-JSON body through as raw text", () => {
     const out = extractTextAndUsage("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "text/plain");
     expect(out.text).toBe("1\n00:00:00,000 --> 00:00:01,000\nhi\n");

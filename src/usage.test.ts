@@ -330,6 +330,43 @@ describe("buildHttpSink — argo payload uses the uncached-input convention", ()
   });
 });
 
+describe("gpt-transcribe pricing (per minute, duration-billed usage)", () => {
+  type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+  const cfg = config as unknown as { argoApiSecret: string };
+
+  afterEach(() => {
+    delete (globalThis as unknown as { fetch?: FetchImpl }).fetch;
+  });
+
+  test("a {type:'duration',seconds:240} usage row costs 240/60 * 0.0045 with cost_source assumed", async () => {
+    const saved = cfg.argoApiSecret;
+    cfg.argoApiSecret = "test-secret";
+    let sentBody: Record<string, unknown> | undefined;
+    (globalThis as unknown as { fetch: FetchImpl }).fetch = (async (_url, init) => {
+      sentBody = JSON.parse(String(init?.body ?? "{}"));
+      return new Response("ok", { status: 200 });
+    }) as FetchImpl;
+
+    try {
+      const sink = buildHttpSink("http://argo.test/usage/records", "audio-gateway");
+      await sink.record({
+        endpoint: "transcriptions",
+        model: "gpt-transcribe",
+        status: 200,
+        latencyMs: 5,
+        usageJson: { type: "duration", seconds: 240 },
+      } satisfies UsageRow);
+    } finally {
+      cfg.argoApiSecret = saved;
+    }
+
+    const record = (sentBody?.["records"] as Array<Record<string, unknown>>)?.[0];
+    expect(record?.["model_norm"]).toBe("gpt-transcribe");
+    expect(record?.["cost_usd"] as number).toBeCloseTo(0.018, 6);
+    expect(record?.["cost_source"]).toBe("assumed");
+  });
+});
+
 describe("ElevenLabs pricing (per character at vendor list, contested unit)", () => {
   test("a v3 prediction bills per character at $0.10/1k and stamps 'assumed'", async () => {
     const { computeCost, normalizeModel } = await import("./usage");

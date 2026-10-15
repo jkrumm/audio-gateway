@@ -255,7 +255,7 @@ describe("Default STT model when `model` omitted", () => {
     const res = await handleRequest(req);
 
     expect(res.status).toBe(200);
-    expect(sentModel).toBe("gpt-4o-transcribe");
+    expect(sentModel).toBe("gpt-transcribe");
     // Happy-path completion ships a structured log record (otel.ts emitLog).
     expect(logBodies).toContain("stt.done");
   });
@@ -547,7 +547,7 @@ describe("error_text: upstream error body captured in usage row", () => {
 // ---------------------------------------------------------------------------
 
 describe("STT model override: unrecognized model replaced with config.sttModel", () => {
-  test("model 'some-random-model' is replaced with gpt-4o-transcribe in upstream form", async () => {
+  test("model 'some-random-model' is replaced with gpt-transcribe in upstream form", async () => {
     let sentModel = "";
     stubFetch(async (_url, init) => {
       sentModel = String((init?.body as FormData).get("model") ?? "");
@@ -562,7 +562,7 @@ describe("STT model override: unrecognized model replaced with config.sttModel",
     const res = await handleRequest(req);
 
     expect(res.status).toBe(200);
-    expect(sentModel).toBe("gpt-4o-transcribe");
+    expect(sentModel).toBe("gpt-transcribe");
   });
 });
 

@@ -14,7 +14,7 @@ const textAttr = (s: string | undefined): string | undefined =>
   config.usageKeepText && s ? s.slice(0, TEXT_ATTR_MAX) : undefined;
 
 /**
- * gpt-4o(-mini)-transcribe and -diarize only support `json`/`text` on IU —
+ * gpt-transcribe, gpt-4o(-mini)-transcribe and -diarize only support `json`/`text` on IU —
  * `verbose_json`/`srt`/`vtt` and timestamp_granularities are rejected (503).
  * For those models we ask IU for plain `json` and synthesize the richer
  * envelope the client asked for. `whisper` supports the rich formats natively

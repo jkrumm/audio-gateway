@@ -70,8 +70,10 @@ export function resolveTtsRoute(requested: string): TtsRoute {
  * like MacWhisper cannot parse. Only these canonical ids are honoured as-is;
  * anything else is remapped to `config.sttModel`. `voxtral-*-transcribe-*` is
  * deliberately excluded — it only supports realtime, not this batch endpoint.
+ * `gpt-transcribe` (released 2026-07-28, default since 2026-10-15) replaces the legacy ids, which
+ * OpenAI shuts down 2027-02-26.
  */
-export const STT_MODELS = new Set(["whisper", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]);
+export const STT_MODELS = new Set(["whisper", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]);
 
 /**
  * Resolve the STT model to use.

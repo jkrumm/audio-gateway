@@ -144,10 +144,12 @@ export const config = {
    * Default STT model injected when a `/audio/transcriptions` request omits
    * `model`. Empty model would otherwise be forwarded to IU, which 400s with
    * "Missing model name". Gateway owns this default so callers (Argo dashboard,
-   * Hermes) need not know model names. `gpt-4o-transcribe` is the project's STT
-   * model (matches /transcribe/i → DE/EN prompt steering applies).
+   * Hermes) need not know model names. `gpt-transcribe` is the project's STT
+   * model since 2026-10-15 (matches /transcribe/i → DE/EN prompt steering and
+   * envelope synthesis apply). OpenAI shuts down gpt-4o-transcribe, whisper-1 and
+   * gpt-4o-mini-transcribe on 2027-02-26.
    */
-  sttModel: process.env["STT_MODEL"] ?? "gpt-4o-transcribe",
+  sttModel: process.env["STT_MODEL"] ?? "gpt-transcribe",
   /** Default STT `language` (ISO-639-1, e.g. `de`) injected when the client sends none. */
   sttLanguage: process.env["STT_LANGUAGE"] ?? "",
   /** Default STT `prompt` injected when the client sends none — steers expected language. */

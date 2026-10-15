@@ -38,8 +38,15 @@ export function extractTextAndUsage(
   return {
     text: typeof json["text"] === "string" ? json["text"] : "",
     usage: json["usage"] ?? null,
-    language: typeof json["language"] === "string" ? json["language"] : null,
+    language: (typeof json["language"] === "string" ? json["language"] : null) ?? firstLanguageCode(json["languages"]),
   };
+}
+
+/** gpt-transcribe reports `languages: [{code}]` instead of a `language` string. */
+function firstLanguageCode(languages: unknown): string | null {
+  const first: unknown = Array.isArray(languages) ? languages[0] : undefined;
+  if (typeof first !== "object" || first === null || !("code" in first)) return null;
+  return typeof first.code === "string" ? first.code : null;
 }
 
 const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
