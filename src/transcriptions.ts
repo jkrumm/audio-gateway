@@ -124,7 +124,13 @@ function buildUpstreamForm(form: IncomingForm, clientFormat: string, model: stri
  * row for the HTTP call it makes (success or failure), so the caller never
  * needs to know whether the response was ok.
  */
-async function attemptSingle(model: string, filePart: File | undefined, form: IncomingForm, clientFormat: string): Promise<AttemptResult> {
+async function attemptSingle(
+  model: string,
+  filePart: File | undefined,
+  form: IncomingForm,
+  clientFormat: string,
+  audioSeconds: number | null,
+): Promise<AttemptResult> {
   return withSpan(
     "audio.stt.upstream",
     { "audio.model": model },
@@ -145,7 +151,10 @@ async function attemptSingle(model: string, filePart: File | undefined, form: In
         return { status: res.status, body, contentType, text: "", usage: null, language: null };
       }
       const { text, usage, language } = extractTextAndUsage(body, contentType);
-      recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat, usageJson: usage });
+      // `audioSeconds` (already probed by prepareSttInput) lets per-minute models
+      // be costed even when the upstream reply carries no `usage` (plain-text
+      // format, whisper). Failed calls stay uncosted — no audio was billed.
+      recordUsage({ endpoint: "transcriptions", model, status: res.status, latencyMs, responseFormat: clientFormat, usageJson: usage, audioSeconds });
       return { status: res.status, body, contentType, text, usage, language };
     },
     "client",
@@ -310,8 +319,8 @@ async function prepareParts(
   finish: ReturnType<typeof makeFinish>,
   resolvedModel: string,
   caller: string,
-): Promise<{ parts: File[] } | { rejected: Response }> {
-  if (!file) return { parts: [] };
+): Promise<{ parts: File[]; totalSeconds: number | null } | { rejected: Response }> {
+  if (!file) return { parts: [], totalSeconds: null };
   try {
     const prepared = await withSpan("audio.stt.prepare", {}, async (span) => {
       const result = await prepareSttInput(file);
@@ -322,7 +331,7 @@ async function prepareParts(
       });
       return result;
     });
-    return { parts: prepared.parts };
+    return { parts: prepared.parts, totalSeconds: prepared.totalSeconds };
   } catch (err) {
     const message = oversizeUploadMessage(err);
     if (message !== null) {
@@ -341,7 +350,7 @@ async function prepareParts(
       caller,
       error: err instanceof Error ? err.message : String(err),
     });
-    return { parts: [file] };
+    return { parts: [file], totalSeconds: null };
   }
 }
 
@@ -361,6 +370,7 @@ interface ResolvedTranscription {
 async function resolveTranscription(
   model: string,
   parts: File[],
+  totalSeconds: number | null,
   form: IncomingForm,
   clientFormat: string,
   caller: string,
@@ -370,7 +380,7 @@ async function resolveTranscription(
     return { model: attempted.servedModel, result: attempted, joined: true };
   }
 
-  let result = await attemptSingle(model, parts[0], form, clientFormat);
+  let result = await attemptSingle(model, parts[0], form, clientFormat, totalSeconds);
   // Fallback: a transient upstream outage of the requested model (e.g. IU 404
   // "no backend") would otherwise surface as an unparseable error to the client.
   // Retry once on whisper, which is the most reliably-served IU STT model.
@@ -382,7 +392,7 @@ async function resolveTranscription(
       status: result.status,
       caller,
     });
-    result = await attemptSingle(FALLBACK_MODEL, parts[0], form, clientFormat);
+    result = await attemptSingle(FALLBACK_MODEL, parts[0], form, clientFormat, totalSeconds);
     return { model: FALLBACK_MODEL, result, joined: false };
   }
   return { model, result, joined: false };
@@ -475,7 +485,7 @@ async function dispatchTranscription(req: Request, caller: string, inflight: num
   const prepared = await prepareParts(file instanceof File ? file : null, finish, resolved.model, caller);
   if ("rejected" in prepared) return prepared.rejected;
 
-  const { model, result, joined } = await resolveTranscription(resolved.model, prepared.parts, form, clientFormat, caller);
+  const { model, result, joined } = await resolveTranscription(resolved.model, prepared.parts, prepared.totalSeconds, form, clientFormat, caller);
 
   return buildTranscriptionResponse(
     { joined, clientFormat, language, file: file instanceof File ? file : null, finish, caller },

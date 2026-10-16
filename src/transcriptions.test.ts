@@ -16,7 +16,7 @@ process.env["TTS_PREP"] ??= "off";
 
 const { handleTranscriptions, srt, srtTime, verboseJson, vtt } = await import("./transcriptions");
 const { config } = await import("./config");
-const { _sink } = await import("./usage");
+const { _sink, getRequestMeta } = await import("./usage");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -143,6 +143,68 @@ describe("handleTranscriptions", () => {
     if (exitCode !== 0) throw new Error(`ffmpeg fixture generation failed (${exitCode})`);
     return new File([bytes], "input.wav", { type: "audio/wav" });
   }
+
+  /**
+   * Run one single-part STT request against a stubbed upstream and return the
+   * `transcriptions` usage rows with the request-level cost the sink saw —
+   * recordUsage accumulates cost into the request meta before calling the sink,
+   * so reading it inside the hook yields that row's cost (one row per request).
+   */
+  async function recordSingleStt(
+    model: string,
+    responseFormat: string,
+    upstream: () => Response,
+    durationSec: number,
+  ): Promise<Array<{ audioSeconds: number | null | undefined; costUsd: number | null | undefined; costSource: string | null | undefined }>> {
+    const originalRecord = _sink.record.bind(_sink);
+    const rows: Array<{ audioSeconds: number | null | undefined; costUsd: number | null | undefined; costSource: string | null | undefined }> = [];
+    (_sink as { record: typeof _sink.record }).record = (row) => {
+      if (row.endpoint === "transcriptions") {
+        const meta = getRequestMeta();
+        rows.push({ audioSeconds: row.audioSeconds, costUsd: meta.costUsd, costSource: meta.costSource });
+      }
+      return originalRecord(row);
+    };
+    try {
+      setFetch(async () => upstream());
+      const form = new FormData();
+      form.append("file", await genWavFile(durationSec));
+      form.append("model", model);
+      form.append("response_format", responseFormat);
+      const res = await handleTranscriptions(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form }));
+      expect(res.status).toBe(200);
+      return rows;
+    } finally {
+      (_sink as { record: typeof _sink.record }).record = originalRecord;
+    }
+  }
+
+  test.skipIf(!hasFfmpeg)(
+    "a single-part gpt-transcribe text-format request (no upstream usage) is costed per minute from the probed duration",
+    async () => {
+      const rows = await recordSingleStt("gpt-transcribe", "text", () => new Response("hello", { status: 200, headers: { "content-type": "text/plain" } }), 10);
+      expect(rows).toHaveLength(1);
+      expect(Math.abs((rows[0]!.audioSeconds ?? 0) - 10)).toBeLessThan(1);
+      expect(rows[0]!.costUsd).toBeCloseTo(((rows[0]!.audioSeconds ?? 0) / 60) * 0.0045, 9);
+      expect(rows[0]!.costSource).toBe("assumed");
+    },
+  );
+
+  test.skipIf(!hasFfmpeg)("a single-part whisper request is costed at 0.006/min from the probed duration", async () => {
+    const rows = await recordSingleStt("whisper", "json", () => Response.json({ text: "hello" }), 10);
+    expect(rows).toHaveLength(1);
+    expect(Math.abs((rows[0]!.audioSeconds ?? 0) - 10)).toBeLessThan(1);
+    expect(rows[0]!.costUsd).toBeCloseTo(((rows[0]!.audioSeconds ?? 0) / 60) * 0.006, 9);
+    expect(rows[0]!.costSource).toBe("assumed");
+  });
+
+  test.skipIf(!hasFfmpeg)("a token-billed model is still costed by tokens when the probed duration is present", async () => {
+    const usage = { input_tokens: 1000, output_tokens: 100, input_token_details: { audio_tokens: 1000, text_tokens: 0 } };
+    const rows = await recordSingleStt("gpt-4o-transcribe", "json", () => Response.json({ text: "hello", usage }), 10);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.audioSeconds).not.toBeNull();
+    expect(rows[0]!.costUsd).toBeCloseTo((1000 * 6 + 100 * 10) / 1_000_000, 9);
+  });
 
   test.skipIf(!hasFfmpeg)(
     "a multi-part transcription joins per-part text and synthesizes verbose_json from it",
