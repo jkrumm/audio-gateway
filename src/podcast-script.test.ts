@@ -1396,3 +1396,16 @@ describe("metadata pass — partial reply", () => {
     expect(parsed.topics).toEqual(["Maut", "Vignette"]);
   });
 });
+
+describe("German quote repair", () => {
+  test("a „…\" quote closed with an unescaped ASCII quote still parses", () => {
+    const raw = '```json\n{"turns":[{"speaker":"B","text":"Und dann: „Er ist halt nicht witzig.""},{"speaker":"A","text":"Den nehme ich so."}]}\n```';
+    const turns = parseSegmentTurns(raw);
+    expect(turns.map((t) => t.text)).toEqual(["Und dann: „Er ist halt nicht witzig.“", "Den nehme ich so."]);
+  });
+
+  test("valid JSON with a dangling „ is left untouched", () => {
+    const raw = '{"turns":[{"speaker":"A","text":"Er sagte „hallo"},{"speaker":"B","text":"Ja."}]}';
+    expect(parseSegmentTurns(raw).map((t) => t.text)).toEqual(["Er sagte „hallo", "Ja."]);
+  });
+});
