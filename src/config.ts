@@ -101,6 +101,16 @@ const iuReplicateBaseUrl = (
 ).replace(/\/+$/, "");
 
 /**
+ * IU Anthropic (native Messages) base, e.g. `.../anthropic` — serves the podcast
+ * writer when it is a `claude-*` id (`POST /v1/messages`). Optional env override
+ * (IU_ANTHROPIC_BASE_URL); when unset it is DERIVED from IU_OPENAI_BASE_URL by
+ * swapping a trailing `/openai/v1` for `/anthropic`.
+ */
+const iuAnthropicBaseUrl = (
+  process.env["IU_ANTHROPIC_BASE_URL"] ?? iuBaseUrl.replace(/\/openai\/v1$/, "/anthropic")
+).replace(/\/+$/, "");
+
+/**
  * A bare host (`audiobooks.example.com`) is what ends up in a 1Password URL
  * field more often than not; the client builds `${absUrl}/api/...` from it, so
  * default the scheme to https rather than fail with an invalid URL at publish time.
@@ -112,6 +122,7 @@ export const config = {
   iuApiKey: required("IU_API_KEY"),
   iuBaseUrl,
   iuReplicateBaseUrl,
+  iuAnthropicBaseUrl,
   /**
    * IU Gemini (native `generateContent`) base, e.g. `.../gemini/v1beta`. Optional
    * at startup — only a Gemini TTS request needs it, so STT-only deployments boot
@@ -398,11 +409,12 @@ export const config = {
   podcastOutlineEffort: process.env["PODCAST_OUTLINE_EFFORT"] ?? "high",
   /**
    * The VOICE OWNER: segment writers and every revision/tightening pass. No
-   * other model ever writes or rewrites dialogue — practitioners (and
-   * Anthropic's own prompting guide) name this version for organic voice and
-   * dialogue, where Opus 5 runs longer and more metaphor-heavy by default.
+   * other model ever writes or rewrites dialogue. A `claude-*` id is called on
+   * the native Anthropic Messages wire with adaptive thinking (see
+   * `callPodcastLlm`). Rollback to the previous writer is one env line:
+   * PODCAST_WRITE_MODEL=claude-opus-4-6.
    */
-  podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "claude-opus-4-6",
+  podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "claude-opus-5-5",
   /**
    * Every reviewer role (dramaturge, conversation coach, fact & speech
    * editor) runs on EVERY listed model, all in parallel — cross-model notes
@@ -422,6 +434,12 @@ export const config = {
   podcastMetadataEffort: process.env["PODCAST_METADATA_EFFORT"] ?? "high",
   /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Missing file → empty (logged once). */
   podcastShowBible: process.env["PODCAST_SHOW_BIBLE"] ?? "./docs/show-bible.md",
+  /**
+   * The owner's general voice guide (brain/voice.md), prepended to the show bible in the
+   * writing prompts (outline/segment/revision). Optional — a missing file logs one warning
+   * and the episode is written from the show bible alone. Empty string disables it.
+   */
+  podcastVoicePath: (process.env["PODCAST_VOICE_PATH"] ?? "~/SourceRoot/brain/voice.md").replace(/^~(?=\/|$)/, process.env["HOME"] ?? ""),
   /** Replicate model id used to synthesize each podcast turn. */
   podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
   /** The two ElevenLabs voices, one per host, in host order. */

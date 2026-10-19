@@ -1,9 +1,10 @@
+import { callAnthropicMessages } from "./anthropic-messages";
 import { synthConcurrent } from "./gemini-tts-core";
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveReasoningEffort } from "./model-resolution";
-import { withSpan } from "./otel";
+import { type Span, withSpan } from "./otel";
 import type { Dossier, EpisodeBrief, EpisodeProfile } from "./podcast-types";
 import { recordUsage } from "./usage";
 
@@ -27,7 +28,8 @@ import { recordUsage } from "./usage";
 // The review and metadata passes are optional (`ScriptWriterOptions.review`/
 // `metadata`, default on) so a cheap/test run can stop after the segment
 // pass. A show bible (house style) is injected verbatim into the outline/
-// segment/revision/review prompts when configured.
+// segment/revision/review prompts when configured; the owner's general voice
+// guide (brain/voice.md) precedes it in the outline/segment/revision prompts.
 // Pure, config-free otherwise: every knob (models, concurrency, language,
 // hosts, ...) is an explicit parameter — the orchestrator wires config in.
 
@@ -109,6 +111,8 @@ export interface ScriptWriterOptions {
   metadata?: boolean;
   /** House-style rules injected verbatim into the outline/segment/revision/review prompts. Path to a file; missing → no section, logged once. */
   showBiblePath?: string;
+  /** The owner's general voice guide (brain/voice.md), prepended to the show bible in the outline/segment/revision prompts. Path to a file; missing → no section, one warning. */
+  voicePath?: string;
   onProgress?: (stage: string, done: number, total: number) => void;
 }
 
@@ -220,6 +224,38 @@ export async function loadShowBible(path: string): Promise<string> {
     log.warn("podcast show bible not found, continuing without it", { path, error: err instanceof Error ? err.message : String(err) });
     return "";
   }
+}
+
+/** Voice-guide paths already reported missing — the warning is logged once per path, not once per prompt. */
+const warnedMissingVoice = new Set<string>();
+
+/**
+ * Load the owner's general voice guide (brain/voice.md). Optional: a missing
+ * file logs ONE warning per path and resolves to an empty string, so the show
+ * bible alone carries the episode. Read on every call, like `loadShowBible`.
+ * Exported for tests.
+ */
+export async function loadVoiceGuide(path: string): Promise<string> {
+  try {
+    return await Bun.file(path).text();
+  } catch (err) {
+    if (!warnedMissingVoice.has(path)) {
+      warnedMissingVoice.add(path);
+      log.warn("podcast voice guide not found, continuing without it", { path, error: err instanceof Error ? err.message : String(err) });
+    }
+    return "";
+  }
+}
+
+/**
+ * Render the voice guide ahead of the show bible in the writing prompts; omitted
+ * entirely when blank. It is the owner's GENERAL voice for text — the output here
+ * is spoken dialogue, so the show bible wins and the guide's visual/layout advice
+ * does not apply.
+ */
+function voiceSection(voice: string): string {
+  if (!voice.trim()) return "";
+  return `\n\nOWNER'S VOICE GUIDE (the owner's general voice; the SHOW BIBLE below overrides it for spoken audio; ignore its markdown, layout, table, visual and image guidance — the output is spoken dialogue):\n${voice.trim()}`;
 }
 
 /** Render the show bible as a binding section appended to a system prompt; omitted entirely when blank. */
@@ -527,7 +563,7 @@ function renderEpisodeBrief(req: PodcastScriptRequest): string {
 }
 
 /** The shared, non-negotiable rules — identical for the outline and every segment call. */
-function baseSystemPrompt(req: PodcastScriptRequest, showBible: string): string {
+function baseSystemPrompt(req: PodcastScriptRequest, showBible: string, voice = ""): string {
   const [hostA, hostB] = req.hosts;
   const languageLabel = LANGUAGE_LABEL[req.language];
   return `You are the head writer of "${req.series}", a two-host podcast that turns one person's research notes into an episode that sounds like a real, well-produced show — not a read-aloud summary.
@@ -544,13 +580,13 @@ ${renderEpisodeBrief(req)}
 5. Numbers and names are written for the EAR, not for the page. One figure per sentence — a sentence carrying three numbers is unlistenable. Round, unless the precision IS the point: "gut dreitausend" beats "dreitausendzweiundvierzig", and "null Komma eins sieben" is only ever spoken when that digit is exactly what matters. Anchor every important figure to something the listener already knows ("das ist eine Tankfüllung", "so viel wie eine Monatsmiete"). A cluster of figures is never read out — the hosts walk through it, one figure at a time, with pauses ("…") and a real reaction in between. An unfamiliar proper name or term is introduced as WHAT IT IS before WHAT IT IS CALLED ("die Behörde, die die Maut eintreibt — die heißt …"), spoken slowly, and then gets one short handle the hosts reuse for the rest of the episode; the GLOSSARY gives you both. Never use a name before it has been introduced that way. Open questions stay open and are said to be open ("das wissen wir nicht").
 6. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. ElevenLabs v3 audio tags ONLY from this list: ${V3_PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, placed at the start of a sentence in the middle of the turn — never as the first word of a short line, never translated, never invented. Most turns carry NO tag.
 7. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
-8. Output STRICT JSON only, no commentary, no code fences.${showBibleSection(showBible)}`;
+8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
 }
 
-function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string): string {
+function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string, voice = ""): string {
   const languageLabel = LANGUAGE_LABEL[req.language];
   const brief = req.episodeBrief;
-  return `${baseSystemPrompt(req, showBible)}
+  return `${baseSystemPrompt(req, showBible, voice)}
 
 You are writing the OUTLINE for this episode — break the story inside what the EPISODE BRIEF already decided, like a writers' room before anyone drafts a line. The brief's format, roles, tone, humor, opening, closing and rhythm are settled; you are not re-deciding them.
 - Produce exactly ${segmentCount} segments. The FIRST segment opens the episode exactly the way the brief's OPENING says ("${brief.opening}"); the LAST segment ends it exactly the way the brief's CLOSING says ("${brief.closing}"). Nothing beyond that is prescribed — no station intro, no takeaway count, no sign-off unless the brief asked for one.
@@ -577,8 +613,9 @@ function segmentPrompt(params: {
   total: number;
   previous?: OutlineSegmentSpec;
   showBible: string;
+  voice?: string;
 }): string {
-  const { req, outline, segment, index, total, previous, showBible } = params;
+  const { req, outline, segment, index, total, previous, showBible, voice = "" } = params;
   const brief = req.episodeBrief;
   const [hostA, hostB] = req.hosts;
   const bridgeInstruction = index === 0
@@ -591,7 +628,7 @@ function segmentPrompt(params: {
     ? "If the user message assigns this segment a digression, take it fully — let it breathe — then use its return hook to pull the conversation back. If it assigns reveals, build toward them without giving them away yet. If it lists things reserved for a later segment, do not mention them at all, not even obliquely.\n"
     : "";
 
-  return `${baseSystemPrompt(req, showBible)}
+  return `${baseSystemPrompt(req, showBible, voice)}
 
 You are writing ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}".
 Write ONLY this segment: "${segment.title}". Target about ${segment.targetWords} words — a soft budget for the whole segment, not a per-turn quota.
@@ -759,9 +796,9 @@ function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Ou
 // Revision prompts (per segment, targeted)
 // ---------------------------------------------------------------------------
 
-function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number; showBible: string }): string {
-  const { req, outline, segment, index, total, showBible } = params;
-  return `${baseSystemPrompt(req, showBible)}
+function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number; showBible: string; voice?: string }): string {
+  const { req, outline, segment, index, total, showBible, voice = "" } = params;
+  return `${baseSystemPrompt(req, showBible, voice)}
 
 You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. The segment's target is ${segment.targetWords} words; a revision never grows the segment, and if a note asks for a cut, the cut is the priority. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
 Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/tension), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
@@ -890,6 +927,67 @@ export function parseChatCompletionStream(body: string): { content: string; usag
   return { content, usage, finishReason };
 }
 
+/** `claude-*` ids go to the native Anthropic Messages route (adaptive thinking); everything else stays on chat/completions. */
+export const isClaudeModel = (model: string): boolean => model.startsWith("claude-");
+
+type LlmParams = Parameters<typeof callPodcastLlm>[0];
+
+/**
+ * The Claude branch of `callPodcastLlm`: one Messages call (`anthropic-messages.ts`),
+ * usage mapped into the same `recordUsage` shape. Returns "" — the signal
+ * `callAndParse` retries on with the next, larger `writerBudget` — for an empty
+ * answer (thinking starved the text) and for ANY incomplete stop (`max_tokens`,
+ * refusal, pause), regardless of `retryOnTruncation`: unlike a chat reply cut mid-array,
+ * a half-written segment must never be parsed leniently into a shorter one.
+ */
+async function callClaudeStage(params: LlmParams, span: Span): Promise<string> {
+  const start = Date.now();
+  const result = await callAnthropicMessages({
+    model: params.model,
+    system: params.systemPrompt,
+    user: params.userContent,
+    maxTokens: params.maxCompletionTokens,
+  });
+  const latencyMs = Date.now() - start;
+  span.setAttributes({ "http.status_code": result.status });
+
+  if (!result.ok) {
+    log.error("podcast script llm error", { endpoint: params.usageEndpoint, model: params.model, status: result.status, latencyMs, error: result.errorText });
+    recordUsage({ endpoint: params.usageEndpoint, model: params.model, status: result.status, latencyMs, inputChars: params.userContent.length, errorText: result.errorText });
+    throw new Error(`Podcast ${params.stage} generation failed: HTTP ${result.status} ${result.errorText.slice(0, 300)}`);
+  }
+
+  // Anthropic's `input_tokens` excludes cache reads/writes; the usage row wants the total, with cache hits as a subset.
+  const cacheRead = result.usage.cache_read_input_tokens ?? 0;
+  const inputTokens = (result.usage.input_tokens ?? 0) + cacheRead + (result.usage.cache_creation_input_tokens ?? 0);
+  const outputTokens = result.usage.output_tokens ?? 0;
+  recordUsage({
+    endpoint: params.usageEndpoint,
+    model: params.model,
+    status: result.status,
+    latencyMs,
+    inputChars: params.userContent.length,
+    inputTokens,
+    outputTokens,
+    cachedTokens: cacheRead,
+    usageJson: { ...result.usage, finish_reason: result.stopReason },
+  });
+  span.setAttributes({ "llm.output_tokens": outputTokens, ...(result.stopReason && { "llm.finish_reason": result.stopReason }) });
+
+  const text = result.text.trim();
+  if (!text) {
+    span.setStatus("error", `empty content (stop_reason=${result.stopReason ?? "unknown"})`);
+    log.warn("podcast writer returned no content", { stage: params.stage, stopReason: result.stopReason, outputTokens, latencyMs });
+    return "";
+  }
+  if (result.stopReason !== "end_turn" && result.stopReason !== "stop_sequence") {
+    span.setStatus("error", `incomplete content (stop_reason=${result.stopReason ?? "unknown"})`);
+    log.warn("podcast writer did not finish, forcing retry", { stage: params.stage, stopReason: result.stopReason, outputTokens, latencyMs });
+    return "";
+  }
+  return result.text;
+}
+
 /**
  * One podcast chat-completion call on the IU endpoint: SSE-streamed, usage
  * recorded, wrapped in an `audio.podcast.llm` span. Shared by every stage of
@@ -927,6 +1025,7 @@ export async function callPodcastLlm(params: {
       ...(params.reviewer && { "audio.podcast.reviewer": params.reviewer }),
     },
     async (span) => {
+      if (isClaudeModel(params.model)) return callClaudeStage(params, span);
       const start = Date.now();
       const res = await rawFetch(iuUrl("/chat/completions"), {
         method: "POST",
@@ -1107,9 +1206,10 @@ async function reviseSegments(params: {
   model: string;
   concurrency: number;
   showBible: string;
+  voice: string;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ScriptSegment[]> {
-  const { req, outline, segments, notes, model, concurrency, showBible, onProgress } = params;
+  const { req, outline, segments, notes, model, concurrency, showBible, voice, onProgress } = params;
   const total = segments.length;
   const toRevise = segments.map((_, index) => index).filter((index) => segmentNotesFor(notes, index).length > 0);
   onProgress?.("revise", 0, toRevise.length);
@@ -1127,7 +1227,7 @@ async function reviseSegments(params: {
         (attempt) =>
           callPodcastLlm({
             model,
-            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total, showBible }),
+            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total, showBible, voice }),
             userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
             maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
             stage: "revise",
@@ -1302,6 +1402,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   const review = opts.review ?? true;
   const metadataEnabled = opts.metadata ?? true;
   const showBible = opts.showBiblePath ? await loadShowBible(opts.showBiblePath) : "";
+  const voice = opts.voicePath ? await loadVoiceGuide(opts.voicePath) : "";
 
   opts.onProgress?.("outline", 0, 1);
   const outline = await callAndParse(
@@ -1309,7 +1410,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
     (attempt) =>
       callPodcastLlm({
         model: opts.models.outline,
-        systemPrompt: outlinePrompt(req, segmentCount, targetWords, showBible),
+        systemPrompt: outlinePrompt(req, segmentCount, targetWords, showBible, voice),
         userContent: buildOutlineUserContent(req),
         // The outline for a 20-minute episode over a 20k-char source is several
         // thousand tokens of verbatim key_facts, and the writer model's reasoning
@@ -1333,7 +1434,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
       (attempt) =>
         callPodcastLlm({
           model: opts.models.write,
-          systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1], showBible }),
+          systemPrompt: segmentPrompt({ req, outline, segment: segmentSpec, index, total, previous: outline.segments[index - 1], showBible, voice }),
           userContent: buildSegmentUserContent({ req, outline, index }),
           // Generous headroom (not just words*4): claude-opus-4-6 (the voice owner) was observed
           // truncating a segment reply mid-array under the tighter budget (words*4 + 1500),
@@ -1356,14 +1457,14 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
     : [];
   const notes = [...reviewNotes, ...lengthNotes(segments, outline)];
   if (notes.length > 0) {
-    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, onProgress: opts.onProgress });
   }
   // A revision that was asked to cut and still didn't: one more pass on those
   // segments only, with nothing but the cut on the table.
   const stillLong = lengthNotes(finalSegments, outline);
   if (stillLong.length > 0) {
     log.warn("podcast segments still over length after revision, tightening", { segments: stillLong.map((n) => n.segmentIndex) });
-    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.models.write, concurrency: opts.concurrency, showBible, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, onProgress: opts.onProgress });
   }
 
   const wordCount = finalSegments.reduce((sum, seg) => sum + seg.turns.reduce((s, t) => s + countWords(t.text), 0), 0);

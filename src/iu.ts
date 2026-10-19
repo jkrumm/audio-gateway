@@ -9,6 +9,9 @@ export const iuGeminiUrl = (path: string): string => `${config.iuGeminiBaseUrl}$
 /** Absolute IU URL for a Replicate path like `/models/{owner}/{name}/predictions`. */
 export const iuReplicateUrl = (path: string): string => `${config.iuReplicateBaseUrl}${path}`;
 
+/** Absolute IU URL for a native Anthropic Messages path like `/v1/messages`. */
+export const iuAnthropicUrl = (path: string): string => `${config.iuAnthropicBaseUrl}${path}`;
+
 /** Upstream headers carrying the IU bearer token. */
 export const iuHeaders = (extra: Record<string, string> = {}): Record<string, string> => ({
   Authorization: `Bearer ${config.iuApiKey}`,

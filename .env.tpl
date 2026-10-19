@@ -11,6 +11,10 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 # derivation config.ts falls back to when this is unset).
 # IU_REPLICATE_BASE_URL=op://common/anthropic/REPLICATE_BASE_URL
 
+# Optional override — the native Anthropic Messages base used by a claude-* podcast
+# writer. Defaults to <IU_OPENAI_BASE_URL with /openai/v1 swapped for /anthropic>.
+# IU_ANTHROPIC_BASE_URL=<iu-host>/anthropic
+
 # Optional per-caller bearer tokens (name=token,name=token), accepted exactly
 # like PROXY_API_KEY, for clients that cannot set x-audio-source (Hermes' stock
 # OpenAI client, MacWhisper) — see README.md → Auth. Real tokens belong in
@@ -65,12 +69,13 @@ ARGO_API_SECRET=op://common/api/SECRET
 # override the writer-role models, TTS model, voices, host names, timing, or storage paths.
 # PODCAST_OUTLINE_MODEL=deepseek-v4.1-flash  # story pass only
 # PODCAST_OUTLINE_EFFORT=high                 # reasoning_effort for the outline call
-# PODCAST_WRITE_MODEL=claude-opus-4-6        # the voice owner: segments + every revision (no reasoning_effort — Claude ignores it)
+# PODCAST_WRITE_MODEL=claude-opus-5-5        # the voice owner: segments + every revision. claude-* ids use the native Anthropic wire with adaptive thinking; rollback = claude-opus-4-6
 # PODCAST_REVIEW_MODELS=gemini-3.8-flash,deepseek-v4.1-flash   # every role runs on every listed model
 # PODCAST_REVIEW_EFFORT=high                  # resolved per-model; gemini-3.8-flash omits it regardless
 # PODCAST_METADATA_MODEL=deepseek-v4.1-flash # final title/description/cover/genres/chapters pass
 # PODCAST_METADATA_EFFORT=high
 # PODCAST_SHOW_BIBLE=./docs/show-bible.md    # house style injected verbatim into the writer prompts
+# PODCAST_VOICE_PATH=~/SourceRoot/brain/voice.md  # owner's general voice guide, prepended to the show bible in writing prompts (default shown, HOME-expanded; missing → warning, continues; empty disables)
 # PODCAST_TTS_MODEL=elevenlabs/v3
 # PODCAST_VOICES=Mark,Sarah
 # PODCAST_HOST_NAMES=Jonas,Lena

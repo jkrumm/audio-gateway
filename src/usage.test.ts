@@ -151,6 +151,9 @@ describe("podcast model rates", () => {
     const { computeCost } = await import("./usage");
     const opus = computeCost("claude-opus-4-6", { inputTokens: 1_000_000, outputTokens: 100_000, audioTokens: null, audioSeconds: null, inputChars: null });
     expect(opus.costUsd).toBeCloseTo(7.5, 6);
+    // claude-opus-5-5 (podcast writer default): 4 in / 20 out per 1M, from agent-gateway's model registry.
+    const opus55 = computeCost("claude-opus-5-5", { inputTokens: 1_000_000, outputTokens: 100_000, audioTokens: null, audioSeconds: null, inputChars: null });
+    expect(opus55.costUsd).toBeCloseTo(6, 6);
     expect(computeCost("gpt-5.6-luna", { inputTokens: 1_000_000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(0.2, 6);
     expect(computeCost("gemini-3.1-pro-preview", { inputTokens: 0, outputTokens: 1_000_000, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(12, 6);
     // No `verified` flag on this rate — an unconfirmed vendor list price stamps 'assumed', not 'estimated'.

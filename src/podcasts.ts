@@ -673,6 +673,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       },
       concurrency: 3,
       showBiblePath: config.podcastShowBible,
+      voicePath: config.podcastVoicePath,
       onProgress: (stage, done, total) => store.update(job.id, { progress: { stage, done, total } }),
     },
   );

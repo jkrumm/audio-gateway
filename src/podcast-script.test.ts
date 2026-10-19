@@ -29,6 +29,7 @@ const {
   writePodcastScript,
   buildEpisodeProfile,
   loadShowBible,
+  loadVoiceGuide,
   pruneUnrequestedDevices,
   V3_PODCAST_TAGS,
 } = await import("./podcast-script");
@@ -654,6 +655,65 @@ describe("writePodcastScript", () => {
     expect(outlineSystemPrompt).toContain("Hosts never say 'als KI'.");
   });
 
+  test("voice guide precedes the show bible in the outline and segment system prompts, with the audio-override framing", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-voice-test-"));
+    const showBiblePath = join(tmpRoot, "show-bible.md");
+    const voicePath = join(tmpRoot, "voice.md");
+    writeFileSync(showBiblePath, "# House Style\n\nHosts never say 'als KI'.");
+    writeFileSync(voicePath, "# Voice\n\nVerdict first.");
+
+    const prompts: { outline: string; segment: string } = { outline: "", segment: "" };
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        prompts.outline = systemPrompt;
+        return outlineResponse();
+      }
+      prompts.segment = systemPrompt;
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 2, review: false, metadata: false, showBiblePath, voicePath });
+
+    for (const prompt of [prompts.outline, prompts.segment]) {
+      expect(prompt).toContain("OWNER'S VOICE GUIDE");
+      expect(prompt).toContain("overrides it for spoken audio");
+      expect(prompt).toContain("ignore its markdown, layout, table, visual and image guidance");
+      expect(prompt).toContain("Verdict first.");
+      expect(prompt.indexOf("Verdict first.")).toBeLessThan(prompt.indexOf("SHOW BIBLE (house style — binding)"));
+    }
+  });
+
+  test("a missing voice guide is skipped: the prompts carry the show bible alone", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-voice-missing-test-"));
+    const showBiblePath = join(tmpRoot, "show-bible.md");
+    writeFileSync(showBiblePath, "# House Style");
+
+    let outlineSystemPrompt = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) {
+        outlineSystemPrompt = systemPrompt;
+        return outlineResponse();
+      }
+      return segmentResponse(0);
+    });
+
+    await writePodcastScript(BASE_REQUEST, {
+      models: MODELS,
+      concurrency: 2,
+      review: false,
+      metadata: false,
+      showBiblePath,
+      voicePath: join(tmpRoot, "no-such-voice.md"),
+    });
+
+    expect(outlineSystemPrompt).not.toContain("VOICE GUIDE");
+    expect(outlineSystemPrompt).toContain("SHOW BIBLE (house style — binding)");
+  });
+
   test("the episode brief drives segment count and target words, not planSegmentCount(minutes)", async () => {
     let outlineSystemPrompt = "";
     const segmentPrompts: string[] = [];
@@ -1012,6 +1072,31 @@ describe("loadShowBible", () => {
   });
 });
 
+describe("loadVoiceGuide", () => {
+  test("reads a file's contents", async () => {
+    const tmpRoot = mkdtempSync(join(tmpdir(), "audio-gateway-load-voice-test-"));
+    const path = join(tmpRoot, "voice.md");
+    writeFileSync(path, "Verdict first.");
+    expect(await loadVoiceGuide(path)).toBe("Verdict first.");
+  });
+
+  test("resolves to an empty string when the file is missing, warning once per path", async () => {
+    const path = join(tmpdir(), "audio-gateway-load-voice-test-missing", "voice.md");
+    const warnings: string[] = [];
+    const original = console.log;
+    console.log = (line: unknown) => {
+      if (typeof line === "string" && line.includes("podcast voice guide not found")) warnings.push(line);
+    };
+    try {
+      expect(await loadVoiceGuide(path)).toBe("");
+      expect(await loadVoiceGuide(path)).toBe("");
+    } finally {
+      console.log = original;
+    }
+    expect(warnings).toHaveLength(1);
+  });
+});
+
 describe("parseChatCompletionStream", () => {
   test("stitches SSE deltas and picks up the trailing usage chunk", () => {
     const body = [
@@ -1097,6 +1182,127 @@ describe("callPodcastLlm — truncation forces a retry like empty content", () =
     setFetch(async () => chatCompletion('{"title":"done"}', "stop"));
     const content = await callPodcastLlm({ ...baseParams, retryOnTruncation: true });
     expect(content).toBe('{"title":"done"}');
+  });
+});
+
+function sse(events: Array<{ event: string; data: unknown }>): Response {
+  const body = events.map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}\n\n`).join("");
+  return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+}
+
+/** A Messages stream: one thinking block, then one text block split over two deltas. */
+function messagesStream(opts: { text?: string[]; stopReason?: string; thinking?: string } = {}): Response {
+  const text = opts.text ?? ['{"turns":[{"speaker":"A",', '"text":"Hallo"}]}'];
+  const events: Array<{ event: string; data: unknown }> = [
+    { event: "message_start", data: { type: "message_start", message: { usage: { input_tokens: 10, cache_read_input_tokens: 5, cache_creation_input_tokens: 2, output_tokens: 1 } } } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: opts.thinking ?? "SECRET REASONING" } } },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+  ];
+  if (text.length > 0) {
+    events.push({ event: "content_block_start", data: { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } } });
+    for (const chunk of text) {
+      events.push({ event: "content_block_delta", data: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: chunk } } });
+    }
+    events.push({ event: "content_block_stop", data: { type: "content_block_stop", index: 1 } });
+  }
+  events.push(
+    { event: "message_delta", data: { type: "message_delta", delta: { stop_reason: opts.stopReason ?? "end_turn" }, usage: { output_tokens: 42 } } },
+    { event: "message_stop", data: { type: "message_stop" } },
+  );
+  return sse(events);
+}
+
+describe("callPodcastLlm — claude-* models use the native Anthropic Messages wire", () => {
+  const baseParams = {
+    model: "claude-opus-5-5",
+    systemPrompt: "sys prompt",
+    userContent: "user content",
+    maxCompletionTokens: 22_000,
+    stage: "segment" as const,
+    usageEndpoint: "podcast-segment" as const,
+  };
+
+  test("posts to /anthropic/v1/messages with adaptive thinking, effort high, a 32k floor, and the system/user split", async () => {
+    const calls: Array<{ url: string; headers: Record<string, string>; body: Record<string, unknown> }> = [];
+    setFetch(async (url, init) => {
+      calls.push({ url: String(url), headers: init?.headers as Record<string, string>, body: JSON.parse(String(init?.body)) });
+      return messagesStream();
+    });
+    await callPodcastLlm({ ...baseParams, reasoningEffort: "high" });
+
+    expect(calls).toHaveLength(1);
+    const { url, headers, body } = calls[0]!;
+    expect(url.endsWith("/anthropic/v1/messages")).toBe(true);
+    expect(headers["Authorization"]).toStartWith("Bearer ");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(body["model"]).toBe("claude-opus-5-5");
+    expect(body["thinking"]).toEqual({ type: "adaptive" });
+    expect(body["output_config"]).toEqual({ effort: "high" });
+    expect(body["max_tokens"]).toBe(32_000);
+    expect(body["stream"]).toBe(true);
+    expect(body["system"]).toBe("sys prompt");
+    expect(body["messages"]).toEqual([{ role: "user", content: "user content" }]);
+    expect(body).not.toHaveProperty("reasoning_effort");
+    expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  test("a larger writerBudget than the floor is honoured (retry doubles it)", async () => {
+    let maxTokens = 0;
+    setFetch(async (_url, init) => {
+      maxTokens = (JSON.parse(String(init?.body)) as { max_tokens: number }).max_tokens;
+      return messagesStream();
+    });
+    await callPodcastLlm({ ...baseParams, maxCompletionTokens: 44_000 });
+    expect(maxTokens).toBe(44_000);
+  });
+
+  test("returns only the text blocks, never the thinking block", async () => {
+    setFetch(async () => messagesStream());
+    const content = await callPodcastLlm(baseParams);
+    expect(content).toBe('{"turns":[{"speaker":"A","text":"Hallo"}]}');
+    expect(content).not.toContain("SECRET REASONING");
+  });
+
+  test("stop_reason max_tokens is truncation: returns empty so callAndParse retries with a larger budget (even without retryOnTruncation)", async () => {
+    setFetch(async () => messagesStream({ stopReason: "max_tokens", text: ['{"turns":[{"speaker":"A","text":"cut'] }));
+    expect(await callPodcastLlm(baseParams)).toBe("");
+  });
+
+  test("empty text (thinking starved the answer) returns empty", async () => {
+    setFetch(async () => messagesStream({ stopReason: "max_tokens", text: [] }));
+    expect(await callPodcastLlm(baseParams)).toBe("");
+  });
+
+  test("a 502 is retried with backoff and the next attempt's answer is used", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return calls === 1 ? new Response("bad gateway", { status: 502 }) : messagesStream();
+    });
+    const content = await callPodcastLlm(baseParams);
+    expect(calls).toBe(2);
+    expect(content).toContain("Hallo");
+  });
+
+  test("a body naming invalid_request_error is not retried and throws", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return new Response('{"error":{"type":"invalid_request_error","message":"thinking.type.enabled"}}', { status: 502 });
+    });
+    await expect(callPodcastLlm(baseParams)).rejects.toThrow("HTTP 502");
+    expect(calls).toBe(1);
+  });
+
+  test("a non-Claude model keeps the chat/completions path", async () => {
+    let url = "";
+    setFetch(async (u) => {
+      url = String(u);
+      return chatCompletion("ok", "stop");
+    });
+    await callPodcastLlm({ ...baseParams, model: "deepseek-v4.1-flash" });
+    expect(url.endsWith("/chat/completions")).toBe(true);
   });
 });
 

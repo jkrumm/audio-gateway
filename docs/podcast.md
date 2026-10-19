@@ -212,10 +212,12 @@ row.
 | Env var | Default | Effect |
 |-|-|-|
 | `PODCAST_OUTLINE_MODEL` / `PODCAST_OUTLINE_EFFORT` | `deepseek-v4.1-flash` / `high` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
-| `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | The voice owner — segment writers and every revision/tightening pass. No `reasoning_effort` (Claude ignores it). |
+| `PODCAST_WRITE_MODEL` | `claude-opus-5-5` | The voice owner — segment writers and every revision/tightening pass. A `claude-*` id is called on the native Anthropic Messages wire with adaptive thinking (see [Writer budgets and reasoning](#writer-budgets-and-reasoning-2026-09-02)); rollback is `PODCAST_WRITE_MODEL=claude-opus-4-6`. |
 | `PODCAST_REVIEW_MODELS` / `PODCAST_REVIEW_EFFORT` | `gemini-3.8-flash,deepseek-v4.1-flash` / `high` | Comma list; every reviewer role runs on every listed model. Effort is resolved per-model — gemini-3.8-flash omits it regardless. |
 | `PODCAST_METADATA_MODEL` / `PODCAST_METADATA_EFFORT` | `deepseek-v4.1-flash` / `high` | Final title/description/cover-prompt/genres/chapter-titles pass. |
 | `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
+| `PODCAST_VOICE_PATH` | `~/SourceRoot/brain/voice.md` | The owner's general voice guide, prepended to the show bible in the outline/segment/revision prompts (the show bible overrides it for spoken audio); missing file → no section, one warning; empty disables. |
+| `IU_ANTHROPIC_BASE_URL` | derived from `IU_OPENAI_BASE_URL` (`/openai/v1` → `/anthropic`) | Native Anthropic Messages base used when the writer is a `claude-*` id. |
 | `PODCAST_TTS_MODEL` | `elevenlabs/v3` | Replicate model for per-turn synthesis. |
 | `PODCAST_VOICES` | `Mark,Sarah` | The two hosts' ElevenLabs voices, in host order. |
 | `PODCAST_HOST_NAMES` | `Jonas,Lena` | The two hosts' display names, same order. |
@@ -269,7 +271,18 @@ docs and a research pass on production practice:
 
 ## Writer budgets and reasoning (2026-09-02)
 
-claude-opus-4-6 (the voice owner, every segment and revision call) on the IU
+A `claude-*` writer (the voice owner, `claude-opus-5-5` by default) does not use
+chat/completions: `src/anthropic-messages.ts` POSTs to the IU Anthropic route
+(`/v1/messages`, streamed) with `thinking: {type: "adaptive"}` and
+`output_config: {effort: "high"}` (claude-opus-5-5 rejects
+`thinking.type.enabled` with a 400, verified in agent-gateway 2026-10-17).
+`max_tokens` is `max(32000, writerBudget)`; only `text` blocks are returned,
+`stop_reason: max_tokens` (or an empty answer, i.e. thinking ate the budget)
+returns empty so `callAndParse` retries with the doubled budget. 500/502/504
+are retried with 0.5s/1.5s backoff, 429/503 by `rawFetch`.
+
+The same holds for any reasoning model on chat/completions: claude-opus-4-6 (the
+previous voice owner) on the IU
 endpoint reasons before answering on heavy prompts, and that reasoning is
 invisible in the stream but counted against `max_completion_tokens` (a
 5.8k-char revision: 8.7k completion tokens; at a 10.4k cap the reply came back
@@ -280,7 +293,7 @@ headroom covers the outline/review/metadata calls.
 `PODCAST_OUTLINE_EFFORT`/`PODCAST_REVIEW_EFFORT`/`PODCAST_METADATA_EFFORT`
 (default `high`) set `reasoning_effort` on those calls, resolved per-model via
 `resolveReasoningEffort` (model-resolution.ts) — deepseek-v4.1-flash honours
-it, gemini-3.8-flash and claude-opus-4-6 do not and never get the field. An
+it, gemini-3.8-flash and every `claude-*` id do not and never get the field. An
 episode is not latency-bound, so `high` is the default rather than a cost cap.
 `llm.finish_reason` is recorded on every writer span and usage row.
 Review and revision are polish: a reviewer that fails twice is skipped, a
@@ -298,7 +311,7 @@ polishes the metadata:
 | Role | Env var | Default | Why |
 |-|-|-|-|
 | Outline | `PODCAST_OUTLINE_MODEL` | `deepseek-v4.1-flash` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering (`PODCAST_OUTLINE_EFFORT`, default `high`), which the outline pays for and nothing downstream needs to match. |
-| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-4-6` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue — practitioners (and Anthropic's own prompting guide) name this version for organic voice and dialogue, where Opus 5 runs longer and more metaphor-heavy by default. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. Never gets `reasoning_effort` — Claude ignores it. |
+| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-5-5` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue. Moved from `claude-opus-4-6` (2026-10-19) onto the native Anthropic wire with adaptive thinking; `claude-opus-4-6` stays a one-line env rollback. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. Never gets `reasoning_effort` — the Anthropic wire carries `output_config.effort` instead. |
 | Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,deepseek-v4.1-flash` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. `PODCAST_REVIEW_EFFORT` (default `high`) applies only to models that accept it. |
 | Metadata | `PODCAST_METADATA_MODEL` | `deepseek-v4.1-flash` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. `PODCAST_METADATA_EFFORT` defaults to `high`. |
 
@@ -314,6 +327,15 @@ loaded once (lazily, cached, missing file → empty + one warning log) and
 injected verbatim into the outline/segment/revision/review prompts under a
 "SHOW BIBLE (house style — binding)" heading, so house style survives across
 every model in the roster rather than living only in one model's prompt.
+
+The owner's general **voice guide** (`brain/voice.md`, `PODCAST_VOICE_PATH`) is
+the shared base of every writing prompt: the outline/segment/revision prompts
+carry it ahead of the show bible under an "OWNER'S VOICE GUIDE" heading that
+says the show bible overrides it for spoken audio and that its
+markdown/layout/table/visual/image guidance is to be ignored. The bible keeps
+only what is audio-specific (hosts, turn structure, pacing, spoken-language and
+TTS rules). Reviewers read the show bible only. A missing voice file logs one
+warning and the episode is written from the bible alone.
 
 Expect roughly $3–4 of writer + reviewer + metadata tokens per 22-minute
 episode on top of ~$2 of ElevenLabs characters.

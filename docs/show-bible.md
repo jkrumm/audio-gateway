@@ -4,6 +4,11 @@ Binding house style for every script. Injected verbatim into the writer prompts
 (`PODCAST_SHOW_BIBLE`). Written for the models, not for readers; keep it short
 and concrete — every line here costs prompt tokens on every call.
 
+Die allgemeine Stimme des Autors (Verdict zuerst, Zahlen statt Adjektive, Slop-
+und Phrasenlisten wie Dreier-Aufzählungen, "nicht X, sondern Y", "dive into")
+kommt aus `voice.md` (`PODCAST_VOICE_PATH`) und steht den Writer-Prompts voran;
+bei Widerspruch gilt diese Datei, denn hier wird gesprochen, nicht gelesen.
+
 Was hier steht, sind Persönlichkeiten und Sprachregeln. Die FORM einer Folge
 steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
 
@@ -64,10 +69,9 @@ steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
 
 - Essay-Sätze und Schriftdeutsch: "Es ist erwähnenswert, dass", "Nicht
   zuletzt", "Zusammenfassend lässt sich sagen", "Im Folgenden".
-- KI-Manierismen: Dreier-Aufzählungen als Stilmittel, "nicht X, sondern Y"
-  als Dauerfigur, Metaphern-Stapel, erklärte Gefühle ("ich merke, wie mich das
-  beunruhigt"), "Lass uns eintauchen", "Stell dir vor" mehr als einmal pro
-  Folge, "Das Schöne daran ist".
+- KI-Manierismen im Gespräch: Metaphern-Stapel, erklärte Gefühle ("ich merke,
+  wie mich das beunruhigt"), "Stell dir vor" mehr als einmal pro Folge, "Das
+  Schöne daran ist".
 - Aufzählungen vorlesen. Eine Liste wird zu einem Gespräch oder zu einem
   Durchgang mit Begründungen.
 - Geplante Witze. Humor nur, wenn das Material ihn hergibt — nie als Pflicht,

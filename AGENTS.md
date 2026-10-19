@@ -18,7 +18,7 @@ pipeline (both retired 2026-06-17).
 - `src/index.ts` — `Bun.serve` entry: routing, auth gate, `/health` (with `degraded: [...]` — the
   launcher overlays that did not resolve), `/models`, top-level error wrap.
 - `src/config.ts` — the ONLY place env is read; exports a frozen `config`. Required vars fail fast at boot.
-- `src/iu.ts` — upstream URL builders + bearer-header helper (OpenAI, Gemini, Replicate bases).
+- `src/iu.ts` — upstream URL builders + bearer-header helper (OpenAI, Gemini, Replicate, Anthropic bases).
 - `src/usage.ts` — usage sink. SQLite adapter (default); HTTP adapter is the Phase-3 seam. Also
   owns request correlation (`runWithRequestContext`/`setRequestMeta`, AsyncLocalStorage): every
   `recordUsage` call made while handling one HTTP request is stamped with the same
@@ -85,6 +85,13 @@ pipeline (both retired 2026-06-17).
   job: it finishes `done` with `publish: { ok: false, error }` and `abs: null`, the brain note is
   still written, and `POST /:id/publish` repeats only the upload (then files the note with the
   link); `/retry` is for generation failures only.
+- `src/anthropic-messages.ts` — the native Anthropic Messages wire on the IU Anthropic route
+  (`config.iuAnthropicBaseUrl`: `IU_ANTHROPIC_BASE_URL`, else `IU_OPENAI_BASE_URL` with `/openai/v1`
+  swapped for `/anthropic`) for a `claude-*` podcast model: streamed, adaptive thinking +
+  `output_config: {effort: "high"}` (claude-opus-5-5 rejects `thinking.type.enabled` with a 400),
+  `max_tokens` floor 32000, `text` blocks only, 500/502/504 + retryable stream errors retried
+  (429/503 by `rawFetch`). `callPodcastLlm` dispatches on the `claude-` prefix; every other model
+  stays on chat/completions.
 - `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
   dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,
   roles, tone, humor, opening, closing and rhythm; devices (hook/motif/reveals/digressions) are
@@ -93,7 +100,10 @@ pipeline (both retired 2026-06-17).
   reviewer role (dramaturge, conversation coach, fact & speech editor) runs on every listed review
   model in parallel (advisory only, judged against the brief, not a fixed curve); a final metadata
   model writes the locked script's title/description/cover prompt/genres/chapter titles/topics; a
-  show bible is injected verbatim into the writer/reviewer prompts. Only tag vocabulary, turn
+  show bible is injected verbatim into the writer/reviewer prompts, and the owner's general voice
+  guide (`brain/voice.md`, `PODCAST_VOICE_PATH`, optional) precedes it in the outline/segment/revision
+  prompts only — the show bible overrides it for spoken audio. The write model defaults to
+  `claude-opus-5-5` (`PODCAST_WRITE_MODEL`; `claude-opus-4-6` is the one-line rollback). Only tag vocabulary, turn
   ceilings and segment bounds are enforced in code (`sanitizeTurns`).
 - `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes each on the
   Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode. `turnsForSynthesis`
