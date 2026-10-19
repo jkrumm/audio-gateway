@@ -95,7 +95,8 @@ function parseJsonMessage(body: string): AnthropicParseResult {
  * concatenated `text` blocks, stop reason and usage. Tolerates a plain
  * non-stream JSON body too (a proxy that ignores `stream`), including an
  * `{"type":"error"}` envelope. Never throws: `[DONE]` and non-JSON `data:` lines
- * are skipped, and an unreadable non-SSE body comes back as `{ok: false}`.
+ * are skipped, and an unreadable body — non-SSE, or SSE-shaped with no valid event
+ * at all — comes back as `{ok: false}`.
  * Exported for tests.
  */
 export function parseAnthropicStream(body: string): AnthropicParseResult {
@@ -109,6 +110,7 @@ export function parseAnthropicStream(body: string): AnthropicParseResult {
   let stopReason: string | null = null;
   const usage: AnthropicUsage = {};
   let streamError: AnthropicMessageResult["streamError"];
+  let sawEvent = false;
 
   for (const line of body.split("\n")) {
     if (!line.startsWith("data:")) continue;
@@ -116,6 +118,7 @@ export function parseAnthropicStream(body: string): AnthropicParseResult {
     if (!payload || payload === "[DONE]") continue;
     const event = tryParseJson(payload);
     if (!isRecord(event)) continue;
+    sawEvent = true;
     const index = asNumber(event["index"]);
     const delta = isRecord(event["delta"]) ? event["delta"] : undefined;
     switch (event["type"]) {
@@ -144,6 +147,7 @@ export function parseAnthropicStream(body: string): AnthropicParseResult {
         break;
     }
   }
+  if (!sawEvent) return { ok: false, reason: "SSE body carried no valid events" };
   return { ok: true, value: { text, stopReason, usage, streamError } };
 }
 
@@ -176,6 +180,8 @@ export async function callAnthropicMessages(params: {
     stream: true,
   });
   const timeoutMs = params.timeoutMs ?? ATTEMPT_TIMEOUT_MS;
+  // Resolved before the loop: a non-derivable base is a config error, never worth retrying.
+  const url = iuAnthropicUrl("/v1/messages");
 
   for (let attempt = 1; ; attempt++) {
     const last = attempt >= ATTEMPTS;
@@ -187,7 +193,7 @@ export async function callAnthropicMessages(params: {
     const signal = AbortSignal.timeout(timeoutMs);
     let res: Awaited<ReturnType<typeof rawFetch>>;
     try {
-      res = await rawFetch(iuAnthropicUrl("/v1/messages"), {
+      res = await rawFetch(url, {
         method: "POST",
         headers: iuHeaders({ "content-type": "application/json", "anthropic-version": ANTHROPIC_VERSION }),
         body,

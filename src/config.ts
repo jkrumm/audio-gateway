@@ -105,19 +105,22 @@ const iuReplicateBaseUrl = (
  * writer when it is a `claude-*` id (`POST /v1/messages`). Optional env override
  * (IU_ANTHROPIC_BASE_URL); when unset it is DERIVED from IU_OPENAI_BASE_URL by
  * swapping a trailing `/openai/v1` for `/anthropic`. A base that does not end in
- * `/openai/v1` cannot be derived from — fail at boot rather than silently pointing
- * the Claude writer at the OpenAI route. Exported (pure) for tests.
+ * `/openai/v1` cannot be derived from, and throws rather than silently pointing
+ * the Claude writer at the OpenAI route. Pure and lazy by design: `config` only
+ * holds the raw override and `iuAnthropicUrl` calls this on the first `claude-*`
+ * Messages call, so a deployment that never uses the Anthropic route (the VPS
+ * STT/TTS instance) boots regardless. Exported for tests.
  */
 export const deriveAnthropicBaseUrl = (explicit: string | undefined, openaiBase: string): string => {
   if (explicit) return explicit.replace(/\/+$/, "");
-  if (!/\/openai\/v1$/.test(openaiBase)) {
+  const base = openaiBase.replace(/\/+$/, "");
+  if (!/\/openai\/v1$/.test(base)) {
     throw new Error(
       `Cannot derive IU_ANTHROPIC_BASE_URL: IU_OPENAI_BASE_URL must end in /openai/v1 (got "${openaiBase}"); set IU_ANTHROPIC_BASE_URL explicitly`,
     );
   }
-  return openaiBase.replace(/\/openai\/v1$/, "/anthropic").replace(/\/+$/, "");
+  return base.replace(/\/openai\/v1$/, "/anthropic");
 };
-const iuAnthropicBaseUrl = deriveAnthropicBaseUrl(process.env["IU_ANTHROPIC_BASE_URL"], iuBaseUrl);
 
 /**
  * A bare host (`audiobooks.example.com`) is what ends up in a 1Password URL
@@ -131,7 +134,8 @@ export const config = {
   iuApiKey: required("IU_API_KEY"),
   iuBaseUrl,
   iuReplicateBaseUrl,
-  iuAnthropicBaseUrl,
+  /** Raw IU_ANTHROPIC_BASE_URL override; resolved lazily by `iuAnthropicUrl` via {@link deriveAnthropicBaseUrl}. */
+  iuAnthropicBaseUrlOverride: process.env["IU_ANTHROPIC_BASE_URL"],
   /**
    * IU Gemini (native `generateContent`) base, e.g. `.../gemini/v1beta`. Optional
    * at startup — only a Gemini TTS request needs it, so STT-only deployments boot

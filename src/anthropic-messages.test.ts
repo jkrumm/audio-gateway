@@ -46,6 +46,14 @@ describe("parseAnthropicStream", () => {
     });
   });
 
+  test("an SSE-shaped body with no valid event is unreadable, not an empty success", () => {
+    expect(parseAnthropicStream("data: [DONE]\n")).toEqual({ ok: false, reason: "SSE body carried no valid events" });
+    expect(parseAnthropicStream("data: {not json\ndata: 42\n: keepalive\n")).toEqual({
+      ok: false,
+      reason: "SSE body carried no valid events",
+    });
+  });
+
   test("a plain JSON message body yields its text blocks, stop reason and usage", () => {
     const body = JSON.stringify({
       content: [{ type: "thinking", thinking: "x" }, { type: "text", text: "Hi" }],
@@ -79,6 +87,17 @@ describe("callAnthropicMessages — unreadable 2xx bodies", () => {
     setFetch(async () => {
       calls++;
       return calls === 1 ? new Response("", { status: 200 }) : new Response(OK_STREAM, { status: 200 });
+    });
+    const result = await callAnthropicMessages(PARAMS);
+    expect(calls).toBe(2);
+    expect(result.ok && result.text).toBe("Hallo");
+  });
+
+  test("an SSE body of only junk is retried like an empty body", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return calls === 1 ? new Response("data: [DONE]\n", { status: 200 }) : new Response(OK_STREAM, { status: 200 });
     });
     const result = await callAnthropicMessages(PARAMS);
     expect(calls).toBe(2);

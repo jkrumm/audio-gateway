@@ -2,7 +2,7 @@
  * Hermetic tests for the podcast script writer. Stubs globalThis.fetch — no
  * network, no creds. See replicate-tts.test.ts for the shared env baseline.
  */
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +19,10 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
+const { log } = await import("./log");
+
 const {
+  extractJsonObject,
   parseChatCompletionStream,
   callPodcastLlm,
   planSegmentCount,
@@ -1402,6 +1405,45 @@ describe("German quote repair", () => {
     const raw = '```json\n{"turns":[{"speaker":"B","text":"Und dann: „Er ist halt nicht witzig.""},{"speaker":"A","text":"Den nehme ich so."}]}\n```';
     const turns = parseSegmentTurns(raw);
     expect(turns.map((t) => t.text)).toEqual(["Und dann: „Er ist halt nicht witzig.“", "Den nehme ich so."]);
+  });
+
+  test("a repaired parse logs a warn with an excerpt", () => {
+    const warn = spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      parseSegmentTurns('{"turns":[{"speaker":"B","text":"Und dann: „Er ist halt nicht witzig.""}]}');
+      expect(warn).toHaveBeenCalledTimes(1);
+      const fields = warn.mock.calls[0]?.[1] as { excerpt: string };
+      expect(fields.excerpt).toContain("nicht witzig.“");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("valid JSON does not log a repair warn", () => {
+    const warn = spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      parseSegmentTurns('{"turns":[{"speaker":"A","text":"Er sagte „hallo"}]}');
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("invalid JSON the repair cannot fix is returned as-is, and the error comes from parsing it", () => {
+    const warn = spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const raw = '{"turns":[{"speaker":"B","text":"Und dann: „Er ist halt nicht witzig.""},';
+      expect(extractJsonObject(raw)).toBe(raw.slice(0, raw.lastIndexOf("}") + 1));
+      expect(() => parseSegmentTurns(raw)).toThrow(SyntaxError);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("„ text with no ASCII quote to repair is untouched", () => {
+    const raw = '{"turns":[{"speaker":"A","text":"Er sagte „hallo“ und ging"}';
+    expect(extractJsonObject(raw)).toBe(raw);
   });
 
   test("valid JSON with a dangling „ is left untouched", () => {

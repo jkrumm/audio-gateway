@@ -288,7 +288,16 @@ export function extractJsonObject(raw: string): string {
 function repairGermanQuotes(json: string): string {
   if (!json.includes("„") || parses(json)) return json;
   const repaired = json.replace(/„([^"„“\n\\]*)"/g, "„$1“");
-  return parses(repaired) ? repaired : json;
+  if (!parses(repaired)) return json;
+  log.warn("podcast JSON repaired: German quote closed with an ASCII quote", { excerpt: repairExcerpt(json, repaired) });
+  return repaired;
+}
+
+/** A short slice of the repaired text around the first changed character, for the warn log. */
+function repairExcerpt(original: string, repaired: string): string {
+  let at = 0;
+  while (at < original.length && original[at] === repaired[at]) at++;
+  return repaired.slice(Math.max(0, at - 40), at + 40);
 }
 
 function parses(json: string): boolean {
