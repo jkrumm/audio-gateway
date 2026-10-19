@@ -33,6 +33,7 @@ const {
   pruneUnrequestedDevices,
   V3_PODCAST_TAGS,
 } = await import("./podcast-script");
+const { _sink: usageSink } = await import("./usage");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
 type EpisodeBrief = import("./podcast-types").EpisodeBrief;
 type Dossier = import("./podcast-types").Dossier;
@@ -1095,6 +1096,27 @@ describe("loadVoiceGuide", () => {
     }
     expect(warnings).toHaveLength(1);
   });
+
+  test("a non-ENOENT read error is logged as unreadable with its code, once per path, and still resolves to empty", async () => {
+    // A directory is not ENOENT: reading it fails with EISDIR.
+    const dir = mkdtempSync(join(tmpdir(), "audio-gateway-load-voice-test-dir-"));
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line: unknown) => {
+      if (typeof line === "string" && line.includes("podcast voice guide")) lines.push(line);
+    };
+    try {
+      expect(await loadVoiceGuide(dir)).toBe("");
+      expect(await loadVoiceGuide(dir)).toBe("");
+    } finally {
+      console.log = original;
+    }
+    expect(lines).toHaveLength(1);
+    const entry = JSON.parse(lines[0]!) as { msg: string; code: string };
+    expect(entry.msg).toContain("unreadable");
+    expect(entry.msg).not.toContain("not found");
+    expect(entry.code).toBe("EISDIR");
+  });
 });
 
 describe("parseChatCompletionStream", () => {
@@ -1255,6 +1277,31 @@ describe("callPodcastLlm — claude-* models use the native Anthropic Messages w
     });
     await callPodcastLlm({ ...baseParams, maxCompletionTokens: 44_000 });
     expect(maxTokens).toBe(44_000);
+  });
+
+  test("records the Claude stage's usage row: model key and token totals (cache reads/writes folded into input)", async () => {
+    const rows: Array<Record<string, unknown>> = [];
+    const original = usageSink.record.bind(usageSink);
+    (usageSink as { record: typeof usageSink.record }).record = (row) => {
+      rows.push(row as unknown as Record<string, unknown>);
+      return original(row);
+    };
+    try {
+      setFetch(async () => messagesStream());
+      await callPodcastLlm(baseParams);
+    } finally {
+      (usageSink as { record: typeof usageSink.record }).record = original;
+    }
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      endpoint: "podcast-segment",
+      model: "claude-opus-5-5",
+      status: 200,
+      // input 10 + cache read 5 + cache creation 2; output is the final message_delta total.
+      inputTokens: 17,
+      outputTokens: 42,
+      cachedTokens: 5,
+    });
   });
 
   test("returns only the text blocks, never the thinking block", async () => {

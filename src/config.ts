@@ -1,4 +1,4 @@
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { resolve } from "node:path";
 
 const required = (name: string): string => {
@@ -104,11 +104,20 @@ const iuReplicateBaseUrl = (
  * IU Anthropic (native Messages) base, e.g. `.../anthropic` — serves the podcast
  * writer when it is a `claude-*` id (`POST /v1/messages`). Optional env override
  * (IU_ANTHROPIC_BASE_URL); when unset it is DERIVED from IU_OPENAI_BASE_URL by
- * swapping a trailing `/openai/v1` for `/anthropic`.
+ * swapping a trailing `/openai/v1` for `/anthropic`. A base that does not end in
+ * `/openai/v1` cannot be derived from — fail at boot rather than silently pointing
+ * the Claude writer at the OpenAI route. Exported (pure) for tests.
  */
-const iuAnthropicBaseUrl = (
-  process.env["IU_ANTHROPIC_BASE_URL"] ?? iuBaseUrl.replace(/\/openai\/v1$/, "/anthropic")
-).replace(/\/+$/, "");
+export const deriveAnthropicBaseUrl = (explicit: string | undefined, openaiBase: string): string => {
+  if (explicit) return explicit.replace(/\/+$/, "");
+  if (!/\/openai\/v1$/.test(openaiBase)) {
+    throw new Error(
+      `Cannot derive IU_ANTHROPIC_BASE_URL: IU_OPENAI_BASE_URL must end in /openai/v1 (got "${openaiBase}"); set IU_ANTHROPIC_BASE_URL explicitly`,
+    );
+  }
+  return openaiBase.replace(/\/openai\/v1$/, "/anthropic").replace(/\/+$/, "");
+};
+const iuAnthropicBaseUrl = deriveAnthropicBaseUrl(process.env["IU_ANTHROPIC_BASE_URL"], iuBaseUrl);
 
 /**
  * A bare host (`audiobooks.example.com`) is what ends up in a 1Password URL
@@ -439,7 +448,7 @@ export const config = {
    * writing prompts (outline/segment/revision). Optional — a missing file logs one warning
    * and the episode is written from the show bible alone. Empty string disables it.
    */
-  podcastVoicePath: (process.env["PODCAST_VOICE_PATH"] ?? "~/SourceRoot/brain/voice.md").replace(/^~(?=\/|$)/, process.env["HOME"] ?? ""),
+  podcastVoicePath: (process.env["PODCAST_VOICE_PATH"] ?? "~/SourceRoot/brain/voice.md").replace(/^~(?=\/|$)/, homedir()),
   /** Replicate model id used to synthesize each podcast turn. */
   podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
   /** The two ElevenLabs voices, one per host, in host order. */

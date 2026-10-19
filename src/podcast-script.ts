@@ -226,22 +226,29 @@ export async function loadShowBible(path: string): Promise<string> {
   }
 }
 
-/** Voice-guide paths already reported missing — the warning is logged once per path, not once per prompt. */
-const warnedMissingVoice = new Set<string>();
+/** Voice-guide paths already reported (missing or unreadable) — the warning is logged once per path, not once per prompt. */
+const warnedVoicePaths = new Set<string>();
 
 /**
  * Load the owner's general voice guide (brain/voice.md). Optional: a missing
- * file logs ONE warning per path and resolves to an empty string, so the show
- * bible alone carries the episode. Read on every call, like `loadShowBible`.
- * Exported for tests.
+ * file (ENOENT) logs ONE "not found" warning per path; any other read error
+ * (permissions, EISDIR, …) is logged once per path as unreadable, with its
+ * error code. Either way it resolves to an empty string, so the show bible alone
+ * carries the episode — a voice guide must never fail an episode. Read on every
+ * call, like `loadShowBible`. Exported for tests.
  */
 export async function loadVoiceGuide(path: string): Promise<string> {
   try {
     return await Bun.file(path).text();
   } catch (err) {
-    if (!warnedMissingVoice.has(path)) {
-      warnedMissingVoice.add(path);
-      log.warn("podcast voice guide not found, continuing without it", { path, error: err instanceof Error ? err.message : String(err) });
+    if (warnedVoicePaths.has(path)) return "";
+    warnedVoicePaths.add(path);
+    const code = (err as NodeJS.ErrnoException).code;
+    const error = err instanceof Error ? err.message : String(err);
+    if (code === "ENOENT") {
+      log.warn("podcast voice guide not found, continuing without it", { path, error });
+    } else {
+      log.warn("podcast voice guide unreadable, continuing without it", { path, code: code ?? "unknown", error });
     }
     return "";
   }

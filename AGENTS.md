@@ -87,10 +87,10 @@ pipeline (both retired 2026-06-17).
   link); `/retry` is for generation failures only.
 - `src/anthropic-messages.ts` — the native Anthropic Messages wire on the IU Anthropic route
   (`config.iuAnthropicBaseUrl`: `IU_ANTHROPIC_BASE_URL`, else `IU_OPENAI_BASE_URL` with `/openai/v1`
-  swapped for `/anthropic`) for a `claude-*` podcast model: streamed, adaptive thinking +
+  swapped for `/anthropic`; boot fails if it cannot be derived) for a `claude-*` podcast model: streamed, adaptive thinking +
   `output_config: {effort: "high"}` (claude-opus-5-5 rejects `thinking.type.enabled` with a 400),
-  `max_tokens` floor 32000, `text` blocks only, 500/502/504 + retryable stream errors retried
-  (429/503 by `rawFetch`). `callPodcastLlm` dispatches on the `claude-` prefix; every other model
+  `max_tokens` floor 32000, `text` blocks only, 500/502/504 + retryable stream errors + empty/unparseable
+  2xx bodies + a 15-min per-attempt timeout retried (429/503 by `rawFetch`). `callPodcastLlm` dispatches on the `claude-` prefix; every other model
   stays on chat/completions.
 - `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
   dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,

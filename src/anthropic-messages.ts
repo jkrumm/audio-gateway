@@ -18,6 +18,8 @@ import { log } from "./log";
 const ANTHROPIC_VERSION = "2023-06-01";
 export const ANTHROPIC_MIN_MAX_TOKENS = 32_000;
 const ATTEMPTS = 3;
+/** Per attempt, covering the fetch AND the body read: a stalled adaptive-thinking stream must not hang the episode. */
+export const ATTEMPT_TIMEOUT_MS = 15 * 60_000;
 /** 429/503 are retried inside `rawFetch`; these are the other transient upstream statuses. */
 const RETRYABLE_STATUS = new Set([500, 502, 504]);
 /** SSE `error` event types that are transient (the call can simply be repeated). */
@@ -39,21 +41,67 @@ export interface AnthropicMessageResult {
   streamError?: { type: string; message: string };
 }
 
+/** A body that could not be read as a Messages response at all (empty, not JSON, wrong shape). */
+export type AnthropicParseResult = { ok: true; value: AnthropicMessageResult } | { ok: false; reason: string };
+
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+const asString = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+const asNumber = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+
+function tryParseJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+const USAGE_KEYS = ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"] as const;
+
+function mergeUsage(into: AnthropicUsage, from: unknown): void {
+  if (!isRecord(from)) return;
+  for (const key of USAGE_KEYS) {
+    const n = asNumber(from[key]);
+    if (n !== undefined) into[key] = n;
+  }
+}
+
+function toStreamError(raw: unknown): AnthropicMessageResult["streamError"] {
+  const error = isRecord(raw) ? raw : {};
+  return { type: asString(error["type"]) ?? "unknown", message: asString(error["message"]) ?? "" };
+}
+
+/** A plain (non-SSE) JSON body: a message, or a `{"type":"error"}` envelope delivered with HTTP 200. */
+function parseJsonMessage(body: string): AnthropicParseResult {
+  const json = tryParseJson(body);
+  if (!isRecord(json)) return { ok: false, reason: body.trim() === "" ? "empty body" : "body is not a JSON object" };
+  if (json["type"] === "error") {
+    return { ok: true, value: { text: "", stopReason: null, usage: {}, streamError: toStreamError(json["error"]) } };
+  }
+  const content = json["content"];
+  if (!Array.isArray(content)) return { ok: false, reason: "JSON body has no content array" };
+  const text = content
+    .filter(isRecord)
+    .filter((b) => b["type"] === "text")
+    .map((b) => asString(b["text"]) ?? "")
+    .join("");
+  const usage: AnthropicUsage = {};
+  mergeUsage(usage, json["usage"]);
+  return { ok: true, value: { text, stopReason: asString(json["stop_reason"]) ?? null, usage } };
+}
+
 /**
  * Parse a Messages response returned as an SSE stream (`stream: true`) into the
  * concatenated `text` blocks, stop reason and usage. Tolerates a plain
- * non-stream JSON body too (a proxy that ignores `stream`). Exported for tests.
+ * non-stream JSON body too (a proxy that ignores `stream`), including an
+ * `{"type":"error"}` envelope. Never throws: `[DONE]` and non-JSON `data:` lines
+ * are skipped, and an unreadable non-SSE body comes back as `{ok: false}`.
+ * Exported for tests.
  */
-export function parseAnthropicStream(body: string): AnthropicMessageResult {
+export function parseAnthropicStream(body: string): AnthropicParseResult {
   const trimmed = body.trimStart();
   if (!trimmed.startsWith("data:") && !trimmed.startsWith("event:") && !trimmed.startsWith(":")) {
-    const json = JSON.parse(body) as {
-      content?: Array<{ type: string; text?: string | null }>;
-      stop_reason?: string | null;
-      usage?: AnthropicUsage;
-    };
-    const text = (json.content ?? []).filter((b) => b.type === "text").map((b) => b.text ?? "").join("");
-    return { text, stopReason: json.stop_reason ?? null, usage: json.usage ?? {} };
+    return parseJsonMessage(body);
   }
 
   const textBlocks = new Set<number>();
@@ -61,51 +109,42 @@ export function parseAnthropicStream(body: string): AnthropicMessageResult {
   let stopReason: string | null = null;
   const usage: AnthropicUsage = {};
   let streamError: AnthropicMessageResult["streamError"];
-  const mergeUsage = (u: AnthropicUsage | undefined): void => {
-    if (!u) return;
-    for (const key of Object.keys(u) as Array<keyof AnthropicUsage>) {
-      if (typeof u[key] === "number") usage[key] = u[key];
-    }
-  };
 
   for (const line of body.split("\n")) {
     if (!line.startsWith("data:")) continue;
     const payload = line.slice("data:".length).trim();
-    if (!payload) continue;
-    const event = JSON.parse(payload) as {
-      type?: string;
-      index?: number;
-      message?: { usage?: AnthropicUsage };
-      content_block?: { type?: string; text?: string };
-      delta?: { type?: string; text?: string; stop_reason?: string | null };
-      usage?: AnthropicUsage;
-      error?: { type?: string; message?: string };
-    };
-    switch (event.type) {
+    if (!payload || payload === "[DONE]") continue;
+    const event = tryParseJson(payload);
+    if (!isRecord(event)) continue;
+    const index = asNumber(event["index"]);
+    const delta = isRecord(event["delta"]) ? event["delta"] : undefined;
+    switch (event["type"]) {
       case "message_start":
-        mergeUsage(event.message?.usage);
+        if (isRecord(event["message"])) mergeUsage(usage, event["message"]["usage"]);
         break;
-      case "content_block_start":
-        if (event.content_block?.type === "text" && event.index !== undefined) {
-          textBlocks.add(event.index);
-          text += event.content_block.text ?? "";
+      case "content_block_start": {
+        const block = isRecord(event["content_block"]) ? event["content_block"] : undefined;
+        if (block?.["type"] === "text" && index !== undefined) {
+          textBlocks.add(index);
+          text += asString(block["text"]) ?? "";
         }
         break;
+      }
       case "content_block_delta":
-        if (event.delta?.type === "text_delta" && event.index !== undefined && textBlocks.has(event.index)) {
-          text += event.delta.text ?? "";
+        if (delta?.["type"] === "text_delta" && index !== undefined && textBlocks.has(index)) {
+          text += asString(delta["text"]) ?? "";
         }
         break;
       case "message_delta":
-        if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
-        mergeUsage(event.usage);
+        stopReason = asString(delta?.["stop_reason"]) ?? stopReason;
+        mergeUsage(usage, event["usage"]);
         break;
       case "error":
-        streamError = { type: event.error?.type ?? "unknown", message: event.error?.message ?? "" };
+        streamError = toStreamError(event["error"]);
         break;
     }
   }
-  return { text, stopReason, usage, streamError };
+  return { ok: true, value: { text, stopReason, usage, streamError } };
 }
 
 export type AnthropicCallResult =
@@ -115,14 +154,17 @@ export type AnthropicCallResult =
 /**
  * One Messages call with adaptive thinking. A non-2xx response comes back as
  * `{ok: false}` (the caller records usage and throws); a transient failure — 500/502/504,
- * or a retryable stream `error` event — is repeated up to three times with backoff
- * (0.5s, 1.5s). 429/503 and transport errors are retried by `rawFetch`.
+ * a retryable stream `error` event, an empty/unparseable 2xx body, or an attempt that
+ * outlives `timeoutMs` (fetch AND body read) — is repeated up to three times with
+ * backoff (0.5s, 1.5s). 429/503 and transport errors are retried by `rawFetch`.
+ * `timeoutMs` is a test seam; production uses {@link ATTEMPT_TIMEOUT_MS}.
  */
 export async function callAnthropicMessages(params: {
   model: string;
   system: string;
   user: string;
   maxTokens: number;
+  timeoutMs?: number;
 }): Promise<AnthropicCallResult> {
   const body = JSON.stringify({
     model: params.model,
@@ -133,35 +175,59 @@ export async function callAnthropicMessages(params: {
     messages: [{ role: "user", content: params.user }],
     stream: true,
   });
+  const timeoutMs = params.timeoutMs ?? ATTEMPT_TIMEOUT_MS;
 
   for (let attempt = 1; ; attempt++) {
-    const res = await rawFetch(iuAnthropicUrl("/v1/messages"), {
-      method: "POST",
-      headers: iuHeaders({ "content-type": "application/json", "anthropic-version": ANTHROPIC_VERSION }),
-      body,
-    });
     const last = attempt >= ATTEMPTS;
+    const retry = async (reason: string, fields: Record<string, unknown>): Promise<void> => {
+      log.warn(`anthropic messages ${reason}, retrying`, { model: params.model, ...fields, attempt });
+      await Bun.sleep(500 * 3 ** (attempt - 1));
+    };
+
+    const signal = AbortSignal.timeout(timeoutMs);
+    let res: Awaited<ReturnType<typeof rawFetch>>;
+    try {
+      res = await rawFetch(iuAnthropicUrl("/v1/messages"), {
+        method: "POST",
+        headers: iuHeaders({ "content-type": "application/json", "anthropic-version": ANTHROPIC_VERSION }),
+        body,
+        signal,
+      });
+    } catch (err) {
+      if (!signal.aborted) throw err;
+      if (!last) {
+        await retry("attempt timed out", { timeoutMs });
+        continue;
+      }
+      return { ok: false, status: 504, errorText: `no complete response within ${Math.round(timeoutMs / 1000)}s (attempt ${attempt}/${ATTEMPTS})` };
+    }
 
     if (res.status < 200 || res.status >= 300) {
       // IU wraps an upstream 400 as a 503/5xx; a body naming `invalid_request_error` is deterministic.
       const retryable = RETRYABLE_STATUS.has(res.status) && !res.body.includes("invalid_request_error");
       if (retryable && !last) {
-        log.warn("anthropic messages transient error, retrying", { model: params.model, status: res.status, attempt });
-        await Bun.sleep(500 * 3 ** (attempt - 1));
+        await retry("transient error", { status: res.status });
         continue;
       }
       return { ok: false, status: res.status, errorText: res.body.slice(0, 500) };
     }
 
     const parsed = parseAnthropicStream(res.body);
-    if (parsed.streamError) {
-      if (RETRYABLE_STREAM_ERRORS.has(parsed.streamError.type) && !last) {
-        log.warn("anthropic messages stream error, retrying", { model: params.model, ...parsed.streamError, attempt });
-        await Bun.sleep(500 * 3 ** (attempt - 1));
+    if (!parsed.ok) {
+      if (!last) {
+        await retry("unreadable 2xx body", { reason: parsed.reason });
         continue;
       }
-      return { ok: false, status: 502, errorText: `${parsed.streamError.type}: ${parsed.streamError.message}`.slice(0, 500) };
+      return { ok: false, status: 502, errorText: `unreadable response (HTTP ${res.status}, ${parsed.reason}): ${res.body.slice(0, 200)}` };
     }
-    return { ok: true, status: res.status, ...parsed };
+    const { streamError } = parsed.value;
+    if (streamError) {
+      if (RETRYABLE_STREAM_ERRORS.has(streamError.type) && !last) {
+        await retry("stream error", { ...streamError });
+        continue;
+      }
+      return { ok: false, status: 502, errorText: `${streamError.type}: ${streamError.message}`.slice(0, 500) };
+    }
+    return { ok: true, status: res.status, ...parsed.value };
   }
 }

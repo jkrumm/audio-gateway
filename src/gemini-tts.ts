@@ -258,7 +258,8 @@ export async function rawFetch(url: string, init: RequestInit, attempts = 3): Pr
       // unexpectedly", which cost a 23-minute podcast job on 2026-09-02) — is
       // as transient as a 503 and gets the same backoff. The last attempt's
       // error propagates unchanged.
-      if (attempt >= attempts) throw err;
+      // A caller-aborted signal (timeout) stays aborted — retrying would only burn the backoff.
+      if (attempt >= attempts || init.signal?.aborted) throw err;
       recordRetry();
       await Bun.sleep(1000 * attempt);
     }

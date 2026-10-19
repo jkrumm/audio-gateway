@@ -279,7 +279,9 @@ chat/completions: `src/anthropic-messages.ts` POSTs to the IU Anthropic route
 `max_tokens` is `max(32000, writerBudget)`; only `text` blocks are returned,
 `stop_reason: max_tokens` (or an empty answer, i.e. thinking ate the budget)
 returns empty so `callAndParse` retries with the doubled budget. 500/502/504
-are retried with 0.5s/1.5s backoff, 429/503 by `rawFetch`.
+are retried with 0.5s/1.5s backoff, as are an empty/unparseable 200 body, a 200
+`{"type":"error"}` envelope with a retryable type, and an attempt that exceeds the
+15-minute per-attempt timeout (fetch and body read); 429/503 by `rawFetch`.
 
 The same holds for any reasoning model on chat/completions: claude-opus-4-6 (the
 previous voice owner) on the IU
