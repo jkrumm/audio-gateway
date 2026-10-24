@@ -19,7 +19,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { handleReplicateSpeech } = await import("./replicate-tts");
+const { handleReplicateSpeech, synthReplicateChunk } = await import("./replicate-tts");
 const { _sink: usageSink } = await import("./usage");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -169,6 +169,34 @@ describe("handleReplicateSpeech — success paths", () => {
     // config.ttsPrepModel defaults to gpt-6-luna, config.ttsPrepEffort to "low" —
     // the full prep call (no tools) sends reasoning_effort, unlike the summary call.
     expect(prepBody?.reasoning_effort).toBe("low");
+  });
+
+  test("elevenlabs/v3 never receives previous_text/next_text (the model rejects them)", async () => {
+    const sent: Array<{ previous_text?: string; next_text?: string }> = [];
+    setFetch(async (url, init) => {
+      const u = String(url);
+      if (u.includes("/predictions")) {
+        sent.push((JSON.parse(String(init?.body)) as { input: { previous_text?: string; next_text?: string } }).input);
+        return jsonRes({ id: "p-v3", status: "succeeded", output: DELIVERY_URL, metrics: { predict_time: 1 } });
+      }
+      if (u === DELIVERY_URL) return new Response(MOCK_MP3, { status: 200 });
+      throw new Error(`unexpected fetch: ${u}`);
+    });
+    await synthReplicateChunk({
+      model: "elevenlabs/v3",
+      chunk: { style: "", text: "Hallo." },
+      index: 0,
+      voice: "Roger",
+      languageCode: "de",
+      stability: 0.5,
+      style: 0,
+      similarityBoost: 0.75,
+      previousText: "Davor.",
+      nextText: "Danach.",
+    });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.previous_text).toBeUndefined();
+    expect(sent[0]?.next_text).toBeUndefined();
   });
 
   test("previous_text/next_text wiring for 2 chunks (long prep-off input, sentence-split)", async () => {

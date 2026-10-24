@@ -95,6 +95,15 @@ function splitNoPrep(input: string): PrepResult {
   return { lang, title: fallbackTitle(input, de), chunks };
 }
 
+/**
+ * Whether `model` accepts `previous_text`/`next_text`. ElevenLabs v3 on Replicate rejects both since
+ * 2026-10-24 ("Providing previous_text or next_text is not yet supported with the 'eleven_v3' model"),
+ * failing the whole podcast synth stage; flash/turbo v2.5 still take them.
+ */
+export function supportsContinuity(model: string): boolean {
+  return !model.startsWith("elevenlabs/v3");
+}
+
 /** Whether `model` (or a listed prefix of it) is in `config.ttsReplicatePrepModels`. */
 export function wantsPrep(model: string): boolean {
   const listed = config.ttsReplicatePrepModels.split(",").map((s) => s.trim()).filter(Boolean);
@@ -326,8 +335,8 @@ export async function synthReplicateChunk(params: ReplicateChunkParams): Promise
         style: params.style,
         similarity_boost: params.similarityBoost,
         ...(speed !== undefined && { speed }),
-        ...(params.previousText && { previous_text: params.previousText }),
-        ...(params.nextText && { next_text: params.nextText }),
+        ...(supportsContinuity(params.model) && params.previousText && { previous_text: params.previousText }),
+        ...(supportsContinuity(params.model) && params.nextText && { next_text: params.nextText }),
       };
 
       const start = Date.now();
