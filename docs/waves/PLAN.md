@@ -72,18 +72,24 @@ comparison section after it (commits df147cc, cb5909e); 62 samples on modelpick 
 - **Spend vs cap — over by ~$0.45:** research $0.91 (two deep runs: $0.42 + $0.49), IU probes ~$0.17, audition ~$0.38 (TTS $0.23 + STT round trips) ≈ **$1.46 vs the $1 cap**. The deep research alone was the overrun; W2–W4 caps unchanged but W2 needs no research.
 - Gate: modelpick `tsc --noEmit` clean, oxlint warnings only (no-console in scripts, pre-existing style). No `/review` run on the modelpick diff (script + page section + doc, no shared path).
 
-## Wave 2 — audio-gateway chat + briefing lanes on 3.8            <!-- status: active -->
-- [ ] Gemini lane to 3.8 conventions per `docs/gemini-tts.md`: no spoken style prefix; style via the
+## Wave 2 — audio-gateway chat + briefing lanes on 3.8            <!-- status: done -->
+- [x] Gemini lane to 3.8 conventions per `docs/gemini-tts.md`: no spoken style prefix; style via the
       field/tags that W1 proved on IU; prep prompt rewritten for the 3.8 tag vocabulary; voice Charon
-- [ ] Streaming: `/v1/audio/speech` passes Gemini PCM through progressively (chunked) for clients that
+- [x] Streaming: `/v1/audio/speech` passes Gemini PCM through progressively (chunked) for clients that
       read progressively (`response_format: pcm`, and mp3 if feasible); whole-file path unchanged
-- [ ] Lane routing: chat → `gemini-3.8-flash-lite-tts` (prep off), briefing → `gemini-3.8-flash-tts`
+- [x] Lane routing: chat → `gemini-3.8-flash-lite-tts` (prep off), briefing → `gemini-3.8-flash-tts`
       (prep on); usage rates in `src/usage.ts`; ElevenLabs lane kept as fallback by model id
-- [ ] Tests, `make check`, `/review`; push (no podcast job running); verify on prod: first-byte latency,
+- [x] Tests, `make check`, `/review`; push (no podcast job running); verify on prod: first-byte latency,
       German output via `gpt-transcribe` round trip, HyperDX trace, usage rows
 **Left behind:**
+- **Shipped** (6091221 + span fix, pushed, VPS deploy green): Gemini lane on 3.8 — `speechMetadata.style` (no spoken prefix), unary asks `AUDIO_L16`, no `temperature`; prep prompts rewritten (≤~1,000-char sentence-aligned chunks, constant `PREP_STYLE` "calm, warm, conversational", `<short pause>`/`<long pause>`/`<laugh>`/`<sigh>`, spoken-form numbers; a prep style over 60 chars is replaced). Default `TTS_MODEL` = `gemini-3.8-flash-lite-tts` (prep off, deterministic `normalizeForSpeech` only); `TTS_GEMINI_PREP_MODELS` = `gemini-3.8-flash-tts` (prep on). `TTS_PREP`/`summarize` gating unchanged on top. `TTS_CHUNK_MAX_BYTES` 1800 → 1100. ElevenLabs lane untouched, still selected by `owner/name` id. Rates in `src/usage.ts` (lite 0.5/6, flash 0.5/9 per 1M, intro through 2026-12-31). 3.1 rate row kept until its 2026-11-17 shutdown.
+- **Streaming:** `response_format: pcm` → `streamGenerateContent?alt=sse`, sample-aligned passthrough, 400 ms silence join, pull-based backpressure (256 KiB), 60 s idle guard, 429/503 + transport retry before the first byte, in-band error / unparseable event fails the stream. Pre-first-byte failure = normal HTTP error; later = aborted chunked body. Billed from duration × 25 tokens/s. `streamSettled(response)` (WeakMap) lets `speech.ts` record the `speech-request` row when the body ends and `index.ts` hold the shutdown drain. **mp3 is NOT streamed** (decision: Slack/file clients need a complete body + `X-Audio-Title`; a progressive reader asks for pcm). W3/W4: Hermes streaming clients must send `pcm`.
+- **Prod verification (VPS, no bearer needed):** lite pcm TTFB 0.73 s, total 1.8 s for 8 s of audio; flash + prep TTFB 2.7 s (prep LLM ~2 s dominates), total 4.5 s. `gpt-transcribe` round trip: German verbatim both models (digits/"Uhr" normalised by STT only). HyperDX: `audio.speech` + child `audio.synth.stream` (`audio.first_byte_ms` 641 / 991 ms), usage rows with `audio_seconds` + tokens = seconds × 25, `tts.first_byte` log. Whole-file mp3 still returns `audio/mpeg` + `X-Audio-Title`.
+- **Review:** two `/review` passes; fixed shutdown drain, chunk status on failure/cancel, backpressure, SSE error/garbled events, idle guard, retry hint/transport retry, markdown normalisation on the no-prep path, root-span enrichment. Left as is (judgement): explicit `{response, settled}` return instead of the WeakMap; header-wait timeout on stream open (idle rule only); `audio.speech` span duration for streams is handler time (stream time is on the child span); senior-dev/concurrency angles failed to run (shell denied) in both passes.
+- **Spend:** ~$0.03 (two live probes + three prod requests + STT round trips) vs $1 cap.
+- **Not done / for W3:** the mini was not redeployed (podcasts use ElevenLabs v3 until W3; `make deploy` there with W3). Podcast `PODCAST_TTS_MODEL` unchanged. Owner confirmed Charon as main voice; the **co-host voice pick is still open and must be made before W3 starts** (shortlist in W1 Left behind).
 
-## Wave 3 — Podcasts on 3.8 multi-speaker            <!-- status: pending -->
+## Wave 3 — Podcasts on 3.8 multi-speaker            <!-- status: active -->
 - [ ] Owner-chosen co-host voice in config; script writer emits the 3.8 tag vocabulary instead of v3 tags
 - [ ] Synth via `multiSpeakerVoiceConfig` in chunks within the token limits, keeping chapter timestamps,
       per-host loudness and pacing (replace v3 `speed` with what W1 found works)
