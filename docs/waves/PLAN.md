@@ -134,3 +134,33 @@ chat/briefing cutover does not depend on it.
 - **modelpick:** `tts` stack pick -> `gemini-3.8-flash-lite-tts`; deployments rows (hermes tts, tts-default, podcast-tts) updated, `verify-deployments --update` stamped; 5 unrelated rows were already broken (claude-code interactive-iu, agent-gateway adversary/dispatch_implement(+escalation), hermes vision) — untouched. Decision record has the verdict section with W3's numbers and the episode. The modelpick commit also swept in a pre-existing uncommitted `docs/waves/PLAN.md` edit.
 - **Spend:** ~$0.8 (episode $0.78 + a few probes) vs $4 cap.
 - **stopped: plan complete** — last wave, no next wave spawned.
+
+## Wave 5 — 3.8 quality hardening (owner questions, 2026-10-25)            <!-- status: active -->
+Added after the cutover. The STT comparison runs in modelpick at the same time (`modelpick-w1`): do NOT edit
+modelpick `docs/decisions/audio-stack.md` or anything under `/stt`; you may edit modelpick `docs/gemini-tts.md`,
+`scripts/tts-*.ts` and the TTS manifest/page. `git pull --rebase` before every modelpick commit. Spend cap **$1**.
+- [ ] **Chunk length, measured — not assumed.** Podcasts send ≤3,000 chars per multi-speaker request
+      (`PODCAST_MULTISPEAKER_MAX_CHARS`), never tested on IU; field reports drift after 1.5–3 min and a seam every
+      ~1,900 chars. Render the same distinct German two-host material at ~1,000 / 1,500 / 2,000 / 3,000 chars per
+      request (and single-speaker at 1,000 / 1,500 / 2,000). Measure dropped/added words (gpt-transcribe round trip vs
+      input), speaker attribution (diarizing STT on IU, e.g. `gpt-4o-transcribe-diarize` or Scribe v2), loudness and
+      pitch drift per 10 s window, and audible seams. Set the defaults from the data; record the table in
+      `docs/gemini-tts.md` §Limits and chunking. Listening samples on modelpick `/tts`
+- [ ] **English words in German speech.** No SSML language tag exists. A/B on Charon + Erinome with a German passage
+      full of English terms (Deployment, Pull Request, Claude Code, Meeting, Feature, Release, Cloud, brand names):
+      (a) plain, (b) a style hint (e.g. "English technical terms pronounced in English"), (c) a writer/prep rule that
+      keeps established German loanwords German and marks true English terms — whatever the docs/field suggest. Samples
+      for the owner to judge; implement the winner in the briefing prep prompt + podcast writer prompt (+ chat lane if a
+      style hint is cheap)
+- [ ] **Numbers and data.** A/B: digits vs spelled out vs rounded spoken form ("rund vier Millionen") for dates, times,
+      money, percentages, versions; chat lane (`normalizeForSpeech`, no prep) vs prep output. Writer/prep rules for
+      data-dense passages (round, compare, one number per sentence, the "speaking slowly and clearly" style) — check
+      what the podcast writer prompt already has before adding. Samples for the owner; implement what wins
+- [ ] **Briefing prep tag allowlist in code:** the prep prompt allows `<short pause>` `<long pause>` `<laugh>` `<sigh>`
+      but nothing strips an invented tag (`src/gemini-tts.ts` has no sanitizer; podcasts do — `stripDisallowedTags`).
+      Share one allowlist + sanitizer for both lanes, with tests
+- [ ] **Re-measure `WORDS_PER_MINUTE`** (still the v3 140 wpm) on 3.8 from the test episode job 10a620e1 and the
+      chunk-length renders; update with the measurement in the comment
+- [ ] Gate: `make check`, `/review`; push only when no podcast job runs on the VPS or mini; `make deploy` on the mini
+      (no job running); verify one briefing + one short podcast render on the new defaults
+**Left behind:**
