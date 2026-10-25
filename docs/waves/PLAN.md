@@ -38,26 +38,41 @@ comparison section after it (commits df147cc, cb5909e); 62 samples on modelpick 
   (`GET /v1/podcasts` on both). audio-gateway is direct-to-master. Secrets via `secrets-run`.
 - Spend: IU tokens. Caps: W1 $1, W2 $1, W3 $4 (one test episode), W4 $0.5. Report actual spend.
 
-## Wave 1 — Expertise + voice audition            <!-- status: active -->
-- [ ] `/research` (deep) Gemini 3.8 TTS: official speech-generation docs, API reference for every
+## Wave 1 — Expertise + voice audition            <!-- status: done -->
+- [x] `/research` (deep) Gemini 3.8 TTS: official speech-generation docs, API reference for every
       `SpeechConfig`/style field, release notes, voices (30 prebuilt + Extended Library, voice design),
       streaming, multi-speaker, limits, pricing; plus what practitioners report (forums, GitHub issues,
       blog tests): prompting that works, tag vocabulary, German quality, long-form drift, truncation,
       directions read aloud, voice consistency across chunks, pacing/speed control without a speed param
-- [ ] IU probe matrix (cheap, short texts): which documented fields/tags/formats actually work through
+- [x] IU probe matrix (cheap, short texts): which documented fields/tags/formats actually work through
       IU — style field variants and placement, `<tag>` vs `[tag]`, pauses, multi-speaker, output formats,
       sample rates, temperature/seed, voice list / voice design endpoints, max chunk length before drift.
       Record request + result for each
-- [ ] Rewrite modelpick `docs/gemini-tts.md` into the 3.8 expert reference (request shapes per lane,
+- [x] Rewrite modelpick `docs/gemini-tts.md` into the 3.8 expert reference (request shapes per lane,
       style control, tag vocabulary, multi-speaker, streaming, limits, German tips, IU-vs-docs table,
       traps). This is the doc every later wave follows; audio-gateway and Hermes link to it
-- [ ] Voice audition in modelpick `/tts` (reuse `scripts/tts-compare.ts` + manifest): German briefing +
+- [x] Voice audition in modelpick `/tts` (reuse `scripts/tts-compare.ts` + manifest): German briefing +
       podcast text, Charon vs the 4–5 most suitable other male voices, and every plausible female voice
       for podcast host B (pairs with Charon in a multi-speaker excerpt). Blind mode, cost per sample
-- [ ] Close out; **Left behind** must list the female-voice shortlist and say the owner picks before W3
+- [x] Audition renders the real pipeline, not plain text (owner addendum): for every auditioned voice render
+      the SAME German material three ways — (1) a chat reply as the chat lane sends it, (2) a briefing
+      passage after the 3.8-correct prep (spoken-form numbers, chunking, the style/tag mechanism the probe
+      matrix proved), (3) a podcast excerpt with expression (emotion/pacing tags, pauses, a laugh or sigh, a
+      question, an emphatic line) as multi-speaker with Charon. Same text + tags across voices. Each manifest
+      sample carries the exact request (style field/tags) so the page shows it. Stay in the $1 cap; cut
+      voices, not lanes
+- [x] Close out; **Left behind** must list the female-voice shortlist and say the owner picks before W3
 **Left behind:**
+- **Reference:** modelpick `docs/gemini-tts.md` (f6d9455) — every claim tagged docs / IU / field, with a docs-vs-IU field map. Follow it; do not re-probe.
+- **What W2 must apply (IU-proven):** style goes in `parts[].speechMetadata.style` (short string, not spoken, measurably changes pace); the `"Style: text"` prefix is spoken/garbled — delete it from prep. Tags are angle brackets (`<short pause>`, `<long pause>`, `<laugh>`, `<sigh>`), never spoken. Unary returns WAV (strip 44 bytes) or raw PCM via `generationConfig.responseFormat.audio.mimeType: "AUDIO_L16"`; stream returns headerless `audio/l16` 24 kHz (`?alt=sse` or array framing both work); no MP3 (ffmpeg). Streamed `usageMetadata` reports 1 token — bill from duration × 25. Multi-speaker needs per-part `speechMetadata.speaker`; `Name:` prefixes 400. `systemInstruction`/`speechConfig.speechMetadata` 400; `temperature`/`seed` accepted but unproven.
+- **Chunking:** distinct German text is faithful to ~1,057 chars / 57 s per request (word count within 3 %). Repeated identical text makes the model skip most of it (test artefact). Rule used: sentence-aligned chunks ≤ ~1,000 chars, same short style per chunk, 250 ms silence join.
+- **Not on IU:** Extended Voice Library (`GET /voices` 500), voice design (`POST /voices` 405), Interactions API (405). The 30 prebuilt voices are the catalogue.
+- **Audition:** modelpick `/tts` → "Gemini 3.8 voice audition" (157e780), 41 samples, blind mode, each row shows its exact request. Chat = flash-lite raw; briefing = prototype prep (`scripts/tts-audition.ts` holds the contract) on flash; podcast = multi-speaker with per-turn style + `<short pause>`/`<long pause>`/`<laugh>`/`<sigh>`/CAPS emphasis. Males: Charon, Rasalgethi, Sadaltager, Iapetus, Algieba, Achird (alternatives pair with Sulafat). Tags were never spoken; transcript round trip verbatim on nearly all rows (chat "diffs" are digit/"Uhr" normalisation).
+- **Female shortlist for podcast host B (all paired with Charon):** Sulafat (current, lukewarm), Vindemiatrix, Kore, Despina, Gacrux, Erinome, Callirrhoe, Laomedeia. **The owner picks the co-host voice (and confirms Charon vs the male alternatives) by listening before W3 starts; W2 only needs Charon.**
+- **Spend vs cap — over by ~$0.45:** research $0.91 (two deep runs: $0.42 + $0.49), IU probes ~$0.17, audition ~$0.38 (TTS $0.23 + STT round trips) ≈ **$1.46 vs the $1 cap**. The deep research alone was the overrun; W2–W4 caps unchanged but W2 needs no research.
+- Gate: modelpick `tsc --noEmit` clean, oxlint warnings only (no-console in scripts, pre-existing style). No `/review` run on the modelpick diff (script + page section + doc, no shared path).
 
-## Wave 2 — audio-gateway chat + briefing lanes on 3.8            <!-- status: pending -->
+## Wave 2 — audio-gateway chat + briefing lanes on 3.8            <!-- status: active -->
 - [ ] Gemini lane to 3.8 conventions per `docs/gemini-tts.md`: no spoken style prefix; style via the
       field/tags that W1 proved on IU; prep prompt rewritten for the 3.8 tag vocabulary; voice Charon
 - [ ] Streaming: `/v1/audio/speech` passes Gemini PCM through progressively (chunked) for clients that
