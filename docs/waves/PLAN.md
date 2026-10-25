@@ -111,19 +111,26 @@ chat/briefing cutover does not depend on it.
 - **Not exercised live:** the desktop WebSocket (`speak-stream`) end to end and a real Slack post — both use the same streamer / tool function tested above. No `/review` (config + docs only, no code).
 - **Spend:** ~$0.03 vs $0.5 cap. Podcast co-host voice pick is still open for W4.
 
-## Wave 4 — Podcasts on 3.8 multi-speaker + one source of truth            <!-- status: active -->
-- [ ] Co-host voice: owner picked **Erinome** (2026-10-25), host A stays **Charon**. Config + script writer emits the
+## Wave 4 — Podcasts on 3.8 multi-speaker + one source of truth            <!-- status: done -->
+- [x] Co-host voice: owner picked **Erinome** (2026-10-25), host A stays **Charon**. Config + script writer emits the
       3.8 tag vocabulary instead of v3 tags
-- [ ] **C2PA bug (found by the owner's ear, 2026-10-25):** a 3.8 unary WAV carries a trailing `C2PA` chunk (~6 KB,
+- [x] **C2PA bug (found by the owner's ear, 2026-10-25):** a 3.8 unary WAV carries a trailing `C2PA` chunk (~6 KB,
       content credentials) after `data`; code that strips 44 bytes and keeps the rest plays it as ~0.13 s of loud
       noise. Prod is clean today only because unary asks `AUDIO_L16`. Make `stripWavHeader` (`src/gemini-tts.ts`)
       parse RIFF chunks and return only the `data` chunk, with a test; podcast synth must use `AUDIO_L16` or the
       same parser. Note the trap in modelpick `docs/gemini-tts.md` and fix `scripts/tts-audition.ts` (`wavPcm`)
-- [ ] Synth via multi-speaker (per-part `speechMetadata.speaker`, see `docs/gemini-tts.md`) in chunks within
+- [x] Synth via multi-speaker (per-part `speechMetadata.speaker`, see `docs/gemini-tts.md`) in chunks within
       the limits, keeping chapter timestamps, per-host loudness and pacing (replace v3 `speed` with the
       style-driven pace W1 measured)
-- [ ] Tests, `make check`, `/review`; `make deploy` on the mini (no job running); one short test episode
+- [x] Tests, `make check`, `/review`; `make deploy` on the mini (no job running); one short test episode
       published to Audiobookshelf for the owner to listen to; cost recorded. Spend cap $4
-- [ ] modelpick: `MY_STACK` tts pick, `src/db/deployments.ts` rows, `bun run verify-deployments --update`,
+- [x] modelpick: `MY_STACK` tts pick, `src/db/deployments.ts` rows, `bun run verify-deployments --update`,
       decision record verdict section with W3's end-to-end numbers and the episode
 **Left behind:**
+- **Shipped** (audio-gateway f2b50f4, modelpick 3f6ffd5, both pushed; mini redeployed with no job running): podcast default `gemini-3.8-flash-tts`, voices Charon + Erinome, `unitsForMultiSpeaker` runs (<= 3000 chars, never across a segment) as one two-speaker request each (`synthMultiSpeaker`, `AUDIO_L16`); writer/editor prompts and `sanitizeTurns` use the angle-bracket 3.8 tags (`PODCAST_TAGS`, legacy `[v3]` tags stripped; `stripMarkdown` no longer eats `>`). ElevenLabs per-turn lane kept, selected by an `owner/name` model id (voice default follows the lane).
+- **C2PA fixed:** `stripWavHeader` walks RIFF chunks and returns only `data` (tests with a trailing 6 KB chunk, odd padding, raw passthrough, no-data throw). Trap noted in modelpick `docs/gemini-tts.md` §IU-vs-docs #7; `scripts/tts-audition.ts` `wavPcm` fixed. The test episode's tail level matches its body (no noise spike).
+- **Test episode** (Audiobookshelf "Brain Sonderausgabe", "Ein Gateway vor den Modellen", 3:07, 14 turns, 3 chapters): $0.78 all-in. **The owner still has to listen** — co-host pairing, pacing and the unmeasured WPM on 3.8 (`WORDS_PER_MINUTE` 140 is the v3 figure) are ear calls.
+- **Trade-offs to know:** host loudness is levelled per run, not per host (runs hold both voices); dense turns slow via the style string "speaking slowly and clearly" only. Review (gateway, clean): applied voice-default-by-lane, no retry on 4xx, run label by distinct speakers; left as is: the run-first-text gap proxy (gap keys on the NEXT run's first turn, which is correct), the `synthesizeEpisode` extraction. senior-dev angle did not run.
+- **modelpick:** `tts` stack pick -> `gemini-3.8-flash-lite-tts`; deployments rows (hermes tts, tts-default, podcast-tts) updated, `verify-deployments --update` stamped; 5 unrelated rows were already broken (claude-code interactive-iu, agent-gateway adversary/dispatch_implement(+escalation), hermes vision) — untouched. Decision record has the verdict section with W3's numbers and the episode. The modelpick commit also swept in a pre-existing uncommitted `docs/waves/PLAN.md` edit.
+- **Spend:** ~$0.8 (episode $0.78 + a few probes) vs $4 cap.
+- **stopped: plan complete** — last wave, no next wave spawned.
