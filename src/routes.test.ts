@@ -689,3 +689,38 @@ describe("AUDIO_CALLER_TOKENS: header-free caller identification", () => {
     expect(attr(root, "audio.caller")).toEqual({ stringValue: "argo-dashboard" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// pcm streaming through the router: the span is enriched at return, the summary row after the body
+// ---------------------------------------------------------------------------
+
+describe("Gemini pcm streaming through handleRequest", () => {
+  test("root span carries lane/model at return; speech-request row lands only after the body ends", async () => {
+    const spans = captureSpans();
+    stubFetch(async () => {
+      const event = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from(new Uint8Array(4800)).toString("base64") } }] } }] })}\n\n`;
+      return new Response(event, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+
+    const res = await handleRequest(
+      authed(new Request("http://localhost/v1/audio/speech", {
+        method: "POST",
+        body: JSON.stringify({ input: "Hallo Welt.", response_format: "pcm" }),
+        headers: { "content-type": "application/json" },
+      })),
+    );
+    expect(res.status).toBe(200);
+    expect(capturedRows.some((r) => r["endpoint"] === "speech-request")).toBe(false);
+
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(bytes.byteLength).toBe(4800);
+    await Bun.sleep(20); // let the settled callback run
+
+    const summary = capturedRows.find((r) => r["endpoint"] === "speech-request");
+    expect(summary?.["status"]).toBe(200);
+    expect(summary?.["audio_seconds"]).toBeCloseTo(0.1, 5);
+    const root = spans.find((s) => s.name === "audio.speech");
+    expect(attr(root, "audio.lane")).toEqual({ stringValue: "gemini" });
+    expect(attr(root, "audio.streamed")).toEqual({ boolValue: true });
+  });
+});

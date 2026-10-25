@@ -143,7 +143,7 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
    * the same way — the single point every dispatch path (lane success, lane
    * throw, passthrough) funnels through.
    */
-  const recordSpeechRequest = (status: number, errorText?: string | null): void => {
+  const recordSpeechRequest = (status: number, errorText?: string | null, opts: { spanEnriched?: boolean } = {}): void => {
     const meta = getRequestMeta();
     const latencyMs = Date.now() - requestStart;
     recordUsage({
@@ -167,6 +167,25 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
       errorText: errorText ?? null,
     });
 
+    if (!opts.spanEnriched) enrichSpan(status, errorText);
+    if (status < 400) {
+      log.info("tts.done", {
+        model: route.model,
+        provider: route.provider,
+        lane: meta.lane,
+        caller,
+        latencyMs,
+        inputChars,
+        audioSeconds: meta.audioSeconds ?? null,
+        bytesOut: meta.bytesOut ?? null,
+        inflight,
+      });
+    }
+  };
+
+  /** Enrich the root span (audio.speech) from the request meta accumulated so far. */
+  const enrichSpan = (status: number, errorText?: string | null): void => {
+    const meta = getRequestMeta();
     const span = getActiveSpan();
     span.setAttributes({
       "audio.model": route.model,
@@ -194,19 +213,6 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
       "audio.chars_billed": route.provider === "replicate" ? meta.charsBilled : undefined,
     });
     if (status >= 500) span.setStatus("error", errorText ?? undefined);
-    if (status < 400) {
-      log.info("tts.done", {
-        model: route.model,
-        provider: route.provider,
-        lane: meta.lane,
-        caller,
-        latencyMs,
-        inputChars,
-        audioSeconds: meta.audioSeconds ?? null,
-        bytesOut: meta.bytesOut ?? null,
-        inflight,
-      });
-    }
   };
 
   if (route.provider === "gemini" || route.provider === "replicate") {
@@ -234,10 +240,13 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
         recordSpeechRequest(response.status);
         return response;
       }
+      // The root span ends when this handler returns, so it is enriched now (audio seconds and
+      // first-byte live on the child audio.synth.stream span); only the usage row waits for the body.
+      enrichSpan(response.status);
       getActiveSpan().setAttributes({ "audio.streamed": true });
       settled.then(
-        () => recordSpeechRequest(response.status),
-        (err: unknown) => recordSpeechRequest(500, (err instanceof Error ? err.message : String(err)).slice(0, 500)),
+        () => recordSpeechRequest(response.status, null, { spanEnriched: true }),
+        (err: unknown) => recordSpeechRequest(500, (err instanceof Error ? err.message : String(err)).slice(0, 500), { spanEnriched: true }),
       );
       return response;
     } catch (err) {
