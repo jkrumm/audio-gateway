@@ -462,10 +462,25 @@ export const config = {
    * and the episode is written from the show bible alone. Empty string disables it.
    */
   podcastVoicePath: (process.env["PODCAST_VOICE_PATH"] ?? "~/SourceRoot/brain/voice.md").replace(/^~(?=\/|$)/, homedir()),
-  /** Replicate model id used to synthesize each podcast turn. */
-  podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "elevenlabs/v3",
-  /** The two ElevenLabs voices, one per host, in host order. */
-  podcastVoices: pairOf2("PODCAST_VOICES", "Mark,Sarah"),
+  /**
+   * Podcast synth model. A `gemini-*` id runs the 3.8 multi-speaker lane (runs of turns per
+   * request); an `owner/name` Replicate id runs the ElevenLabs per-turn fallback (then set
+   * PODCAST_VOICES to ElevenLabs voices, e.g. "Mark,Sarah").
+   */
+  podcastTtsModel: process.env["PODCAST_TTS_MODEL"] ?? "gemini-3.8-flash-tts",
+  /** The two voices, one per host, in host order (Gemini prebuilt: Charon + Erinome, owner pick 2026-10-25). */
+  podcastVoices: pairOf2(
+    "PODCAST_VOICES",
+    // The default follows the lane, so setting only PODCAST_TTS_MODEL never pairs one vendor's model with the other's voices.
+    (process.env["PODCAST_TTS_MODEL"] ?? "gemini-3.8-flash-tts").startsWith("gemini-") ? "Charon,Erinome" : "Mark,Sarah",
+  ),
+  /** Constant per-host delivery string for the 3.8 lane (it has no speed parameter); keep it short and identical across requests. */
+  podcastHostStyles: [
+    process.env["PODCAST_HOST_STYLE_A"] ?? "warm, conversational",
+    process.env["PODCAST_HOST_STYLE_B"] ?? "warm, conversational",
+  ] as [string, string],
+  /** Max characters per multi-speaker request (docs/gemini-tts.md §Limits: voice swaps grow with chunk length). */
+  podcastMultiSpeakerMaxChars: num("PODCAST_MULTISPEAKER_MAX_CHARS", 3000),
   /** Display names for the two hosts, in the same order as `podcastVoices`. */
   podcastHostNames: pairOf2("PODCAST_HOST_NAMES", "Jonas,Lena"),
   /** Default episode length when a request doesn't specify one. */
@@ -478,7 +493,8 @@ export const config = {
    */
   podcastStability: num("PODCAST_STABILITY", 0.5),
   /**
-   * Per-host ElevenLabs `speed` (0.7–1.2), same order as `podcastVoices`. Mark
+   * Per-host ElevenLabs `speed` (0.7–1.2) — fallback lane only; the 3.8 lane paces through
+   * `podcastHostStyles`. Same order as `podcastVoices`. Mark
    * measured ~151 wpm against Sarah's ~138 on the same line (2026-09-02), and
    * the listener heard it — a notch under 1 evens the pair out.
    */

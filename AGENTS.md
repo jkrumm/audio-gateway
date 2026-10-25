@@ -116,11 +116,15 @@ pipeline (both retired 2026-06-17).
   prompts only — the show bible overrides it for spoken audio. The write model defaults to
   `claude-opus-5-5` (`PODCAST_WRITE_MODEL`; `claude-opus-4-6` is the one-line rollback). Only tag vocabulary, turn
   ceilings and segment bounds are enforced in code (`sanitizeTurns`).
-- `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes each on the
-  Replicate/ElevenLabs lane, reusing `replicate-tts.ts`'s per-chunk synth+decode. `turnsForSynthesis`
-  also does number-density pacing: a turn thick with figures (`numberDensity`) is synthesized a notch
-  slower (`config.podcastDenseTurnThreshold`/`podcastDenseTurnSlowdown`) — ElevenLabs v3 has no SSML
-  breaks, so `speed` is the only lever.
+- `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes them. Default
+  lane (`PODCAST_TTS_MODEL=gemini-3.8-flash-tts`, voices Charon + Erinome): `unitsForMultiSpeaker` packs
+  consecutive turns (≤ `PODCAST_MULTISPEAKER_MAX_CHARS`, never across a segment) into runs, each one
+  two-speaker request (`gemini-tts.ts` `synthMultiSpeaker`, per-part `speechMetadata.speaker`/`style`,
+  `AUDIO_L16`); audio comes back per run, so chapters key on runs and host loudness levels per run.
+  Pacing = constant per-host style (`PODCAST_HOST_STYLE_A/B`), number-dense turns get `DENSE_TURN_STYLE`.
+  Fallback lane: an `owner/name` model id runs ElevenLabs per turn via `replicate-tts.ts` (set
+  `PODCAST_VOICES`, `speed` is the only pace lever). Reference: modelpick `docs/gemini-tts.md`.
+  `stripWavHeader` parses RIFF chunks — 3.8 WAVs carry a trailing C2PA chunk that is noise if kept.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
   (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
 - `src/cover.ts` — episode cover art via the image-gateway; best-effort, never fails a job.

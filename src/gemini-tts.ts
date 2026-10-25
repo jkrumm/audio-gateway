@@ -399,10 +399,22 @@ export function synthBody(voiceName: string, chunk: PrepChunk, opts: { rawPcm: b
   };
 }
 
-/** Drop a 44-byte RIFF/WAVE header if the upstream returned WAV despite the L16 request. */
-function stripWavHeader(bytes: Uint8Array): Uint8Array {
-  const riff = bytes.byteLength > 44 && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF";
-  return riff ? bytes.subarray(44) : bytes;
+/**
+ * Return only the `data` chunk of a RIFF/WAVE file; non-RIFF bytes pass through as raw PCM.
+ * 3.8 unary WAVs carry a trailing `C2PA` content-credentials chunk (~6 KB) after `data` —
+ * keeping everything past a fixed 44-byte header plays it as ~0.13 s of loud noise.
+ */
+export function stripWavHeader(bytes: Uint8Array): Uint8Array {
+  const tag = (at: number): string => String.fromCharCode(...bytes.subarray(at, at + 4));
+  if (bytes.byteLength < 12 || tag(0) !== "RIFF" || tag(8) !== "WAVE") return bytes;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let at = 12;
+  while (at + 8 <= bytes.byteLength) {
+    const size = view.getUint32(at + 4, true);
+    if (tag(at) === "data") return bytes.subarray(at + 8, Math.min(at + 8 + size, bytes.byteLength));
+    at += 8 + size + (size % 2); // chunks are word-aligned
+  }
+  throw new Error("Gemini TTS WAV has no data chunk");
 }
 
 interface GeminiTtsResponse {
@@ -418,60 +430,122 @@ function recordSpeechError(model: string, status: number, latencyMs: number, err
 }
 
 /**
- * Synthesize one chunk on Gemini and record a `speech` usage row.
+ * POST one unary synth request and record a `speech` usage row.
  * Decision 2 / §10 bug fix: record a usage row (error status + latency) BEFORE
  * throwing on non-2xx or missing audio, so failures are visible in telemetry.
  */
+async function postSynth(
+  model: string,
+  body: Record<string, unknown>,
+  span: { name: string; attrs: Record<string, string | number> },
+): Promise<ChunkAudio> {
+  return withSpan(span.name, { "gemini.model": model, ...span.attrs }, async (s) => {
+    const start = Date.now();
+    const res = await rawFetch(iuGeminiUrl(`/models/${model}:generateContent`), {
+      method: "POST",
+      headers: iuHeaders({ "content-type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    const latencyMs = Date.now() - start;
+    s.setAttributes({ "http.status_code": res.status });
+
+    if (res.status < 200 || res.status >= 300) {
+      const errorText = res.body.slice(0, 500);
+      log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+      recordSpeechError(model, res.status, latencyMs, errorText);
+      throw new Error(`Gemini TTS failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+    }
+
+    const parsed = JSON.parse(res.body) as GeminiTtsResponse;
+    const inline = parsed.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+    if (!inline?.data) {
+      const errorText = `no audio in response: ${res.body.slice(0, 400)}`;
+      log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
+      recordSpeechError(model, res.status, latencyMs, errorText);
+      throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
+    }
+    const pcm = stripWavHeader(Uint8Array.from(Buffer.from(inline.data, "base64")));
+    const sampleRate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || SAMPLE_RATE_DEFAULT;
+
+    recordUsage({
+      endpoint: "speech",
+      model,
+      status: res.status,
+      latencyMs,
+      inputTokens: parsed.usageMetadata?.promptTokenCount ?? null,
+      outputTokens: parsed.usageMetadata?.candidatesTokenCount ?? null,
+      audioSeconds: pcm.byteLength / (2 * sampleRate),
+      bytesOut: pcm.byteLength,
+    });
+    s.setAttributes({ "audio.audio_seconds": pcm.byteLength / (2 * sampleRate) });
+
+    return { pcm, sampleRate };
+  }, "client");
+}
+
 async function synthChunk(model: string, voiceName: string, chunk: PrepChunk, index: number): Promise<ChunkAudio> {
-  return withSpan(
-    "audio.synth.chunk",
-    { "audio.chunk_index": index, "gemini.model": model, "audio.input_chars": chunk.text.length },
-    async (span) => {
-      const start = Date.now();
-      const res = await rawFetch(iuGeminiUrl(`/models/${model}:generateContent`), {
-        method: "POST",
-        headers: iuHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify(synthBody(voiceName, chunk, { rawPcm: true })),
-      });
-      const latencyMs = Date.now() - start;
-      span.setAttributes({ "http.status_code": res.status });
+  return postSynth(model, synthBody(voiceName, chunk, { rawPcm: true }), {
+    name: "audio.synth.chunk",
+    attrs: { "audio.chunk_index": index, "audio.input_chars": chunk.text.length },
+  });
+}
 
-      if (res.status < 200 || res.status >= 300) {
-        // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-        const errorText = res.body.slice(0, 500);
-        log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
-        recordSpeechError(model, res.status, latencyMs, errorText);
-        throw new Error(`Gemini TTS failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-      }
+export interface MultiSpeakerPart {
+  /** Must match one of the two `voices` speaker names exactly. */
+  speaker: string;
+  text: string;
+  /** Short sustained-delivery string; omitted = the model's default. */
+  style?: string;
+}
 
-      const parsed = JSON.parse(res.body) as GeminiTtsResponse;
-      const inline = parsed.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-      if (!inline?.data) {
-        // Bug fix: record error usage BEFORE throwing so failures are visible in telemetry.
-        const errorText = `no audio in response: ${res.body.slice(0, 400)}`;
-        log.error("gemini tts synth error", { endpoint: "speech", model, status: res.status, latencyMs, error: errorText });
-        recordSpeechError(model, res.status, latencyMs, errorText);
-        throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
-      }
-      const pcm = stripWavHeader(Uint8Array.from(Buffer.from(inline.data, "base64")));
-      const sampleRate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || SAMPLE_RATE_DEFAULT;
-
-      recordUsage({
-        endpoint: "speech",
-        model,
-        status: res.status,
-        latencyMs,
-        inputTokens: parsed.usageMetadata?.promptTokenCount ?? null,
-        outputTokens: parsed.usageMetadata?.candidatesTokenCount ?? null,
-        audioSeconds: pcm.byteLength / (2 * sampleRate),
-        bytesOut: pcm.byteLength,
-      });
-      span.setAttributes({ "audio.audio_seconds": pcm.byteLength / (2 * sampleRate) });
-
-      return { pcm, sampleRate };
+/**
+ * The 3.8 two-speaker request body (docs/gemini-tts.md §Multi-speaker): one part per turn, each
+ * carrying `speechMetadata.speaker` (a `Name:` prefix 400s on IU), prebuilt voices only. Unary
+ * asks `AUDIO_L16` so no WAV container (and no trailing C2PA chunk) comes back.
+ */
+export function multiSpeakerBody(
+  voices: [{ speaker: string; voiceName: string }, { speaker: string; voiceName: string }],
+  parts: MultiSpeakerPart[],
+): Record<string, unknown> {
+  return {
+    contents: [
+      {
+        parts: parts.map((p) => ({
+          text: p.text,
+          speechMetadata: { speaker: p.speaker, ...(p.style && { style: p.style }) },
+        })),
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      responseFormat: { audio: { mimeType: "AUDIO_L16" } },
+      speechConfig: {
+        multiSpeakerVoiceConfig: {
+          speakerVoiceConfigs: voices.map((v) => ({
+            speaker: v.speaker,
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: v.voiceName } },
+          })),
+        },
+      },
     },
-    "client",
-  );
+  };
+}
+
+/** Synthesize a run of turns by two speakers in one request; returns the joined PCM. */
+export async function synthMultiSpeaker(
+  model: string,
+  voices: Parameters<typeof multiSpeakerBody>[0],
+  parts: MultiSpeakerPart[],
+  index: number,
+): Promise<ChunkAudio> {
+  return postSynth(model, multiSpeakerBody(voices, parts), {
+    name: "audio.synth.multispeaker",
+    attrs: {
+      "audio.chunk_index": index,
+      "audio.turns": parts.length,
+      "audio.input_chars": parts.reduce((n, p) => n + p.text.length, 0),
+    },
+  });
 }
 
 /**

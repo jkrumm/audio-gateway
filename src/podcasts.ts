@@ -9,7 +9,16 @@ import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { buildEpisodeProfile, loadShowBible, type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
-import { type SynthTurnOutput, synthesizeTurns, turnsForSynthesis } from "./podcast-synth";
+import {
+  isGeminiModel,
+  type SynthTurnOutput,
+  type SynthUnit,
+  synthesizeGeminiUnits,
+  synthesizeTurns,
+  turnsForSynthesis,
+  unitsForMultiSpeaker,
+  unitsPerTurn,
+} from "./podcast-synth";
 import { type Chapter, concatWithGaps, masterPodcastMp3, type MuxTurn, matchHostLoudness } from "./podcast-mux";
 import { coverConfigured, generateCover } from "./cover";
 import { absConfigured, publishToAudiobookshelf } from "./audiobookshelf";
@@ -385,12 +394,21 @@ export function buildMuxTurns(params: {
   });
 }
 
-/** One chapter per segment, starting at its first turn's offset (from `concatWithGaps`'s `turnStartsMs`). */
-export function chaptersFromSegments(segments: ScriptSegment[], turnStartsMs: number[]): Chapter[] {
+/**
+ * One chapter per segment, starting at its first turn's offset (from `concatWithGaps`'s
+ * `turnStartsMs`). With multi-speaker runs the mux has one start per run, not per turn:
+ * `unitOfTurn` maps a turn index to its run (default identity). Runs never span a segment,
+ * so a segment's first turn is always a run start.
+ */
+export function chaptersFromSegments(
+  segments: ScriptSegment[],
+  unitStartsMs: number[],
+  unitOfTurn: (turnIndex: number) => number = (i) => i,
+): Chapter[] {
   const chapters: Chapter[] = [];
   let turnIndex = 0;
   for (const segment of segments) {
-    chapters.push({ title: segment.title, startMs: turnStartsMs[turnIndex] ?? 0 });
+    chapters.push({ title: segment.title, startMs: unitStartsMs[unitOfTurn(turnIndex)] ?? 0 });
     turnIndex += segment.turns.length;
   }
   return chapters;
@@ -690,16 +708,39 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     denseThreshold: config.podcastDenseTurnThreshold,
     denseSlowdown: config.podcastDenseTurnSlowdown,
   });
-  const synthOutputs = await withSpan("audio.podcast.stage", { "audio.podcast.stage": "synth", "audio.podcast.turns": turns.length }, () =>
-    synthesizeTurns(turns, {
-    model: config.podcastTtsModel,
-    concurrency: config.ttsConcurrency,
-    stability: config.podcastStability,
-    similarityBoost: config.ttsElevenLabsSimilarity,
-    style: config.ttsElevenLabsStyle,
-    onProgress: (done, total) => store.update(job.id, { progress: { stage: "synth", done, total } }),
-    }),
+  const gemini = isGeminiModel(config.podcastTtsModel);
+  const units: SynthUnit[] = gemini
+    ? unitsForMultiSpeaker(
+        turns,
+        script.segments.map((segment) => segment.turns.length),
+        config.podcastMultiSpeakerMaxChars,
+      )
+    : unitsPerTurn(turns.length);
+  const onSynthProgress = (done: number, total: number): void => {
+    store.update(job.id, { progress: { stage: "synth", done, total } });
+  };
+  const synthOutputs = await withSpan(
+    "audio.podcast.stage",
+    { "audio.podcast.stage": "synth", "audio.podcast.turns": turns.length, "audio.podcast.units": units.length },
+    () =>
+      gemini
+        ? synthesizeGeminiUnits(turns, units, {
+            model: config.podcastTtsModel,
+            concurrency: config.ttsConcurrency,
+            hostStyles: config.podcastHostStyles,
+            onProgress: onSynthProgress,
+          })
+        : synthesizeTurns(turns, {
+            model: config.podcastTtsModel,
+            concurrency: config.ttsConcurrency,
+            stability: config.podcastStability,
+            similarityBoost: config.ttsElevenLabsSimilarity,
+            style: config.ttsElevenLabsStyle,
+            onProgress: onSynthProgress,
+          }),
   );
+  const unitOfTurn = new Map<number, number>();
+  units.forEach((unit, u) => unit.turnIndexes.forEach((t) => unitOfTurn.set(t, u)));
 
   // 5a. cover (before mastering — it must be embedded in the mp3). A missing
   // cover must never fail the episode, so any error here is swallowed.
@@ -720,19 +761,25 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   // per host), then gap/concat, then the global loudnorm inside masterPodcastMp3.
   store.update(job.id, { status: "mastering" });
   const masterSpan = startSpan("audio.podcast.stage", { "audio.podcast.stage": "master" });
+  // A multi-speaker run holds both voices in one stream, so it levels as one "AB" group (global
+  // loudnorm still evens the programme); a per-turn unit levels per host as before.
   const levelled = await matchHostLoudness(
-    synthOutputs.map((o, i) => ({ ...o, speaker: turns[i]?.speaker ?? "A" })),
+    synthOutputs.map((o, u) => {
+      const unit = units[u];
+      const speakers = new Set((unit?.turnIndexes ?? []).map((t) => turns[t]?.speaker));
+      return { ...o, speaker: speakers.size === 1 ? [...speakers][0] ?? "AB" : "AB" };
+    }),
     PRE_MASTER_HOST_LUFS,
   );
   log.info("podcast host loudness matched", { id: job.id, gainsDb: levelled.gainsDb });
   const muxTurns = buildMuxTurns({
     synthOutputs: levelled.turns,
-    turnTexts: turns.map((t) => t.text),
+    turnTexts: units.map((unit) => turns[unit.turnIndexes[0] ?? 0]?.text ?? ""),
     gapMs: config.podcastGapMs,
     shortGapMs: config.podcastShortGapMs,
   });
   const mux = concatWithGaps(muxTurns);
-  const chapters = chaptersFromSegments(script.segments, mux.turnStartsMs);
+  const chapters = chaptersFromSegments(script.segments, mux.turnStartsMs, (t) => unitOfTurn.get(t) ?? t);
   const track = trackNumberFor(countDoneInSeries(store, request.series));
   const today = new Date().toISOString().slice(0, 10);
 

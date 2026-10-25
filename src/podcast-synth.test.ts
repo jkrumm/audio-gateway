@@ -19,7 +19,9 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { turnsForSynthesis, synthesizeTurns, numberDensity } = await import("./podcast-synth");
+const { turnsForSynthesis, synthesizeTurns, numberDensity, unitsForMultiSpeaker, unitsPerTurn, synthesizeGeminiUnits, isGeminiModel, DENSE_TURN_STYLE } =
+  await import("./podcast-synth");
+const { chaptersFromSegments } = await import("./podcasts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -239,5 +241,71 @@ describe("synthesizeTurns", () => {
     await expect(
       synthesizeTurns(turns, { model: "elevenlabs/v3", concurrency: 1, stability: 0.5, similarityBoost: 0.5, style: 0 }),
     ).rejects.toBeInstanceOf(ReplicateSynthError);
+  });
+});
+
+describe("multi-speaker units", () => {
+  const turn = (speaker: "A" | "B", chars: number) => ({
+    text: "x".repeat(chars), speaker, speakerName: speaker === "A" ? "Jonas" : "Lena", voice: speaker === "A" ? "Charon" : "Erinome", languageCode: "de",
+  });
+
+  test("runs pack up to maxChars and never span a segment", () => {
+    const turns = [turn("A", 400), turn("B", 400), turn("A", 400), turn("B", 400), turn("A", 400)];
+    const units = unitsForMultiSpeaker(turns, [3, 2], 1000);
+    expect(units.map((u) => u.turnIndexes)).toEqual([[0, 1], [2], [3, 4]]);
+  });
+
+  test("a single over-long turn becomes its own run", () => {
+    const units = unitsForMultiSpeaker([turn("A", 5000), turn("B", 100)], [2], 3000);
+    expect(units.map((u) => u.turnIndexes)).toEqual([[0], [1]]);
+  });
+
+  test("unitsPerTurn is the identity grouping", () => {
+    expect(unitsPerTurn(3).map((u) => u.turnIndexes)).toEqual([[0], [1], [2]]);
+  });
+
+  test("chapters start at the run holding each segment's first turn", () => {
+    const segments: ScriptSegment[] = [
+      { title: "S1", turns: [{ speaker: "A", text: "a" }, { speaker: "B", text: "b" }, { speaker: "A", text: "c" }] },
+      { title: "S2", turns: [{ speaker: "B", text: "d" }, { speaker: "A", text: "e" }] },
+    ];
+    const unitOfTurn = [0, 0, 1, 2, 2];
+    expect(chaptersFromSegments(segments, [0, 5000, 9000], (t) => unitOfTurn[t] ?? t)).toEqual([
+      { title: "S1", startMs: 0 },
+      { title: "S2", startMs: 9000 },
+    ]);
+  });
+
+  test("isGeminiModel separates the lanes", () => {
+    expect(isGeminiModel("gemini-3.8-flash-tts")).toBe(true);
+    expect(isGeminiModel("elevenlabs/v3")).toBe(false);
+  });
+});
+
+describe("synthesizeGeminiUnits", () => {
+  test("one request per run, per-host style, dense turn slowed, output order kept", async () => {
+    const bodies: Array<{ contents: Array<{ parts: Array<{ text: string; speechMetadata: { speaker: string; style?: string } }> }> }> = [];
+    setFetch(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      const pcm = Buffer.alloc(bodies.length * 4800).toString("base64");
+      return jsonRes({ candidates: [{ content: { parts: [{ inlineData: { data: pcm, mimeType: "audio/L16;rate=24000" } }] } }] });
+    });
+    const segments: ScriptSegment[] = [
+      { title: "S1", turns: [{ speaker: "A", text: "Hallo zusammen." }, { speaker: "B", text: DENSE_TURN }] },
+      { title: "S2", turns: [{ speaker: "A", text: "Weiter." }] },
+    ];
+    const turns = turnsForSynthesis(segments, [
+      { id: "A", name: "Jonas", voice: "Charon" },
+      { id: "B", name: "Lena", voice: "Erinome" },
+    ], "de");
+    const units = unitsForMultiSpeaker(turns, [2, 1], 3000);
+    const out = await synthesizeGeminiUnits(turns, units, { model: "gemini-3.8-flash-tts", concurrency: 1, hostStyles: ["warm", "calm"] });
+    expect(out).toHaveLength(2);
+    expect(bodies).toHaveLength(2);
+    expect(bodies[0]?.contents[0]?.parts.map((p) => p.speechMetadata)).toEqual([
+      { speaker: "Jonas", style: "warm" },
+      { speaker: "Lena", style: DENSE_TURN_STYLE },
+    ]);
+    expect(out[0]?.sampleRate).toBe(24000);
   });
 });

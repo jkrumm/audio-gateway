@@ -53,7 +53,7 @@ The first segment opens cold + intros the show; the last wraps with three takeaw
 every other segment ends on a hand-off, never a conclusion.
 
 The system prompt is one shared contract (`baseSystemPrompt`): every fact must come from the source,
-numbers and abbreviations are spelled out for the ear, and ElevenLabs v3 audio tags are used sparingly
+numbers and abbreviations are spelled out for the ear, and 3.8 inline tags (`<short pause>`, `<laugh>`, …) are used sparingly
 from a fixed allow-list (`V3_PODCAST_TAGS`) — at most one every six turns, only inside turns of twelve
 words or more. Turn length and rhythm are NOT quota-driven — see "Writers' room" below for why.
 `sanitizeTurns` strips any tag outside the allow-list, strips markdown/emoji, splits any turn over
@@ -218,8 +218,10 @@ row.
 | `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
 | `PODCAST_VOICE_PATH` | `~/SourceRoot/brain/voice.md` | The owner's general voice guide, prepended to the show bible in the outline/segment/revision prompts (the show bible overrides it for spoken audio); missing file → no section, one warning; empty disables. |
 | `IU_ANTHROPIC_BASE_URL` | derived from `IU_OPENAI_BASE_URL` (`/openai/v1` → `/anthropic`) | Native Anthropic Messages base used when the writer is a `claude-*` id. |
-| `PODCAST_TTS_MODEL` | `elevenlabs/v3` | Replicate model for per-turn synthesis. |
-| `PODCAST_VOICES` | `Mark,Sarah` | The two hosts' ElevenLabs voices, in host order. |
+| `PODCAST_TTS_MODEL` | `gemini-3.8-flash-tts` | `gemini-*` = 3.8 multi-speaker runs; `owner/name` = ElevenLabs per-turn fallback. |
+| `PODCAST_VOICES` | `Charon,Erinome` (`Mark,Sarah` on the ElevenLabs lane) | The two hosts' voices, in host order. |
+| `PODCAST_HOST_STYLE_A` / `_B` | `warm, conversational` | Constant per-host delivery string on the 3.8 lane (no speed parameter). |
+| `PODCAST_MULTISPEAKER_MAX_CHARS` | `3000` | Max characters per two-speaker request. |
 | `PODCAST_HOST_NAMES` | `Jonas,Lena` | The two hosts' display names, same order. |
 | `PODCAST_DEFAULT_MINUTES` | `20` | Episode length when a request omits `minutes` (clamped 3–60). |
 | `PODCAST_STABILITY` | `0.5` | ElevenLabs v3 stability — lower is more tag-responsive. |

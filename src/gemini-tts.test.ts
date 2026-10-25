@@ -23,7 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { synthChunksConcurrent, handleGeminiSpeech, synthBody, sseAudio, geminiWantsPrep, streamSettled, PREP_STYLE, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
+const { synthChunksConcurrent, handleGeminiSpeech, synthBody, stripWavHeader, multiSpeakerBody, synthMultiSpeaker, sseAudio, geminiWantsPrep, streamSettled, PREP_STYLE, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -564,5 +564,83 @@ describe("chat lane input (no prep)", () => {
     });
     await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "**Heute** wird es 22°C warm ☀️", voice: "Charon", responseFormat: "mp3", summarize: false });
     expect(sentText).toBe("Heute wird es 22 Grad warm");
+  });
+});
+
+/** A RIFF/WAVE file: fmt chunk, data chunk, then a trailing C2PA chunk like 3.8 unary WAVs carry. */
+function wavWithTrailer(pcm: Uint8Array, trailer: Uint8Array): Uint8Array {
+  const chunk = (id: string, body: Uint8Array): Uint8Array => {
+    const out = new Uint8Array(8 + body.length + (body.length % 2));
+    out.set(new TextEncoder().encode(id), 0);
+    new DataView(out.buffer).setUint32(4, body.length, true);
+    out.set(body, 8);
+    return out;
+  };
+  const parts = [chunk("fmt ", new Uint8Array(16)), chunk("data", pcm), chunk("C2PA", trailer)];
+  const size = 4 + parts.reduce((n, p) => n + p.length, 0);
+  const out = new Uint8Array(8 + size);
+  out.set(new TextEncoder().encode("RIFF"), 0);
+  new DataView(out.buffer).setUint32(4, size, true);
+  out.set(new TextEncoder().encode("WAVE"), 8);
+  let at = 12;
+  for (const part of parts) {
+    out.set(part, at);
+    at += part.length;
+  }
+  return out;
+}
+
+describe("stripWavHeader — C2PA trailing chunk", () => {
+  test("returns only the data chunk, dropping header and the trailing C2PA bytes", () => {
+    const pcm = Uint8Array.from({ length: 101 }, (_, i) => i + 1); // odd length exercises word padding
+    expect(Array.from(stripWavHeader(wavWithTrailer(pcm, new Uint8Array(6000).fill(0xff))))).toEqual(Array.from(pcm));
+  });
+
+  test("raw PCM (the AUDIO_L16 response) passes through untouched", () => {
+    const pcm = Uint8Array.from({ length: 64 }, (_, i) => i);
+    expect(stripWavHeader(pcm)).toBe(pcm);
+  });
+
+  test("a RIFF/WAVE without a data chunk throws instead of playing garbage", () => {
+    const wav = wavWithTrailer(new Uint8Array(4), new Uint8Array(2));
+    wav.set(new TextEncoder().encode("junk"), 12 + 8 + 16 + 0); // rename the data chunk
+    expect(() => stripWavHeader(wav)).toThrow("no data chunk");
+  });
+});
+
+describe("multiSpeakerBody — 3.8 two-speaker request", () => {
+  const voices = [
+    { speaker: "Jonas", voiceName: "Charon" },
+    { speaker: "Lena", voiceName: "Erinome" },
+  ] as Parameters<typeof multiSpeakerBody>[0];
+
+  test("one part per turn with speechMetadata.speaker, both voices configured, raw L16 asked", () => {
+    const body = multiSpeakerBody(voices, [
+      { speaker: "Jonas", text: "Hallo <short pause> Lena.", style: "warm" },
+      { speaker: "Lena", text: "Hi." },
+    ]) as {
+      contents: Array<{ parts: Array<{ text: string; speechMetadata: { speaker: string; style?: string } }> }>;
+      generationConfig: {
+        responseFormat: { audio: { mimeType: string } };
+        speechConfig: { multiSpeakerVoiceConfig: { speakerVoiceConfigs: Array<{ speaker: string; voiceConfig: unknown }> } };
+      };
+    };
+    expect(body.contents[0]?.parts.map((p) => p.speechMetadata)).toEqual([{ speaker: "Jonas", style: "warm" }, { speaker: "Lena" }]);
+    expect(body.contents[0]?.parts[0]?.text).toBe("Hallo <short pause> Lena.");
+    expect(body.generationConfig.responseFormat.audio.mimeType).toBe("AUDIO_L16");
+    expect(body.generationConfig.speechConfig.multiSpeakerVoiceConfig.speakerVoiceConfigs.map((c) => c.speaker)).toEqual(["Jonas", "Lena"]);
+    expect(JSON.stringify(body)).not.toContain("systemInstruction");
+  });
+
+  test("synthMultiSpeaker posts one generateContent call and returns the PCM", async () => {
+    const calls: string[] = [];
+    setFetch(async (url) => {
+      calls.push(String(url));
+      return geminiAudio(new Uint8Array(480));
+    });
+    const out = await synthMultiSpeaker("gemini-3.8-flash-tts", voices, [{ speaker: "Jonas", text: "Hallo." }], 0);
+    expect(out.pcm.byteLength).toBe(480);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toContain("/models/gemini-3.8-flash-tts:generateContent");
   });
 });

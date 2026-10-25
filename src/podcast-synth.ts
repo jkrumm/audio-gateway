@@ -1,5 +1,6 @@
 import { SAMPLE_RATE_DEFAULT } from "./audio";
 import { synthConcurrent } from "./gemini-tts-core";
+import { type MultiSpeakerPart, synthMultiSpeaker } from "./gemini-tts";
 import type { PodcastHost, ScriptSegment } from "./podcast-script";
 import { log } from "./log";
 import { ReplicateSynthError, synthReplicateChunk, type ReplicateChunkParams } from "./replicate-tts";
@@ -84,8 +85,12 @@ export interface SynthTurnInput {
   text: string;
   /** Which host speaks — the mux matches loudness per host, so the grouping key travels with the turn. */
   speaker: "A" | "B";
+  /** The host's display name — the multi-speaker request's speaker label. */
+  speakerName: string;
   voice: string;
   speed?: number;
+  /** Dense (number-heavy) turn: the 3.8 lane has no speed parameter, so it slows the turn through its style string. */
+  dense?: boolean;
   languageCode: string;
   previousText?: string;
   nextText?: string;
@@ -151,7 +156,9 @@ export function turnsForSynthesis(
     out[i] = {
       text: turn.text,
       speaker: turn.speaker,
+      speakerName: host.name,
       voice: host.voice,
+      ...(dense && { dense }),
       ...(speed !== undefined && { speed }),
       languageCode,
       previousText: cap(previousTextByIndex[i]),
@@ -201,6 +208,118 @@ export async function synthesizeTurns(turns: SynthTurnInput[], opts: SynthTurnsO
       sampleRate: SAMPLE_RATE_DEFAULT,
       audioSeconds: result.audioSeconds,
       inputChars: result.inputChars,
+    } satisfies SynthTurnOutput;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Gemini 3.8 multi-speaker lane
+// ---------------------------------------------------------------------------
+// One request carries a run of consecutive turns by both hosts (docs/gemini-tts.md
+// §Multi-speaker), so the audio comes back per RUN, not per turn. Runs never span a
+// segment, which keeps chapter starts exact. Pacing has no speed parameter: each host
+// gets a constant short style string, number-dense turns a slower one.
+
+/** A run of consecutive turns synthesized in one request (an ElevenLabs "unit" is always one turn). */
+export interface SynthUnit {
+  turnIndexes: number[];
+}
+
+/** Style for a dense turn — figures need room, and 3.8 paces through `style`, not a rate field. */
+export const DENSE_TURN_STYLE = "speaking slowly and clearly";
+
+export const isGeminiModel = (model: string): boolean => model.startsWith("gemini-");
+
+/** One unit per turn — the per-turn ElevenLabs lane. */
+export const unitsPerTurn = (turnCount: number): SynthUnit[] =>
+  Array.from({ length: turnCount }, (_, i) => ({ turnIndexes: [i] }));
+
+/**
+ * Pack consecutive turns into runs of at most `maxChars` characters, never across a segment
+ * boundary (`segmentLengths` = turns per segment). A single over-long turn is its own run.
+ */
+export function unitsForMultiSpeaker(turns: SynthTurnInput[], segmentLengths: number[], maxChars: number): SynthUnit[] {
+  const units: SynthUnit[] = [];
+  let start = 0;
+  for (const length of segmentLengths) {
+    let current: number[] = [];
+    let chars = 0;
+    for (let i = start; i < start + length; i++) {
+      const size = turns[i]?.text.length ?? 0;
+      if (current.length > 0 && chars + size > maxChars) {
+        units.push({ turnIndexes: current });
+        current = [];
+        chars = 0;
+      }
+      current.push(i);
+      chars += size;
+    }
+    if (current.length > 0) units.push({ turnIndexes: current });
+    start += length;
+  }
+  return units;
+}
+
+export interface SynthGeminiOptions {
+  model: string;
+  concurrency: number;
+  /** Constant per-host delivery string (index 0 = host A). */
+  hostStyles: [string, string];
+  onProgress?: (done: number, total: number) => void;
+}
+
+/**
+ * Synthesize every unit as one two-speaker request, bounded by `opts.concurrency`; one output
+ * per unit, in unit order. A failed request is retried once — cheaper than failing an episode.
+ */
+export async function synthesizeGeminiUnits(
+  turns: SynthTurnInput[],
+  units: SynthUnit[],
+  opts: SynthGeminiOptions,
+): Promise<SynthTurnOutput[]> {
+  const hostA = turns.find((t) => t.speaker === "A");
+  const hostB = turns.find((t) => t.speaker === "B");
+  // Names must be distinct labels; fall back to the host ids if a config repeats one.
+  const sameName = hostA && hostB && hostA.speakerName === hostB.speakerName;
+  const label = (t: SynthTurnInput): string => (sameName ? t.speaker : t.speakerName);
+  const voiceOf = (id: "A" | "B", fallback: SynthTurnInput | undefined): { speaker: string; voiceName: string } => ({
+    speaker: fallback ? label(fallback) : id,
+    voiceName: fallback?.voice ?? "Charon",
+  });
+  // A single-host script still needs two distinct speakers in the config; pad with the other id.
+  const voices: [{ speaker: string; voiceName: string }, { speaker: string; voiceName: string }] = [
+    voiceOf("A", hostA),
+    voiceOf("B", hostB),
+  ];
+
+  let completed = 0;
+  return synthConcurrent(opts.concurrency, units, async (unit, index) => {
+    const parts: MultiSpeakerPart[] = unit.turnIndexes.map((i) => {
+      const turn = turns[i];
+      if (!turn) throw new Error(`synthesizeGeminiUnits: no turn at index ${i}`);
+      return {
+        speaker: label(turn),
+        text: turn.text,
+        style: turn.dense ? DENSE_TURN_STYLE : opts.hostStyles[turn.speaker === "A" ? 0 : 1],
+      };
+    });
+    let result: Awaited<ReturnType<typeof synthMultiSpeaker>>;
+    try {
+      result = await synthMultiSpeaker(opts.model, voices, parts, index);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      // A 4xx (bad voice, bad speaker label) is deterministic — a second request only bills twice. 429 was already retried upstream.
+      if (/HTTP 4\d\d/.test(message)) throw err;
+      log.warn("podcast unit synth failed, retrying once", { index, error: message });
+      result = await synthMultiSpeaker(opts.model, voices, parts, index);
+    }
+    completed++;
+    opts.onProgress?.(completed, units.length);
+    return {
+      pcm: result.pcm,
+      sampleRate: result.sampleRate,
+      audioSeconds: result.pcm.byteLength / (2 * result.sampleRate),
+      inputChars: parts.reduce((n, p) => n + p.text.length, 0),
     } satisfies SynthTurnOutput;
   });
 }

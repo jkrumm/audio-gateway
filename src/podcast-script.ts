@@ -37,7 +37,7 @@ export interface PodcastHost {
   id: "A" | "B";
   name: string;
   voice: string;
-  /** ElevenLabs speed (0.7–1.2); omitted = the model's own pace. Lets a fast host be slowed a notch. */
+  /** ElevenLabs-fallback speed (0.7–1.2); omitted = the model's own pace. The 3.8 lane paces through the host style string instead. */
   speed?: number;
 }
 
@@ -169,22 +169,23 @@ export interface ReviewNote {
 }
 
 /**
- * Allowed ElevenLabs v3 audio tags — only cues that appear as examples in the
- * official v3 docs. Anything outside that set ([thoughtful], [emphasized],
- * [hesitates] …) is not reliably interpreted and tends to be READ ALOUD as
- * text, which is exactly what the first episode did (2026-09-02).
+ * Allowed Gemini 3.8 inline tags (docs/gemini-tts.md §Tag vocabulary) — angle brackets, English,
+ * never spoken. Pauses plus a handful of human vocalisations; mood is the host's style string,
+ * not a tag. Anything else, and every legacy `[square]` v3 tag, is stripped.
  */
-export const V3_PODCAST_TAGS = [
-  "[laughs]", "[chuckles]", "[sighs]", "[exhales]", "[whispers]", "[excited]",
-  "[curious]", "[clears throat]", "[pause]", "[short pause]",
+export const PODCAST_TAGS = [
+  "<short pause>", "<long pause>", "<laugh>", "<chuckle>", "<sigh>", "<exhales>", "<breath>", "<whispers>",
 ] as const;
 
 /** Below this many words a tag is the whole delivery — v3 then tends to speak it; strip instead. */
 const TAG_MIN_TURN_WORDS = 12;
 
-const ALLOWED_TAG_SET = new Set<string>(V3_PODCAST_TAGS.map((t) => t.toLowerCase()));
+const ALLOWED_TAG_SET = new Set<string>(PODCAST_TAGS.map((t) => t.toLowerCase()));
 
-/** Planning rate. Measured on five produced episodes (ElevenLabs v3, German, two hosts, gaps included): 135–149 wpm; 150 planned 22 minutes and delivered 25–36. */
+/** Any `<angle>` or `[square]` tag-shaped span. */
+const TAG_PATTERN = /<[^<>\n]+>|\[[^\]\n]+\]/g;
+
+/** Planning rate. Measured on five produced episodes (ElevenLabs v3 — re-measure on 3.8, German, two hosts, gaps included): 135–149 wpm; 150 planned 22 minutes and delivered 25–36. */
 const WORDS_PER_MINUTE = 140;
 const MIN_SEGMENTS = 3;
 const MAX_SEGMENTS = 9;
@@ -468,22 +469,23 @@ export function parseSegmentTurns(raw: string): ScriptTurn[] {
   return turns;
 }
 
-/** Remove a `[bracketed]` tag unless it's in the allowed v3 vocabulary (case-insensitive match). */
+/** Remove a tag-shaped span unless it's in the allowed 3.8 vocabulary (case-insensitive match). */
 function stripDisallowedTags(text: string): string {
-  return text.replace(/\[[^\]\n]+\]/g, (m) => (ALLOWED_TAG_SET.has(m.toLowerCase()) ? m : ""));
+  return text.replace(TAG_PATTERN, (m) => (ALLOWED_TAG_SET.has(m.toLowerCase()) ? m : ""));
 }
 
-/** A tag on a short line ("[laughs] Da ist sie.") is what v3 reads aloud most often — drop every tag below the word floor. */
+/** A tag as the whole delivery of a short line ("<laugh> Da ist sie.") sounds staged — drop every tag below the word floor. */
 function stripTagsOnShortTurn(text: string): string {
-  const words = text.replace(/\[[^\]\n]+\]/g, "").trim().split(/\s+/).filter(Boolean).length;
+  const words = text.replace(TAG_PATTERN, "").trim().split(/\s+/).filter(Boolean).length;
   if (words >= TAG_MIN_TURN_WORDS) return text;
-  return collapseWhitespace(text.replace(/\[[^\]\n]+\]/g, ""));
+  return collapseWhitespace(text.replace(TAG_PATTERN, ""));
 }
 
 /** Strip markdown decoration, bullets and emoji left over from the LLM's reply — numbers/digits are left alone. */
 function stripMarkdown(text: string): string {
   return text
-    .replace(/[*_`#>]+/g, "")
+    .replace(/^[\s]*>+[ \t]?/gm, "") // blockquote markers only — a `>` also closes a <tag>
+    .replace(/[*_`#]+/g, "")
     .replace(/^[\s]*[-•●▪◦*]\s+/gm, "")
     .replace(/\p{Extended_Pictographic}️?/gu, "");
 }
@@ -612,7 +614,7 @@ ${renderEpisodeBrief(req)}
 3. It is a CONVERSATION with real weight, not ping-pong. Whoever is explaining gets the floor for as long as the thought needs — a real walk-through, an example, a small story — and the other host listens, then reacts with weight, not a one-liner. Vary the rhythm as the brief asks: a long stretch, a quick exchange, a pause. Interjections exist but are rare and earned. Never alternate mechanically; never let both hosts speak in the same length all the time. No lists read aloud — turn any list into back-and-forth or a walked-through explanation.
 4. Written for the EAR in ${languageLabel}: numbers, prices, times, units, dates and abbreviations fully spelled out as spoken (German: "dreihundertdreißig Euro", "hundertfünf Stundenkilometer", "elfter September", "zwei Meter fünfzig"); no digits, no symbols, no URLs, no markdown, no emoji, no parentheses. Place names in their local form. Expand every acronym once.
 5. Numbers and names are written for the EAR, not for the page. One figure per sentence — a sentence carrying three numbers is unlistenable. Round, unless the precision IS the point: "gut dreitausend" beats "dreitausendzweiundvierzig", and "null Komma eins sieben" is only ever spoken when that digit is exactly what matters. Anchor every important figure to something the listener already knows ("das ist eine Tankfüllung", "so viel wie eine Monatsmiete"). A cluster of figures is never read out — the hosts walk through it, one figure at a time, with pauses ("…") and a real reaction in between. An unfamiliar proper name or term is introduced as WHAT IT IS before WHAT IT IS CALLED ("die Behörde, die die Maut eintreibt — die heißt …"), spoken slowly, and then gets one short handle the hosts reuse for the rest of the episode; the GLOSSARY gives you both. Never use a name before it has been introduced that way. Open questions stay open and are said to be open ("das wissen wir nicht").
-6. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. ElevenLabs v3 audio tags ONLY from this list: ${V3_PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, placed at the start of a sentence in the middle of the turn — never as the first word of a short line, never translated, never invented. Most turns carry NO tag.
+6. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. Inline tags ONLY from this list, written exactly with the angle brackets, in English even inside German text: ${PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, between two sentences — never as the first word of a short line, never two tags side by side, never translated, never invented. No square-bracket tags, no mood tags. Emphasis is a single word in CAPS, at most once a turn. Most turns carry NO tag.
 7. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
 8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
 }
@@ -775,7 +777,7 @@ ${renderEpisodeBrief(req)}`,
   "conversation-coach": () =>
     `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment. Also flag written-language constructs and AI-isms: essay sentences, hedges like "es ist erwähnenswert" or "worth stating plainly", tidy triads, over-explained emotion, a character explaining what they feel instead of just feeling it, filler, and repeated setups.`,
   "fact-editor": (req) =>
-    `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${LANGUAGE_LABEL[req.language]}, never digits or symbols; every sentence is speakable in one breath; ElevenLabs v3 audio tags are only from the allowed list (${V3_PODCAST_TAGS.join(" ")}) and only where they earn their place — flag over-use; no markdown, no emoji, nothing that isn't spoken text.
+    `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${LANGUAGE_LABEL[req.language]}, never digits or symbols; every sentence is speakable in one breath; inline tags are only from the allowed list (${PODCAST_TAGS.join(" ")}), angle brackets, never square brackets, and only where they earn their place — flag over-use; no markdown, no emoji, nothing that isn't spoken text.
 Additionally, flag FIGURE CLUSTERS and UNINTRODUCED NAMES, which is where this show fails hardest for a listener: more than one figure in a single sentence; a precise figure the listener has nothing to compare it to (unrounded and unanchored); a run of figures read out instead of walked through one at a time with pauses and a reaction; and any proper name, term or abbreviation used before the hosts said what it IS in plain words.`,
 };
 
