@@ -117,6 +117,27 @@ export function parsePrepResponse(raw: string): PrepResult {
   return { lang, title, chunks };
 }
 
+/**
+ * Allowed Gemini 3.8 inline tags (docs/gemini-tts.md §Tag vocabulary) — angle brackets, English,
+ * never spoken. Pauses plus a handful of human vocalisations; mood is the style string, not a tag.
+ * One allowlist for both lanes: podcasts use all of it, briefing prep a subset ({@link BRIEFING_TAGS}).
+ */
+export const SPEECH_TAGS = [
+  "<short pause>", "<long pause>", "<laugh>", "<chuckle>", "<sigh>", "<exhales>", "<breath>", "<whispers>",
+] as const;
+
+/** The subset the briefing prep prompt offers the LLM. */
+export const BRIEFING_TAGS = ["<short pause>", "<long pause>", "<laugh>", "<sigh>"] as const;
+
+/** Any `<angle tag>` (no space after `<`, so `a < 5 und b > 3` survives) or `[square]` tag-shaped span. */
+export const TAG_PATTERN = /<[^\s<>][^<>\n]{0,40}>|\[[^\]\n]+\]/g;
+
+/** Remove a tag-shaped span unless it is in `allowed` (case-insensitive) — invented and legacy `[v3]` tags go. */
+export function stripDisallowedTags(text: string, allowed: readonly string[] = SPEECH_TAGS): string {
+  const set = new Set(allowed.map((t) => t.toLowerCase()));
+  return text.replace(TAG_PATTERN, (m) => (set.has(m.toLowerCase()) ? m : ""));
+}
+
 /** Per-chunk size ceilings for {@link enforceChunkLimits}. */
 export interface ChunkLimits {
   /** Preferred words per chunk when regrouping smaller pieces. */

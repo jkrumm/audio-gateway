@@ -1,5 +1,5 @@
 import { callAnthropicMessages } from "./anthropic-messages";
-import { synthConcurrent } from "./gemini-tts-core";
+import { SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_PATTERN } from "./gemini-tts-core";
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
@@ -168,25 +168,13 @@ export interface ReviewNote {
   note: string;
 }
 
-/**
- * Allowed Gemini 3.8 inline tags (docs/gemini-tts.md §Tag vocabulary) — angle brackets, English,
- * never spoken. Pauses plus a handful of human vocalisations; mood is the host's style string,
- * not a tag. Anything else, and every legacy `[square]` v3 tag, is stripped.
- */
-export const PODCAST_TAGS = [
-  "<short pause>", "<long pause>", "<laugh>", "<chuckle>", "<sigh>", "<exhales>", "<breath>", "<whispers>",
-] as const;
+export const PODCAST_TAGS = SPEECH_TAGS;
 
 /** Below this many words a tag is the whole delivery — v3 then tends to speak it; strip instead. */
 const TAG_MIN_TURN_WORDS = 12;
 
-const ALLOWED_TAG_SET = new Set<string>(PODCAST_TAGS.map((t) => t.toLowerCase()));
-
-/** Any `<angle>` or `[square]` tag-shaped span. */
-const TAG_PATTERN = /<[^<>\n]+>|\[[^\]\n]+\]/g;
-
-/** Planning rate. Measured on five produced episodes (ElevenLabs v3 — re-measure on 3.8, German, two hosts, gaps included): 135–149 wpm; 150 planned 22 minutes and delivered 25–36. */
-const WORDS_PER_MINUTE = 140;
+/** Planning rate, German two hosts, gaps included. Measured on 3.8 (2026-10-25): test episode 10a620e1 = 455 words in 187 s = 146 wpm; raw chunk renders run 155–170 wpm before gaps. v3 episodes measured 135–149 (150 planned 22 minutes and delivered 25–36), so plan low. */
+const WORDS_PER_MINUTE = 145;
 const MIN_SEGMENTS = 3;
 const MAX_SEGMENTS = 9;
 const MINUTES_PER_SEGMENT = 4;
@@ -467,11 +455,6 @@ export function parseSegmentTurns(raw: string): ScriptTurn[] {
     turns.push({ speaker, text });
   }
   return turns;
-}
-
-/** Remove a tag-shaped span unless it's in the allowed 3.8 vocabulary (case-insensitive match). */
-function stripDisallowedTags(text: string): string {
-  return text.replace(TAG_PATTERN, (m) => (ALLOWED_TAG_SET.has(m.toLowerCase()) ? m : ""));
 }
 
 /** A tag as the whole delivery of a short line ("<laugh> Da ist sie.") sounds staged — drop every tag below the word floor. */

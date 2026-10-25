@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChunkLimits } from "./gemini-tts-core";
-import { detectLanguage, enforceChunkLimits, looksGerman, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { BRIEFING_TAGS, detectLanguage, enforceChunkLimits, looksGerman, normalizeForSpeech, parsePrepResponse, SPEECH_TAGS, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
 
 // pcmToWav now lives in audio.test.ts alongside the rest of the ffmpeg/ffprobe
 // process boundary module it moved into.
@@ -187,5 +187,27 @@ describe("enforceChunkLimits", () => {
     const out = enforceChunkLimits([{ style: "b", text }], tight);
     expect(out.length).toBeGreaterThan(1);
     for (const c of out) expect(bytes(c.text)).toBeLessThanOrEqual(tight.maxBytes);
+  });
+});
+
+describe("stripDisallowedTags", () => {
+  test("keeps allowlisted tags, case-insensitively", () => {
+    expect(stripDisallowedTags("Eins. <short pause> Zwei. <Laugh> Drei.")).toBe("Eins. <short pause> Zwei. <Laugh> Drei.");
+  });
+  test("drops invented angle tags and legacy square tags", () => {
+    expect(stripDisallowedTags("Hallo <excited> Welt [laughs] Ende <cough>")).toBe("Hallo  Welt  Ende ");
+  });
+  test("drops invented tags with digits, underscores or punctuation", () => {
+    expect(stripDisallowedTags("a <pause 2s> b <sigh_softly> c <emphasis!> d")).toBe("a  b  c  d");
+  });
+  test("every briefing tag is in the shared vocabulary", () => {
+    for (const t of BRIEFING_TAGS) expect(SPEECH_TAGS).toContain(t);
+  });
+  test("leaves comparisons and arrows alone", () => {
+    expect(stripDisallowedTags("wenn a < 5 und b > 3")).toBe("wenn a < 5 und b > 3");
+  });
+  test("the briefing subset rejects tags only podcasts may use", () => {
+    expect(SPEECH_TAGS).toContain("<chuckle>");
+    expect(stripDisallowedTags("Ja <chuckle> klar <sigh>", BRIEFING_TAGS)).toBe("Ja  klar <sigh>");
   });
 });

@@ -2,7 +2,7 @@ import type { AudioOutputFormat, ChunkAudio } from "./audio";
 import { concatPcm, SAMPLE_RATE_DEFAULT, silencePcm, transcode } from "./audio";
 import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { BRIEFING_TAGS, TAG_PATTERN, detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveReasoningEffort } from "./model-resolution";
@@ -72,7 +72,7 @@ const PREP_SYSTEM_PROMPT = `You prepare text for Gemini 3.8 text-to-speech in th
 Your job, in order:
 1. Detect the language of the input: "de" (German) or "en" (English).
 2. Write a short title (3–6 words) summarizing the content, IN the transcript's language, suitable as a filename/label: plain words, no quotes, no trailing punctuation, no emoji.
-3. Rewrite numbers, times, dates, units, symbols and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig", "zum Beispiel", "Millionen Euro"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language. No markdown, bullet characters or emoji.
+3. Rewrite numbers, times, dates, units, symbols and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig", "zum Beispiel", "Millionen Euro"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language. Times, dates, prices and versions stay exact. For statistics and large counts where the exact digits do not matter, round to the figure a person would say ("gut viertausend Nutzer", "rund dreizehnhundert Euro") and keep to about one figure per sentence. No markdown, bullet characters or emoji.
 4. Split the text into chunks of about 110 words each (never more than 150, roughly 1,000 characters), so each chunk is only about 50 seconds of speech — Gemini TTS drifts and drops words on longer generations. Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
 5. Set every chunk's "style" to exactly "${PREP_STYLE}" — identical across chunks. Never put direction, emotion words or "Style:" prefixes inside "text"; they would be read aloud.
 6. Embed SPARSE inline tags inside "text" at natural beats, in angle brackets, always in English even inside German text: <short pause> (about a quarter second), <long pause> (about a second), and — only where it genuinely fits — <laugh> or <sigh>. At most one or two tags per chunk, never two tags next to each other, none at all in most chunks. No square-bracket tags, no emotion tags, no other tag names.
@@ -375,7 +375,16 @@ async function runPrep(model: string, input: string, summarize: boolean): Promis
 
       const content = json.choices?.[0]?.message?.content ?? "";
       const parsed = parsePrepResponse(content);
-      const chunks = parsed.chunks.map((c) => (c.style && c.style.length <= MAX_STYLE_CHARS ? c : { ...c, style: PREP_STYLE }));
+      const chunks = parsed.chunks
+        .map((c) => ({
+          style: c.style && c.style.length <= MAX_STYLE_CHARS ? c.style : PREP_STYLE,
+          text: stripDisallowedTags(c.text, BRIEFING_TAGS).replace(/[ \t]{2,}/g, " ").trim(),
+        }))
+        .filter((c) => c.text.replace(TAG_PATTERN, "").trim());
+      if (chunks.length === 0) {
+        log.warn("prep returned only tags, speaking the input as is", { inputChars: input.length });
+        return { prep: defaultPrep(input), ran: false };
+      }
       return { prep: { ...parsed, chunks }, ran: true };
     },
     "client",

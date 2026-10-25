@@ -748,7 +748,7 @@ describe("writePodcastScript", () => {
 
     expect(outlineSystemPrompt).toContain("Produce exactly 1 segments");
     expect(outlineSystemPrompt).toContain("about 5 minutes");
-    expect(outlineSystemPrompt).toContain("about 700 words in total");
+    expect(outlineSystemPrompt).toContain("about 725 words in total");
     expect(segmentPrompts).toHaveLength(1);
     expect(segmentPrompts[0]).toContain("ONE SEGMENT (1 of 1)");
   });
