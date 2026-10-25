@@ -93,6 +93,21 @@ describe("extractTextAndUsage", () => {
     expect(out.usage).toEqual({ type: "duration", seconds: 240 });
   });
 
+  test("parses a voxtral body: null language stays null, prompt_audio_seconds usage is kept", () => {
+    const body = JSON.stringify({
+      model: "voxtral-mini-transcribe-3-0",
+      text: "hallo",
+      language: null,
+      segments: [],
+      usage: { prompt_audio_seconds: 6, prompt_tokens: 5, completion_tokens: 14, total_tokens: 394 },
+      finish_reason: null,
+    });
+    const out = extractTextAndUsage(body, "application/json");
+    expect(out.text).toBe("hallo");
+    expect(out.language).toBeNull();
+    expect((out.usage as Record<string, unknown>)["prompt_audio_seconds"]).toBe(6);
+  });
+
   test("passes a non-JSON body through as raw text", () => {
     const out = extractTextAndUsage("1\n00:00:00,000 --> 00:00:01,000\nhi\n", "text/plain");
     expect(out.text).toBe("1\n00:00:00,000 --> 00:00:01,000\nhi\n");

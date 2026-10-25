@@ -3,9 +3,12 @@
 OpenAI-compatible audio service on `:7714` that fronts the IU unified audio endpoint and adds two
 native TTS pipelines: **Gemini expressive TTS** and **Replicate/ElevenLabs TTS**.
 
-- **STT** (`POST /v1/audio/transcriptions`) — downgrades `gpt-transcribe` (the default) and `gpt-4o-transcribe` to `json` and
-  synthesizes the rich envelope (`verbose_json`/`srt`/`vtt`) clients expect, with DE/EN language
-  steering. Whisper-style models pass through untouched. The IU upstream hard-rejects uploads over
+- **STT** (`POST /v1/audio/transcriptions`) — defaults to `voxtral-mini-transcribe-3-0` (Mistral, EU-resident; `voxtral-small-transcribe-3-0`
+  on request) and falls back to `gpt-transcribe` on a transient upstream outage (an explicit
+  `gpt-transcribe` falls back to `whisper`). Voxtral, `gpt-transcribe` and `gpt-4o-transcribe` are
+  downgraded to `json` and the gateway synthesizes the rich envelope (`verbose_json`/`srt`/`vtt`)
+  clients expect, with DE/EN language steering (Voxtral ignores `prompt`; use `context_bias`, client
+  field or `STT_CONTEXT_BIAS` default). Whisper-style models pass through untouched. The IU upstream hard-rejects uploads over
   ~25 MiB with an empty-bodied 500, and separately mishandles long audio (`gpt-4o-transcribe` errors
   past 1400s and silently truncates its own output past ~20 min; whisper times out past ~10 min);
   anything over either limit is automatically compressed and time-sliced into silence-snapped

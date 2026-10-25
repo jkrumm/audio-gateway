@@ -244,6 +244,11 @@ const RATES: Record<string, Rate> = {
   // OpenAI list price, 2026-10-15 (not invoice-verified): per minute, duration-billed
   // (upstream usage is `{type:"duration",seconds}`, no tokens).
   "gpt-transcribe": { perMinute: 0.0045 },
+  // Mistral list price, 2026-10-25 (docs.mistral.ai pricing, not invoice-verified): per minute.
+  // Upstream usage carries `prompt_audio_seconds`, which `tokens()` reads as audioSeconds
+  // (the gateway's probed duration wins when present).
+  "voxtral-mini-transcribe-3-0": { perMinute: 0.0035 },
+  "voxtral-small-transcribe-3-0": { perMinute: 0.004 },
   "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens; shuts down 2026-11-17
   // Gemini 3.8 TTS (GA 2026-09-22; ai.google.dev pricing, list not invoice-verified). Output tokens
   // are audio tokens (25/s). Audio-out is introductory through 2026-12-31, then flash-lite 12 / flash 18.

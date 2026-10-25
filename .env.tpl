@@ -36,6 +36,8 @@ IU_GEMINI_BASE_URL=op://common/anthropic/GEMINI_BASE_URL
 
 # Optional STT language steering (client-supplied values always win)
 STT_PROMPT=Die Aufnahme ist auf Deutsch oder Englisch.
+# Optional comma-separated vocabulary bias for Voxtral (which ignores STT_PROMPT)
+# STT_CONTEXT_BIAS=
 
 # Optional STT upload-size overrides — the IU upstream hard-rejects request
 # bodies over ~25 MiB with an empty-bodied 500; defaults in config.ts already

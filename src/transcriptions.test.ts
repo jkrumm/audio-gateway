@@ -206,6 +206,100 @@ describe("handleTranscriptions", () => {
     expect(rows[0]!.costUsd).toBeCloseTo((1000 * 6 + 100 * 10) / 1_000_000, 9);
   });
 
+  /** Voxtral answers this JSON body whatever `response_format` the request carried. */
+  const voxtralBody = () =>
+    Response.json({
+      model: "voxtral-mini-transcribe-3-0",
+      text: "Hallo Welt",
+      language: null,
+      segments: [],
+      usage: { prompt_audio_seconds: 6, prompt_tokens: 5, completion_tokens: 14, total_tokens: 394 },
+      finish_reason: null,
+    });
+
+  async function voxtralRequest(format: string, extra: Record<string, string> = {}): Promise<{ res: Response; sent: FormData | undefined }> {
+    let sent: FormData | undefined;
+    setFetch(async (_url, init) => {
+      sent = init?.body as FormData;
+      return voxtralBody();
+    });
+    const form = new FormData();
+    form.append("file", await genWavFile(2));
+    form.append("model", "voxtral-mini-transcribe-3-0");
+    form.append("response_format", format);
+    form.append("language", "de");
+    for (const [k, v] of Object.entries(extra)) form.append(k, v);
+    const res = await handleTranscriptions(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form }));
+    return { res, sent };
+  }
+
+  test.skipIf(!hasFfmpeg)("a voxtral JSON body is synthesized into the verbose_json envelope with the requested language", async () => {
+    const { res, sent } = await voxtralRequest("verbose_json");
+    expect(res.status).toBe(200);
+    expect(sent?.get("response_format")).toBe("json");
+    const json = (await res.json()) as { text: string; language: string; task: string };
+    expect(json.text).toBe("Hallo Welt");
+    expect(json.task).toBe("transcribe");
+    expect(json.language).toBe("de"); // upstream echoes null → the requested language
+  });
+
+  test.skipIf(!hasFfmpeg)("a voxtral JSON body is synthesized into srt", async () => {
+    const { res } = await voxtralRequest("srt");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toMatch(/^1\n00:00:00,000 --> 00:00:0\d,\d{3}\nHallo Welt\n$/);
+  });
+
+  test.skipIf(!hasFfmpeg)("a voxtral JSON body answers response_format=text as plain text, not the raw JSON", async () => {
+    const { res } = await voxtralRequest("text");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("text/plain");
+    expect(await res.text()).toBe("Hallo Welt");
+  });
+
+  test.skipIf(!hasFfmpeg)("a voxtral request passes a client context_bias through and is costed from the probed duration", async () => {
+    const originalRecord = _sink.record.bind(_sink);
+    const costs: Array<number | null | undefined> = [];
+    (_sink as { record: typeof _sink.record }).record = (row) => {
+      if (row.endpoint === "transcriptions") costs.push(getRequestMeta().costUsd);
+      return originalRecord(row);
+    };
+    try {
+      const { res, sent } = await voxtralRequest("json", { context_bias: "Krumm,Hermes" });
+      expect(res.status).toBe(200);
+      expect(sent?.get("context_bias")).toBe("Krumm,Hermes");
+      expect(costs).toHaveLength(1);
+      // probed duration (~2 s) takes precedence over usage.prompt_audio_seconds (6 s)
+      expect(costs[0]!).toBeCloseTo((2 / 60) * 0.0035, 5);
+      expect(costs[0]!).not.toBeCloseTo((6 / 60) * 0.0035, 5);
+    } finally {
+      (_sink as { record: typeof _sink.record }).record = originalRecord;
+    }
+  });
+
+  test.skipIf(!hasFfmpeg)("injects config.sttContextBias for voxtral and strips a client context_bias for other models", async () => {
+    const mutableConfig = config as unknown as { sttContextBias: string };
+    const original = mutableConfig.sttContextBias;
+    mutableConfig.sttContextBias = "Krumm,Hermes";
+    try {
+      const { sent } = await voxtralRequest("json");
+      expect(sent?.get("context_bias")).toBe("Krumm,Hermes");
+
+      let sentOther: FormData | undefined;
+      setFetch(async (_url, init) => {
+        sentOther = init?.body as FormData;
+        return Response.json({ text: "hi" });
+      });
+      const form = new FormData();
+      form.append("file", await genWavFile(2));
+      form.append("model", "gpt-transcribe");
+      form.append("context_bias", "ignored,terms");
+      await handleTranscriptions(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form }));
+      expect(sentOther?.has("context_bias")).toBe(false);
+    } finally {
+      mutableConfig.sttContextBias = original;
+    }
+  });
+
   test.skipIf(!hasFfmpeg)(
     "a multi-part transcription joins per-part text and synthesizes verbose_json from it",
     async () => {
@@ -307,7 +401,7 @@ describe("handleTranscriptions", () => {
           calls.push({ model, filename: filePart.name });
           // part2 hits a transient backend outage on the requested model, and
           // must succeed once it's retried on the fallback model alone.
-          if (filePart.name.includes("part2") && model !== "whisper") {
+          if (filePart.name.includes("part2") && model !== "gpt-transcribe") {
             return new Response("backend unavailable", { status: 503, headers: { "content-type": "text/plain" } });
           }
           return new Response(JSON.stringify({ text: `${model}:${filePart.name}` }), {
@@ -327,7 +421,7 @@ describe("handleTranscriptions", () => {
         const part2Calls = calls.filter((c) => c.filename.includes("part2"));
         expect(part2Calls).toHaveLength(2); // one failed attempt + one fallback retry — not a whole-set retry
         expect(part2Calls[0]!.model).toBe("gpt-4o-transcribe");
-        expect(part2Calls[1]!.model).toBe("whisper");
+        expect(part2Calls[1]!.model).toBe("gpt-transcribe");
 
         // every OTHER part is called exactly once — the outage on part2 never
         // re-sends or re-transcribes an already-succeeded chunk.

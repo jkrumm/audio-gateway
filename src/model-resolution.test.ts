@@ -3,7 +3,7 @@
  *
  * config.ts reads env at import time, so env is set before the dynamic import.
  * With no STT_MODEL/TTS_MODEL override the config defaults apply
- * (gpt-transcribe / gemini-3.8-flash-lite-tts).
+ * (voxtral-mini-transcribe-3-0 / gemini-3.8-flash-lite-tts).
  */
 import { describe, expect, test } from "bun:test";
 
@@ -22,7 +22,7 @@ const { resolveSttModel, resolveTtsRoute, resolveReasoningEffort, STT_MODELS } =
 
 describe("resolveSttModel", () => {
   test("honours known-good STT models as-is", () => {
-    for (const model of ["whisper", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]) {
+    for (const model of ["whisper", "voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3-0", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]) {
       const r = resolveSttModel(model);
       expect(r.model).toBe(model);
       expect(r.overridden).toBe(false);
@@ -33,25 +33,25 @@ describe("resolveSttModel", () => {
     // gpt-4o-transcribe-diarize is listed by IU but rejects the batch prompt path;
     // the old /(transcribe)/i regex leaked it through. It must now remap.
     const r = resolveSttModel("gpt-4o-transcribe-diarize");
-    expect(r.model).toBe("gpt-transcribe");
+    expect(r.model).toBe("voxtral-mini-transcribe-3-0");
     expect(r.overridden).toBe(true);
   });
 
   test("remaps a realtime-only voxtral model", () => {
     const r = resolveSttModel("voxtral-mini-transcribe-realtime-2602");
-    expect(r.model).toBe("gpt-transcribe");
+    expect(r.model).toBe("voxtral-mini-transcribe-3-0");
     expect(r.overridden).toBe(true);
   });
 
   test("remaps an unrecognized model and flags it overridden", () => {
     const r = resolveSttModel("some-random-model");
-    expect(r.model).toBe("gpt-transcribe");
+    expect(r.model).toBe("voxtral-mini-transcribe-3-0");
     expect(r.overridden).toBe(true);
   });
 
   test("empty model defaults without flagging an override (the normal omitted case)", () => {
     const r = resolveSttModel("");
-    expect(r.model).toBe("gpt-transcribe");
+    expect(r.model).toBe("voxtral-mini-transcribe-3-0");
     expect(r.overridden).toBe(false);
     expect(r.requested).toBe("");
   });
@@ -59,6 +59,8 @@ describe("resolveSttModel", () => {
   test("STT_MODELS excludes realtime-only and diarize variants", () => {
     expect(STT_MODELS.has("whisper")).toBe(true);
     expect(STT_MODELS.has("gpt-transcribe")).toBe(true);
+    expect(STT_MODELS.has("voxtral-mini-transcribe-3-0")).toBe(true);
+    expect(STT_MODELS.has("voxtral-small-transcribe-3-0")).toBe(true);
     expect(STT_MODELS.has("gpt-4o-transcribe")).toBe(true);
     expect(STT_MODELS.has("voxtral-mini-transcribe-realtime-2602")).toBe(false);
     expect(STT_MODELS.has("gpt-4o-transcribe-diarize")).toBe(false);

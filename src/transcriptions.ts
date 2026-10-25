@@ -2,7 +2,7 @@ import { audioDuration } from "./audio";
 import { config } from "./config";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
-import { resolveSttModel } from "./model-resolution";
+import { resolveSttModel, VOXTRAL_MODEL } from "./model-resolution";
 import { getActiveSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { extractTextAndUsage, PartFailure, stripPromptEcho, transcribeParts } from "./stt-dispatch";
 import { prepareSttInput, SttChunkLimitError, SttChunkTooLargeError } from "./stt-input";
@@ -14,6 +14,7 @@ const textAttr = (s: string | undefined): string | undefined =>
   config.usageKeepText && s ? s.slice(0, TEXT_ATTR_MAX) : undefined;
 
 /**
+ * voxtral-*-transcribe-3-0 (always plain JSON, whatever `response_format` says),
  * gpt-transcribe, gpt-4o(-mini)-transcribe and -diarize only support `json`/`text` on IU —
  * `verbose_json`/`srt`/`vtt` and timestamp_granularities are rejected (503).
  * For those models we ask IU for plain `json` and synthesize the richer
@@ -59,8 +60,16 @@ export const srt = (text: string, duration: number): string =>
 export const vtt = (text: string, duration: number): string =>
   `WEBVTT\n\n${srtTime(0).replace(",", ".")} --> ${srtTime(duration).replace(",", ".")}\n${text}\n`;
 
-/** The rock-solid IU STT model we fall back to when the requested model fails. */
-const FALLBACK_MODEL = "whisper";
+/** The IU STT model we fall back to when the requested model hits a transient outage. */
+const FALLBACK_MODEL = "gpt-transcribe";
+/** gpt-transcribe has no sibling to fall back to, so its own outage retries on whisper. */
+const LAST_RESORT_MODEL = "whisper";
+
+/** The chain is voxtral/others → gpt-transcribe → whisper; whisper is terminal (returns itself = no retry). */
+const fallbackFor = (model: string): string => {
+  if (model === LAST_RESORT_MODEL) return model;
+  return model === FALLBACK_MODEL ? LAST_RESORT_MODEL : FALLBACK_MODEL;
+};
 
 /**
  * Upstream failure statuses worth retrying with the fallback model. These signal
@@ -115,6 +124,13 @@ function buildUpstreamForm(form: IncomingForm, clientFormat: string, model: stri
   // single-language lock; `prompt` is a softer bias (use it for "de or en").
   if (!form.has("language") && config.sttLanguage) upstream.append("language", config.sttLanguage);
   if (!form.has("prompt") && config.sttPrompt) upstream.append("prompt", config.sttPrompt);
+  // `context_bias` is Voxtral-only: inject the default for it, and never forward a
+  // client-sent one to other models (unknown field upstream).
+  if (VOXTRAL_MODEL.test(model)) {
+    if (!form.has("context_bias") && config.sttContextBias) upstream.append("context_bias", config.sttContextBias);
+  } else {
+    upstream.delete("context_bias");
+  }
   return upstream;
 }
 
@@ -182,10 +198,11 @@ async function attemptMultiPart(
     { "audio.model": model },
     async (span) => {
       try {
+        const fallbackModel = fallbackFor(model);
         const { text, usedFallback } = await transcribeParts({
           parts,
           model,
-          fallbackModel: FALLBACK_MODEL,
+          fallbackModel,
           isModelUnavailable,
           buildUpstream: (m, part) => buildUpstreamForm(form, clientFormat, m, part, true),
           endpoint: "transcriptions",
@@ -195,7 +212,7 @@ async function attemptMultiPart(
         // Per B3: report the model that actually served the request — the
         // fallback model if any part had to use it, since a joined transcript
         // has no per-part model breakdown for the client to see otherwise.
-        return { status: 200, body: JSON.stringify({ text }), contentType: "application/json", text, usage: null, language: null, servedModel: usedFallback ? FALLBACK_MODEL : model };
+        return { status: 200, body: JSON.stringify({ text }), contentType: "application/json", text, usage: null, language: null, servedModel: usedFallback ? fallbackModel : model };
       } catch (err) {
         if (!(err instanceof PartFailure)) throw err;
         span.setAttributes({ "http.status_code": err.res.status });
@@ -383,17 +400,18 @@ async function resolveTranscription(
   let result = await attemptSingle(model, parts[0], form, clientFormat, totalSeconds);
   // Fallback: a transient upstream outage of the requested model (e.g. IU 404
   // "no backend") would otherwise surface as an unparseable error to the client.
-  // Retry once on whisper, which is the most reliably-served IU STT model.
-  if (!isOk(result.status) && isModelUnavailable(result.status) && model !== FALLBACK_MODEL) {
+  // Retry once on gpt-transcribe (or whisper when gpt-transcribe itself is down).
+  const fallback = fallbackFor(model);
+  if (!isOk(result.status) && isModelUnavailable(result.status) && fallback !== model) {
     log.warn("stt upstream unavailable; retrying on fallback", {
       endpoint: "transcriptions",
       model,
-      fallback: FALLBACK_MODEL,
+      fallback,
       status: result.status,
       caller,
     });
-    result = await attemptSingle(FALLBACK_MODEL, parts[0], form, clientFormat, totalSeconds);
-    return { model: FALLBACK_MODEL, result, joined: false };
+    result = await attemptSingle(fallback, parts[0], form, clientFormat, totalSeconds);
+    return { model: fallback, result, joined: false };
   }
   return { model, result, joined: false };
 }
@@ -458,9 +476,10 @@ async function buildTranscriptionResponse(ctx: ResponseContext, model: string, r
 
   // Whisper rich formats and plain json/text pass through faithfully.
   if (clientFormat === "json") return finish(Response.json({ text }), { model, status, outputText: text });
-  if (joined) {
-    // The joined body is our own synthesized `{ text }` JSON, not the plain
-    // text a "text"-format upstream response would be — render it as such.
+  if (joined || (clientFormat === "text" && contentType.includes("application/json"))) {
+    // The joined body is our own synthesized `{ text }` JSON, and Voxtral answers
+    // JSON whatever `response_format` says — neither is the plain text a
+    // "text"-format client expects, so render it as such.
     return finish(new Response(text, { headers: { "content-type": "text/plain; charset=utf-8" } }), { model, status, outputText: text });
   }
   // Raw-body passthrough (whisper's native rich formats: verbose_json/srt/vtt

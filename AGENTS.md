@@ -43,8 +43,13 @@ pipeline (both retired 2026-06-17).
   `config.sttMaxChunkSeconds` (240s) is set by measured MODEL OUTPUT QUALITY collapse on real audio
   (past 240s, `gpt-4o-transcribe` degrades into repeated-sentence loops), not by any of the four
   upstream limits above — those are independent and still enforced regardless of this setting.
-  `gpt-transcribe` (default since 2026-10-15) showed no collapse up to 1500 s; the 240s ceiling is
-  kept for concurrency within the socket budget and the `whisper` fallback's ~230s timeout.
+  `gpt-transcribe` showed no collapse up to 1500 s; the 240s ceiling is kept for concurrency within
+  the socket budget and the `whisper` last-resort fallback's ~230s timeout. Default STT model is
+  `voxtral-mini-transcribe-3-0` (Mistral, EU, since 2026-10-25; 60 min / 500 MB per file, always
+  answers JSON so the gateway synthesizes text/srt/vtt/verbose_json; `prompt` is ignored, steer with
+  `context_bias` / `STT_CONTEXT_BIAS`); fallback on 404/5xx is `gpt-transcribe`, and `gpt-transcribe`
+  itself falls back to `whisper` (`fallbackFor` in transcriptions.ts). Cost: `perMinute` rate in
+  usage.ts, seconds from the probed duration or `usage.prompt_audio_seconds`.
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
   wav/pcm) before handing off.

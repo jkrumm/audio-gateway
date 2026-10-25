@@ -68,12 +68,25 @@ export function resolveTtsRoute(requested: string): TtsRoute {
  * merely *lists* but does not serve at this path (or a typo) slipped through and
  * produced a raw `text/plain` 404 "No suitable backend server found" that clients
  * like MacWhisper cannot parse. Only these canonical ids are honoured as-is;
- * anything else is remapped to `config.sttModel`. `voxtral-*-transcribe-*` is
- * deliberately excluded — it only supports realtime, not this batch endpoint.
- * `gpt-transcribe` (released 2026-07-28, default since 2026-10-15) replaces the legacy ids, which
- * OpenAI shuts down 2027-02-26.
+ * anything else is remapped to `config.sttModel`. Mistral's batch
+ * `voxtral-{mini,small}-transcribe-3-0` are served here (EU-resident;
+ * `voxtral-mini-transcribe-3-0` is the default since 2026-10-25); the
+ * realtime-only `voxtral-mini-transcribe-realtime-2602` is deliberately
+ * excluded — it does not serve this batch endpoint. `gpt-transcribe` (released
+ * 2026-07-28, default 2026-10-15 to 2026-10-25) is the outage fallback and
+ * replaces the legacy OpenAI ids, which OpenAI shuts down 2027-02-26.
  */
-export const STT_MODELS = new Set(["whisper", "gpt-transcribe", "gpt-4o-transcribe", "gpt-4o-mini-transcribe"]);
+export const STT_MODELS = new Set([
+  "whisper",
+  "voxtral-mini-transcribe-3-0",
+  "voxtral-small-transcribe-3-0",
+  "gpt-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe",
+]);
+
+/** Mistral Voxtral batch models: ignore `prompt`, take `context_bias` instead. */
+export const VOXTRAL_MODEL = /^voxtral-/i;
 
 /**
  * Resolve the STT model to use.

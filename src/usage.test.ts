@@ -374,6 +374,46 @@ describe("gpt-transcribe pricing (per minute, duration-billed usage)", () => {
   });
 });
 
+describe("voxtral pricing (per minute, prompt_audio_seconds usage)", () => {
+  test("mini bills usage.prompt_audio_seconds at $0.0035/min and stamps 'assumed' (not 'none')", async () => {
+    const { computeCost, normalizeModel } = await import("./usage");
+    const mini = computeCost(normalizeModel("voxtral-mini-transcribe-3-0"), { inputTokens: null, outputTokens: null, audioTokens: null, audioSeconds: 600, inputChars: null });
+    expect(mini.costUsd).toBeCloseTo(0.035, 9);
+    expect(mini.costSource).toBe("assumed");
+    const small = computeCost(normalizeModel("voxtral-small-transcribe-3-0"), { inputTokens: null, outputTokens: null, audioTokens: null, audioSeconds: 600, inputChars: null });
+    expect(small.costUsd).toBeCloseTo(0.04, 9);
+  });
+
+  test("a usage row carrying only the Voxtral usage shape is costed from prompt_audio_seconds", async () => {
+    type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
+    const cfg = config as unknown as { argoApiSecret: string };
+    const saved = cfg.argoApiSecret;
+    cfg.argoApiSecret = "test-secret";
+    let sentBody: Record<string, unknown> | undefined;
+    (globalThis as unknown as { fetch: FetchImpl }).fetch = (async (_url, init) => {
+      sentBody = JSON.parse(String(init?.body ?? "{}"));
+      return new Response("ok", { status: 200 });
+    }) as FetchImpl;
+    try {
+      const sink = buildHttpSink("http://argo.test/usage/records", "audio-gateway");
+      await sink.record({
+        endpoint: "transcriptions",
+        model: "voxtral-mini-transcribe-3-0",
+        status: 200,
+        latencyMs: 5,
+        usageJson: { prompt_audio_seconds: 120, prompt_tokens: 5, completion_tokens: 14, total_tokens: 394 },
+      } satisfies UsageRow);
+    } finally {
+      cfg.argoApiSecret = saved;
+      delete (globalThis as unknown as { fetch?: FetchImpl }).fetch;
+    }
+    const record = (sentBody?.["records"] as Array<Record<string, unknown>>)?.[0];
+    expect(record?.["model_norm"]).toBe("voxtral-mini-transcribe-3-0");
+    expect(record?.["cost_usd"] as number).toBeCloseTo((120 / 60) * 0.0035, 9);
+    expect(record?.["cost_source"]).toBe("assumed");
+  });
+});
+
 describe("ElevenLabs pricing (per character at vendor list, contested unit)", () => {
   test("a v3 prediction bills per character at $0.10/1k and stamps 'assumed'", async () => {
     const { computeCost, normalizeModel } = await import("./usage");

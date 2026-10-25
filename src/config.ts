@@ -176,16 +176,23 @@ export const config = {
    * Default STT model injected when a `/audio/transcriptions` request omits
    * `model`. Empty model would otherwise be forwarded to IU, which 400s with
    * "Missing model name". Gateway owns this default so callers (Argo dashboard,
-   * Hermes) need not know model names. `gpt-transcribe` is the project's STT
-   * model since 2026-10-15 (matches /transcribe/i → DE/EN prompt steering and
-   * envelope synthesis apply). OpenAI shuts down gpt-4o-transcribe, whisper-1 and
-   * gpt-4o-mini-transcribe on 2027-02-26.
+   * Hermes) need not know model names. `voxtral-mini-transcribe-3-0` (Mistral,
+   * EU-resident) is the project's STT model since 2026-10-25; `gpt-transcribe`
+   * is the fallback on a transient upstream outage (transcriptions.ts). Matches
+   * /transcribe/i, so envelope synthesis applies. OpenAI shuts down
+   * gpt-4o-transcribe, whisper-1 and gpt-4o-mini-transcribe on 2027-02-26.
    */
-  sttModel: process.env["STT_MODEL"] ?? "gpt-transcribe",
+  sttModel: process.env["STT_MODEL"] ?? "voxtral-mini-transcribe-3-0",
   /** Default STT `language` (ISO-639-1, e.g. `de`) injected when the client sends none. */
   sttLanguage: process.env["STT_LANGUAGE"] ?? "",
   /** Default STT `prompt` injected when the client sends none — steers expected language. */
   sttPrompt: process.env["STT_PROMPT"] ?? "",
+  /**
+   * Default `context_bias` (comma-separated terms) injected for Voxtral models
+   * when the client sends none. Voxtral silently ignores `prompt`; `context_bias`
+   * is what steers its vocabulary. Empty = none.
+   */
+  sttContextBias: process.env["STT_CONTEXT_BIAS"] ?? "",
   /**
    * Upload size the IU upstream tolerates before it hard-rejects a
    * `/audio/transcriptions` body with an HTTP 500 and an empty response body

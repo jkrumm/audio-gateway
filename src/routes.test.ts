@@ -255,7 +255,7 @@ describe("Default STT model when `model` omitted", () => {
     const res = await handleRequest(req);
 
     expect(res.status).toBe(200);
-    expect(sentModel).toBe("gpt-transcribe");
+    expect(sentModel).toBe("voxtral-mini-transcribe-3-0");
     // Happy-path completion ships a structured log record (otel.ts emitLog).
     expect(logBodies).toContain("stt.done");
   });
@@ -402,9 +402,9 @@ describe("Graceful shutdown", () => {
 // ---------------------------------------------------------------------------
 
 describe("STT: upstream error records usage row", () => {
-  test("both primary and whisper fallback fail → 503, records both attempts", async () => {
+  test("both primary and gpt-transcribe fallback fail → 503, records both attempts", async () => {
     // sttRequest sends gpt-4o-transcribe; a 5xx is retryable, so the handler
-    // retries on whisper. Stub fails both → final 503, one row per attempt.
+    // retries on gpt-transcribe. Stub fails both → final 503, one row per attempt.
     const sentModels: string[] = [];
     stubFetch(async (_url, init) => {
       sentModels.push(String((init?.body as FormData).get("model") ?? ""));
@@ -413,52 +413,104 @@ describe("STT: upstream error records usage row", () => {
 
     const res = await handleRequest(sttRequest());
     expect(res.status).toBe(503);
-    expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
+    expect(sentModels).toEqual(["gpt-4o-transcribe", "gpt-transcribe"]);
 
     // Two per-attempt rows plus one "transcription-request" summary row.
     const rows = getUsageRows();
     expect(rows.length).toBe(3);
     expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
     expect(rows[0]?.["status"]).toBe(503);
-    expect(rows[1]?.["model"]).toBe("whisper");
+    expect(rows[1]?.["model"]).toBe("gpt-transcribe");
     expect(rows[1]?.["status"]).toBe(503);
     expect(rows[2]?.["endpoint"]).toBe("transcription-request");
   });
 
-  test("primary 404 → whisper fallback succeeds → 200 with fallback text", async () => {
+  test("primary 404 → gpt-transcribe fallback succeeds → 200 with fallback text", async () => {
     const sentModels: string[] = [];
     stubFetch(async (_url, init) => {
       const model = String((init?.body as FormData).get("model") ?? "");
       sentModels.push(model);
       // First attempt (the requested model) hits the transient IU "no backend" 404.
-      if (model !== "whisper") {
+      if (model !== "gpt-transcribe") {
         return new Response("No suitable backend server found for model 'gpt-4o-transcribe'.", {
           status: 404,
           headers: { "content-type": "text/plain" },
         });
       }
-      return Response.json({ text: "from whisper" });
+      return Response.json({ text: "from gpt-transcribe" });
     });
 
     const res = await handleRequest(sttRequest());
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
-    expect(json["text"]).toBe("from whisper");
-    expect(sentModels).toEqual(["gpt-4o-transcribe", "whisper"]);
+    expect(json["text"]).toBe("from gpt-transcribe");
+    expect(sentModels).toEqual(["gpt-4o-transcribe", "gpt-transcribe"]);
 
     // Failed primary + successful fallback + one "transcription-request" summary row.
     const rows = getUsageRows();
     expect(rows.length).toBe(3);
     expect(rows[0]?.["model"]).toBe("gpt-4o-transcribe");
     expect(rows[0]?.["status"]).toBe(404);
-    expect(rows[1]?.["model"]).toBe("whisper");
+    expect(rows[1]?.["model"]).toBe("gpt-transcribe");
     expect(rows[1]?.["status"]).toBe(200);
     expect(rows[2]?.["endpoint"]).toBe("transcription-request");
   });
 
+  test("default voxtral 503 → gpt-transcribe fallback serves the request", async () => {
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      const model = String((init?.body as FormData).get("model") ?? "");
+      sentModels.push(model);
+      if (model.startsWith("voxtral")) return new Response("down", { status: 503, headers: { "content-type": "text/plain" } });
+      return Response.json({ text: "from gpt-transcribe" });
+    });
+
+    const form = new FormData();
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const res = await handleRequest(authed(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form })));
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as Record<string, unknown>)["text"]).toBe("from gpt-transcribe");
+    expect(sentModels).toEqual(["voxtral-mini-transcribe-3-0", "gpt-transcribe"]);
+  });
+
+  test("explicit gpt-transcribe outage retries on whisper, never on itself", async () => {
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      const model = String((init?.body as FormData).get("model") ?? "");
+      sentModels.push(model);
+      if (model === "gpt-transcribe") return new Response("down", { status: 404, headers: { "content-type": "text/plain" } });
+      return Response.json({ text: "from whisper" });
+    });
+
+    const form = new FormData();
+    form.append("model", "gpt-transcribe");
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const res = await handleRequest(authed(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form })));
+    expect(res.status).toBe(200);
+    expect(sentModels).toEqual(["gpt-transcribe", "whisper"]);
+  });
+
+  test("explicit whisper outage is terminal — the error passes through without a retry", async () => {
+    const sentModels: string[] = [];
+    stubFetch(async (_url, init) => {
+      sentModels.push(String((init?.body as FormData).get("model") ?? ""));
+      return new Response("down", { status: 503, headers: { "content-type": "text/plain" } });
+    });
+
+    const form = new FormData();
+    form.append("model", "whisper");
+    form.append("response_format", "json");
+    form.append("file", new File(["audio"], "test.mp3", { type: "audio/mpeg" }));
+    const res = await handleRequest(authed(new Request("http://localhost/v1/audio/transcriptions", { method: "POST", body: form })));
+    expect(res.status).toBe(503);
+    expect(sentModels).toEqual(["whisper"]);
+  });
+
   test("client-error status (400) does not trigger the fallback", async () => {
     // A 400 is a malformed request, not an unavailable model — it would fail
-    // identically on whisper, so the handler must not retry.
+    // identically on the fallback, so the handler must not retry.
     const sentModels: string[] = [];
     stubFetch(async (_url, init) => {
       sentModels.push(String((init?.body as FormData).get("model") ?? ""));
@@ -547,7 +599,7 @@ describe("error_text: upstream error body captured in usage row", () => {
 // ---------------------------------------------------------------------------
 
 describe("STT model override: unrecognized model replaced with config.sttModel", () => {
-  test("model 'some-random-model' is replaced with gpt-transcribe in upstream form", async () => {
+  test("model 'some-random-model' is replaced with voxtral-mini-transcribe-3-0 in upstream form", async () => {
     let sentModel = "";
     stubFetch(async (_url, init) => {
       sentModel = String((init?.body as FormData).get("model") ?? "");
@@ -562,7 +614,7 @@ describe("STT model override: unrecognized model replaced with config.sttModel",
     const res = await handleRequest(req);
 
     expect(res.status).toBe(200);
-    expect(sentModel).toBe("gpt-transcribe");
+    expect(sentModel).toBe("voxtral-mini-transcribe-3-0");
   });
 });
 
