@@ -11,8 +11,15 @@ native TTS pipelines: **Gemini expressive TTS** and **Replicate/ElevenLabs TTS**
   anything over either limit is automatically compressed and time-sliced into silence-snapped
   chunks, transcribed concurrently, and joined back into one response.
 - **TTS** (`POST /v1/audio/speech`) — model-routed to one of three lanes:
-  - a Gemini TTS model (`gemini*tts*`) → the native `generateContent` pipeline (prep-LLM chunking
-    → per-chunk synth → ffmpeg transcode, default voice Charon);
+  - a Gemini 3.8 TTS model (`gemini*tts*`) → the native Gemini pipeline, voice Charon, following
+    the modelpick `docs/gemini-tts.md` reference. Chat default `gemini-3.8-flash-lite-tts` (no
+    prep, one call); `gemini-3.8-flash-tts` (listed in `TTS_GEMINI_PREP_MODELS`) runs the prep
+    LLM first — spoken-form numbers, ≤~1,000-char sentence-aligned chunks, one constant `style`
+    (sent as `speechMetadata.style`, never spoken) and `<short pause>`/`<long pause>` tags.
+    `response_format: pcm` streams progressively (`streamGenerateContent`, first audio byte as
+    soon as Gemini emits it); mp3/opus/wav are synthesized whole and transcoded by ffmpeg. A pcm failure before the first
+    audio byte is an ordinary HTTP error; after it the chunked body is aborted (a transfer error,
+    not a clean EOF), so a truncated clip never looks complete;
   - an `owner/name` Replicate id (e.g. `elevenlabs/flash-v2.5`, `elevenlabs/v3`) → the IU
     gateway's Replicate route (create prediction → poll → fetch delivery MP3). Prep-LLM chunking
     only runs for models listed in `TTS_REPLICATE_PREP_MODELS` (default `elevenlabs/v3`) — other
@@ -21,7 +28,7 @@ native TTS pipelines: **Gemini expressive TTS** and **Replicate/ElevenLabs TTS**
 
   All three honour `response_format` (`mp3`/`opus`/`wav`/`pcm` — `pcm`/`wav` are raw/wrapped s16le
   mono 24 kHz, the shape Hermes' `OpenAIStreamer` expects). `speed` is forwarded on the Replicate
-  (clamped to 0.7–1.2) and passthrough lanes; Gemini has no speed parameter and ignores it. The
+  (clamped to 0.7–1.2) and passthrough lanes; Gemini has no speed parameter and ignores it (pace is the `style` string). The
   Gemini and Replicate lanes both return an `X-Audio-Title` header when their prep LLM ran.
   Language per request: `language`/`lang_code` if sent, else detected from the text (umlauts,
   DE/EN function words), else `TTS_DEFAULT_LANGUAGE` (`de`) — never English by accident, because

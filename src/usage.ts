@@ -244,7 +244,11 @@ const RATES: Record<string, Rate> = {
   // OpenAI list price, 2026-10-15 (not invoice-verified): per minute, duration-billed
   // (upstream usage is `{type:"duration",seconds}`, no tokens).
   "gpt-transcribe": { perMinute: 0.0045 },
-  "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens
+  "gemini-3.1-flash-tts-preview": { input: 0.5, output: 10 }, // output tokens are audio tokens; shuts down 2026-11-17
+  // Gemini 3.8 TTS (GA 2026-09-22; ai.google.dev pricing, list not invoice-verified). Output tokens
+  // are audio tokens (25/s). Audio-out is introductory through 2026-12-31, then flash-lite 12 / flash 18.
+  "gemini-3.8-flash-lite-tts": { input: 0.5, output: 6 },
+  "gemini-3.8-flash-tts": { input: 0.5, output: 9 },
   "deepseek-v4-pro": { input: 0.435, output: 0.87 },
   // 2026-09-13 model rollout: podcast outline/review/metadata/editorial/research.
   // Rates measured 2026-09-13 against the IU unified endpoint's own `usage.cost`

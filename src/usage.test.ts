@@ -156,6 +156,10 @@ describe("podcast model rates", () => {
     expect(opus55.costUsd).toBeCloseTo(6, 6);
     expect(computeCost("gpt-5.6-luna", { inputTokens: 1_000_000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(0.2, 6);
     expect(computeCost("gemini-3.1-pro-preview", { inputTokens: 0, outputTokens: 1_000_000, audioTokens: null, audioSeconds: null, inputChars: null }).costUsd).toBeCloseTo(12, 6);
+    // Gemini 3.8 TTS: 60 s of audio = 1500 output tokens (25/s) — about $0.009/min flash-lite, $0.0135/min flash.
+    const tts = { inputTokens: 0, outputTokens: 1500, audioTokens: null, audioSeconds: 60, inputChars: null };
+    expect(computeCost("gemini-3.8-flash-lite-tts", tts).costUsd).toBeCloseTo(0.009, 6);
+    expect(computeCost("gemini-3.8-flash-tts", tts).costUsd).toBeCloseTo(0.0135, 6);
     // No `verified` flag on this rate — an unconfirmed vendor list price stamps 'assumed', not 'estimated'.
     expect(computeCost("claude-opus-4-6-eu".replace(/-eu$/, ""), { inputTokens: 1000, outputTokens: 0, audioTokens: null, audioSeconds: null, inputChars: null }).costSource).toBe("assumed");
   });

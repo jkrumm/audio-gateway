@@ -1,8 +1,8 @@
 import type { AudioOutputFormat, ChunkAudio } from "./audio";
-import { concatPcm, SAMPLE_RATE_DEFAULT, transcode } from "./audio";
+import { concatPcm, SAMPLE_RATE_DEFAULT, silencePcm, transcode } from "./audio";
 import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { detectLanguage, enforceChunkLimits, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
+import { detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveReasoningEffort } from "./model-resolution";
@@ -42,6 +42,15 @@ export interface GeminiSpeechRequest {
   summarize: boolean;
 }
 
+/**
+ * The one short `speechMetadata.style` string prep uses for every chunk of a request. 3.8 reads
+ * direction placed in the text aloud; sustained delivery belongs in this field, kept identical
+ * across chunks so the voice does not drift between requests (docs/gemini-tts.md §Style control).
+ */
+export const PREP_STYLE = "calm, warm, conversational";
+/** A prep-supplied style longer than this is a sentence of direction, not a style string — replaced by {@link PREP_STYLE}. */
+const MAX_STYLE_CHARS = 60;
+
 export const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into what should be SPOKEN aloud, in the persona of Hermes — a calm, warm, concise "sharp older friend". The user reads the written reply on screen; the spoken rendering is for the ear. There is no length limit: decide from the text how much deserves to be heard.
 
 Your job, in order:
@@ -52,23 +61,24 @@ Your job, in order:
    - An answer to a question → the answer with the details that actually matter (the day, time, amount, condition), in flowing sentences; drop lists, headers, hedges and anything the user would only want to read, not hear.
    - Content that is meant to be listened to in full — a weather report, a briefing, a message the user asked to have spoken, a story — → keep ALL of its substance, rewritten as natural speech.
    Never pad, never add greetings or filler, never truncate a report to be brief.
-4. Speak numbers, times, dates and units in spoken form (German: "achtzehn Uhr dreißig", "zweiundzwanzig Grad", "Samstag, der neunundzwanzigste"; English: "half past six", "twenty-two degrees"). No markdown, no bullet characters, no emoji.
-5. Write one short "style" directive IN that language describing the warm, calm Hermes delivery.
+4. Speak numbers, times, dates and units in spoken form (German: "achtzehn Uhr dreißig", "zweiundzwanzig Grad", "Samstag, der neunundzwanzigste"; English: "half past six", "twenty-two degrees"). No markdown, no bullet characters, no emoji, no tags.
+5. Use exactly "${PREP_STYLE}" as the "style" value.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"<directive>","text":"<the spoken rendering>"}]}`;
+{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"${PREP_STYLE}","text":"<the spoken rendering>"}]}`;
 
-const PREP_SYSTEM_PROMPT = `You prepare text for Gemini text-to-speech in the persona of Hermes — a calm, warm, concise "sharp older friend". No greetings, no filler, substance first.
+const PREP_SYSTEM_PROMPT = `You prepare text for Gemini 3.8 text-to-speech in the persona of Hermes — a calm, warm, concise "sharp older friend". No greetings, no filler, substance first. The model speaks the "text" field VERBATIM: anything that is not meant to be heard must not be in it.
 
 Your job, in order:
 1. Detect the language of the input: "de" (German) or "en" (English).
 2. Write a short title (3–6 words) summarizing the content, IN the transcript's language, suitable as a filename/label: plain words, no quotes, no trailing punctuation, no emoji.
-3. Rewrite numbers, times, dates, units and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language.
-4. Split the text into short chunks of about 110 words each (never more than 150), so each chunk is only about 40–50 seconds of speech — Gemini TTS quality degrades once a single chunk runs past ~60 seconds. Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
-5. For each chunk, write a "style" directive (one short sentence) IN the transcript's language describing the warm, calm Hermes delivery, and embed 1–2 SPARSE inline tags inside the chunk's "text" at natural points. Use only these tags: German [pause] [nachdenklich] [lacht] [seufzt] [begeistert] [bestimmt] [flüsternd]; English [pause] [thoughtful] [chuckles] [sigh] [excited] [firm] [whispers]. Do not over-tag — one or two per chunk. Tags are performance cues, never read aloud.
+3. Rewrite numbers, times, dates, units, symbols and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig", "zum Beispiel", "Millionen Euro"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language. No markdown, bullet characters or emoji.
+4. Split the text into chunks of about 110 words each (never more than 150, roughly 1,000 characters), so each chunk is only about 50 seconds of speech — Gemini TTS drifts and drops words on longer generations. Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
+5. Set every chunk's "style" to exactly "${PREP_STYLE}" — identical across chunks. Never put direction, emotion words or "Style:" prefixes inside "text"; they would be read aloud.
+6. Embed SPARSE inline tags inside "text" at natural beats, in angle brackets, always in English even inside German text: <short pause> (about a quarter second), <long pause> (about a second), and — only where it genuinely fits — <laugh> or <sigh>. At most one or two tags per chunk, never two tags next to each other, none at all in most chunks. No square-bracket tags, no emotion tags, no other tag names.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"<directive>","text":"<transcript with inline tags>"}]}`;
+{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"${PREP_STYLE}","text":"<transcript with sparse <tags>>"}]}`;
 
 /** First few words of the input as a fallback title for the no-LLM path. */
 function fallbackTitle(input: string, de: boolean): string {
@@ -77,13 +87,18 @@ function fallbackTitle(input: string, de: boolean): string {
   return trimmed || (de ? "Sprachnachricht" : "Voice memo");
 }
 
-/** Build a single-chunk PrepResult with a default Hermes style directive — no LLM call. */
+/** Build a single-chunk PrepResult with no style (the model's own delivery) — no LLM call. */
 function defaultPrep(input: string): PrepResult {
   const de = (detectLanguage(input) ?? config.ttsDefaultLanguage) === "de";
-  const style = de
-    ? "Lies als warmer, ruhiger Erzähler, ohne Begrüßung, sachlich und natürlich"
-    : "Read as a warm, calm narrator, no greeting, natural and matter-of-fact";
-  return { lang: de ? "de" : "en", title: fallbackTitle(input, de), chunks: [{ style, text: input.trim() }] };
+  const lang = de ? "de" : "en";
+  // Deterministic cleanup only (markdown, emoji, °C, "z. B.") — the model speaks what it is given.
+  return { lang, title: fallbackTitle(input, de), chunks: [{ style: "", text: normalizeForSpeech(input, lang) }] };
+}
+
+/** Whether `model` is configured to run the prep LLM (`TTS_GEMINI_PREP_MODELS`, id or prefix). */
+export function geminiWantsPrep(model: string): boolean {
+  const listed = config.ttsGeminiPrepModels.split(",").map((s) => s.trim()).filter(Boolean);
+  return listed.some((entry) => model === entry || model.startsWith(entry));
 }
 
 export interface RawResponse {
@@ -277,15 +292,17 @@ interface OpenAiUsage {
  * Decision 2 / §10 bug fix: record a usage row (error status + latency) BEFORE
  * throwing on non-2xx, so failures are visible in telemetry.
  *
- * When `summarize` is true, the `config.ttsPrep` gating is bypassed (summary
+ * Prep runs only for models in `config.ttsGeminiPrepModels` (and then per `config.ttsPrep`).
+ * When `summarize` is true, all gating is bypassed (summary
  * always calls the LLM) and the SUMMARY_SYSTEM_PROMPT is used instead. Usage is
  * recorded under `"speech-summary"` so summary calls are separable in telemetry.
  */
-async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
+async function runPrep(model: string, input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
   const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
   const prepModel = summarize ? config.ttsSummaryModel : config.ttsPrepModel;
 
   if (!summarize) {
+    if (!geminiWantsPrep(model)) return { prep: defaultPrep(input), ran: false };
     const isLong = input.length >= config.ttsChunkCharThreshold;
     if (config.ttsPrep === "off") return { prep: defaultPrep(input), ran: false };
     if (config.ttsPrep === "long" && !isLong) return { prep: defaultPrep(input), ran: false };
@@ -357,10 +374,35 @@ async function runPrep(input: string, summarize: boolean): Promise<{ prep: PrepR
       span.setAttributes({ "llm.output_tokens": json.usage?.completion_tokens ?? undefined });
 
       const content = json.choices?.[0]?.message?.content ?? "";
-      return { prep: parsePrepResponse(content), ran: true };
+      const parsed = parsePrepResponse(content);
+      const chunks = parsed.chunks.map((c) => (c.style && c.style.length <= MAX_STYLE_CHARS ? c : { ...c, style: PREP_STYLE }));
+      return { prep: { ...parsed, chunks }, ran: true };
     },
     "client",
   );
+}
+
+/**
+ * The 3.8 request body for one chunk (docs/gemini-tts.md §Request shapes). Style travels in
+ * `parts[].speechMetadata.style` — never as a spoken prefix, never in `systemInstruction` or
+ * `speechConfig` (both 400 on IU). `rawPcm` asks the unary route for headerless L16 instead of
+ * WAV; the stream route is headerless L16 already.
+ */
+export function synthBody(voiceName: string, chunk: PrepChunk, opts: { rawPcm: boolean }): Record<string, unknown> {
+  return {
+    contents: [{ parts: [{ text: chunk.text, ...(chunk.style && { speechMetadata: { style: chunk.style } }) }] }],
+    generationConfig: {
+      responseModalities: ["AUDIO"],
+      ...(opts.rawPcm && { responseFormat: { audio: { mimeType: "AUDIO_L16" } } }),
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+    },
+  };
+}
+
+/** Drop a 44-byte RIFF/WAVE header if the upstream returned WAV despite the L16 request. */
+function stripWavHeader(bytes: Uint8Array): Uint8Array {
+  const riff = bytes.byteLength > 44 && String.fromCharCode(...bytes.subarray(0, 4)) === "RIFF";
+  return riff ? bytes.subarray(44) : bytes;
 }
 
 interface GeminiTtsResponse {
@@ -389,14 +431,7 @@ async function synthChunk(model: string, voiceName: string, chunk: PrepChunk, in
       const res = await rawFetch(iuGeminiUrl(`/models/${model}:generateContent`), {
         method: "POST",
         headers: iuHeaders({ "content-type": "application/json" }),
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: `${chunk.style}: ${chunk.text}` }] }],
-          generationConfig: {
-            responseModalities: ["AUDIO"],
-            temperature: 1.0,
-            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
-          },
-        }),
+        body: JSON.stringify(synthBody(voiceName, chunk, { rawPcm: true })),
       });
       const latencyMs = Date.now() - start;
       span.setAttributes({ "http.status_code": res.status });
@@ -418,7 +453,7 @@ async function synthChunk(model: string, voiceName: string, chunk: PrepChunk, in
         recordSpeechError(model, res.status, latencyMs, errorText);
         throw new Error(`Gemini TTS returned no audio: HTTP ${res.status} ${res.body.slice(0, 300)}`);
       }
-      const pcm = Uint8Array.from(Buffer.from(inline.data, "base64"));
+      const pcm = stripWavHeader(Uint8Array.from(Buffer.from(inline.data, "base64")));
       const sampleRate = Number(/rate=(\d+)/.exec(inline.mimeType ?? "")?.[1]) || SAMPLE_RATE_DEFAULT;
 
       recordUsage({
@@ -452,6 +487,242 @@ export async function synthChunksConcurrent(
   return synthConcurrent(config.ttsConcurrency, chunks, (chunk, i) => synthChunk(model, voiceName, chunk, i));
 }
 
+/** Gemini audio tokens per second of audio (docs). Streamed `usageMetadata` reports 1 token — bill from duration. */
+const AUDIO_TOKENS_PER_SECOND = 25;
+
+/** Pull the base64 PCM out of one SSE `data:` payload; events without audio yield null, malformed or error events throw. */
+export function sseAudio(data: string): Uint8Array | null {
+  let event: GeminiTtsResponse & { error?: { message?: string } };
+  try {
+    event = JSON.parse(data) as typeof event;
+  } catch {
+    // A cut-off or garbled event would otherwise end the stream as a quietly shorter clip.
+    throw new Error(`Gemini TTS stream sent an unparseable event: ${data.slice(0, 120)}`);
+  }
+  // An in-band error event ends the stream as a failure, never as a silently shorter clip.
+  if (event.error) throw new Error(`Gemini TTS stream error event: ${(event.error.message ?? JSON.stringify(event.error)).slice(0, 300)}`);
+  const b64 = event.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data)?.inlineData?.data;
+  return b64 ? Uint8Array.from(Buffer.from(b64, "base64")) : null;
+}
+
+/** No byte from upstream for this long means a wedged stream (idle rule — never a total-duration cap). */
+const STREAM_IDLE_MS = 60_000;
+
+async function readWithIdleGuard(reader: {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+}): Promise<{ done: boolean; value?: Uint8Array }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const idle = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Gemini TTS stream idle for ${STREAM_IDLE_MS / 1000}s`)), STREAM_IDLE_MS);
+  });
+  try {
+    return await Promise.race([reader.read(), idle]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Open the SSE stream for one chunk. 429/503 are retried before any body byte is read. */
+async function openStream(model: string, voiceName: string, chunk: PrepChunk): Promise<Response> {
+  const attempts = 3;
+  for (let attempt = 1; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(iuGeminiUrl(`/models/${model}:streamGenerateContent?alt=sse`), {
+        method: "POST",
+        headers: iuHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify(synthBody(voiceName, chunk, { rawPcm: false })),
+      });
+    } catch (err) {
+      // A connection reset before the first byte is as transient as a 503 (rawFetch does the same).
+      if (attempt >= attempts) throw err;
+      recordRetry();
+      await Bun.sleep(1000 * attempt);
+      continue;
+    }
+    if ((res.status === 503 || res.status === 429) && attempt < attempts) {
+      recordRetry();
+      const headerHint = retryHintFromHeaders(res.headers);
+      if (headerHint !== null) void res.body?.cancel().catch(() => {});
+      const hint = headerHint ?? (await readBodyHint(res));
+      await Bun.sleep(Math.min(MAX_RETRY_DELAY_MS, Math.max(500 * attempt, hint ?? 0)));
+      continue;
+    }
+    return res;
+  }
+}
+
+/**
+ * Progressive PCM for one chunk: yields s16-aligned byte runs as the SSE events arrive.
+ * A non-2xx or an audio-less stream throws (after recording an error usage row).
+ */
+async function* streamChunkPcm(model: string, voiceName: string, chunk: PrepChunk, started: number): AsyncGenerator<Uint8Array> {
+  const res = await openStream(model, voiceName, chunk);
+  if (res.status < 200 || res.status >= 300 || !res.body) {
+    const errorText = (await res.text()).slice(0, 500);
+    log.error("gemini tts stream error", { endpoint: "speech", model, status: res.status, error: errorText });
+    recordSpeechError(model, res.status, Date.now() - started, errorText);
+    throw new Error(`Gemini TTS stream failed: HTTP ${res.status} ${errorText.slice(0, 300)}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let carry: Uint8Array | null = null; // a dangling odd byte — keeps every yielded run sample-aligned
+  let yielded = false;
+  const emit = (audio: Uint8Array): Uint8Array | null => {
+    const joined = carry ? Uint8Array.from([...carry, ...audio]) : audio;
+    const even = joined.byteLength - (joined.byteLength % 2);
+    carry = even < joined.byteLength ? joined.slice(even) : null;
+    return even > 0 ? joined.subarray(0, even) : null;
+  };
+  try {
+    for (;;) {
+      const { done, value } = await readWithIdleGuard(reader);
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = done ? "" : (events.pop() ?? "");
+      for (const raw of events) {
+        const data = raw.split(/\r?\n/).filter((l) => l.startsWith("data:")).map((l) => l.slice(5).trim()).join("");
+        const audio = data ? sseAudio(data) : null;
+        const run = audio ? emit(audio) : null;
+        if (run) {
+          yielded = true;
+          yield run;
+        }
+      }
+      if (done) break;
+    }
+  } finally {
+    void reader.cancel().catch(() => {});
+  }
+  if (!yielded) {
+    const errorText = "no audio in stream";
+    log.error("gemini tts stream error", { endpoint: "speech", model, status: res.status, error: errorText });
+    recordSpeechError(model, res.status, Date.now() - started, errorText);
+    throw new Error(`Gemini TTS stream returned no audio: HTTP ${res.status}`);
+  }
+}
+
+/** Settlement promises of streamed responses, so the dispatcher can record its summary row once the body ends. */
+const streamSettlements = new WeakMap<Response, Promise<void>>();
+
+/** For a streamed Gemini response: resolves when the body is fully written (or cancelled), rejects if it failed mid-stream. */
+export function streamSettled(response: Response): Promise<void> | undefined {
+  return streamSettlements.get(response);
+}
+
+/**
+ * Stream the chunks as raw PCM (`response_format: pcm`): the first bytes leave as soon as Gemini
+ * produces them, chunks run one after another with a silence join. The Response is returned only
+ * once the first audio byte arrived, so an upstream failure is still a proper HTTP error. The
+ * returned `settled` promise ends with the body (rejects on a mid-stream failure).
+ */
+async function streamGeminiSpeech(params: {
+  model: string;
+  voiceName: string;
+  chunks: PrepChunk[];
+  headers: Record<string, string>;
+}): Promise<{ response: Response; settled: Promise<void> }> {
+  const { model, voiceName, chunks, headers } = params;
+  const sampleRate = SAMPLE_RATE_DEFAULT;
+  const started = Date.now();
+  let cancelled = false;
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let wake: (() => void) | null = null;
+  // Pull-based backpressure: ~256 KiB (~5 s of audio) may queue ahead of the client; beyond that
+  // synthesis waits for the consumer, and a cancelled stream stops requesting more audio.
+  const body = new ReadableStream<Uint8Array>(
+    {
+      start(c) {
+        controller = c;
+      },
+      pull() {
+        wake?.();
+      },
+      cancel() {
+        cancelled = true;
+        wake?.();
+      },
+    },
+    { highWaterMark: 262_144, size: (bytes) => bytes?.byteLength ?? 0 },
+  );
+  const push = async (bytes: Uint8Array): Promise<void> => {
+    while (!cancelled && (controller.desiredSize ?? 1) <= 0) await new Promise<void>((resolve) => (wake = resolve));
+    if (!cancelled) controller.enqueue(bytes);
+  };
+
+  let totalBytes = 0;
+  let firstByteMs: number | null = null;
+  let signalFirst!: () => void;
+  const first = new Promise<void>((resolve) => {
+    signalFirst = resolve;
+  });
+
+  // Started synchronously, so the request-correlation context (usage rows, meta) carries into it.
+  const run = withSpan("audio.synth.stream", { "gemini.model": model, "audio.chunks": chunks.length }, async (span) => {
+    try {
+      for (let i = 0; i < chunks.length && !cancelled; i++) {
+        const chunk = chunks[i];
+        if (!chunk) continue;
+        const chunkStart = Date.now();
+        let chunkBytes = 0;
+        let chunkStatus = 500; // stays 500 unless the chunk's stream ends cleanly
+        try {
+          if (i > 0 && firstByteMs !== null) {
+            const gap = silencePcm(sampleRate);
+            totalBytes += gap.byteLength;
+            await push(gap);
+          }
+          for await (const bytes of streamChunkPcm(model, voiceName, chunk, chunkStart)) {
+            if (cancelled) break;
+            if (firstByteMs === null) {
+              firstByteMs = Date.now() - started;
+              signalFirst();
+            }
+            chunkBytes += bytes.byteLength;
+            totalBytes += bytes.byteLength;
+            await push(bytes);
+          }
+          if (!cancelled) chunkStatus = 200;
+        } finally {
+          if (chunkBytes > 0) {
+            const seconds = chunkBytes / (2 * sampleRate);
+            recordUsage({
+              endpoint: "speech",
+              model,
+              status: chunkStatus,
+              errorText: chunkStatus === 200 ? null : `${cancelled ? "client cancelled" : "stream failed"} after ${chunkBytes} bytes`,
+              latencyMs: Date.now() - chunkStart,
+              outputTokens: Math.round(seconds * AUDIO_TOKENS_PER_SECOND),
+              audioSeconds: seconds,
+              bytesOut: chunkBytes,
+            });
+          }
+        }
+      }
+    } finally {
+      const audioSeconds = totalBytes / (2 * sampleRate);
+      span.setAttributes({ "audio.first_byte_ms": firstByteMs ?? undefined, "audio.audio_seconds": audioSeconds, "audio.bytes_out": totalBytes });
+      setRequestMeta({ audioSeconds, bytesOut: totalBytes });
+    }
+  }, "client");
+
+  const settled = run.then(
+    () => {
+      if (!cancelled) controller.close();
+    },
+    (err: unknown) => {
+      if (!cancelled) controller.error(err);
+      throw err;
+    },
+  );
+  settled.catch(() => {}); // the dispatcher observes it; this keeps an unobserved rejection from crashing the process
+
+  await Promise.race([first, settled]); // an upstream failure before the first byte rejects here
+  if (firstByteMs !== null) log.info("tts.first_byte", { model, firstByteMs });
+  return { response: new Response(body, { status: 200, headers }), settled };
+}
+
 export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<Response> {
   const { model, input, voice, responseFormat, summarize } = reqBody;
   if (!config.iuGeminiBaseUrl) {
@@ -462,7 +733,7 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   }
 
   const voiceName = VOICES.has(voice) ? voice : DEFAULT_VOICE;
-  const { prep, ran } = await runPrep(input, summarize);
+  const { prep, ran } = await runPrep(model, input, summarize);
   // Enforce the per-chunk ceiling regardless of how the prep LLM split things —
   // long chunks are the cause of mid-audio voice drift. Re-splits at natural
   // boundaries; short inputs and well-behaved chunks pass through untouched.
@@ -481,6 +752,19 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
     title,
     outputText: chunks.map((c) => c.text).join(" "),
   });
+  const headers = { "x-audio-title": encodeURIComponent(title) };
+
+  // Progressive path: a pcm client reads the body as it arrives.
+  if (responseFormat === "pcm") {
+    const { response, settled } = await streamGeminiSpeech({
+      model,
+      voiceName,
+      chunks,
+      headers: { ...headers, "content-type": "audio/pcm" },
+    });
+    streamSettlements.set(response, settled);
+    return response;
+  }
 
   // Concurrent, order-preserving synth (Decision 1).
   const parts = await synthChunksConcurrent(model, voiceName, chunks);
@@ -493,6 +777,6 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
 
   return new Response(bytes, {
     status: 200,
-    headers: { "content-type": contentType, "x-audio-title": encodeURIComponent(title) },
+    headers: { ...headers, "content-type": contentType },
   });
 }

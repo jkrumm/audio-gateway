@@ -65,6 +65,11 @@ export function pcmToWav(pcm: Uint8Array, sampleRate = SAMPLE_RATE_DEFAULT, chan
   return buffer;
 }
 
+/** `SILENCE_MS` of zeroed s16le mono PCM — the join between synthesized chunks. */
+export function silencePcm(sampleRate: number): Uint8Array {
+  return new Uint8Array(Math.round((SILENCE_MS / 1000) * sampleRate) * 2);
+}
+
 /** Concatenate s16le PCM chunks with SILENCE_MS of silence between them. */
 export function concatPcm(parts: ChunkAudio[]): { pcm: Uint8Array; sampleRate: number } {
   const sampleRate = parts[0]?.sampleRate ?? SAMPLE_RATE_DEFAULT;

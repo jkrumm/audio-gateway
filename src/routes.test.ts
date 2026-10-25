@@ -225,7 +225,7 @@ describe("Default TTS model when `model` omitted", () => {
 
     // Defaulted to the Gemini TTS model → native :generateContent route, not the
     // IU /audio/speech passthrough that would reject the missing model.
-    expect(calledUrl).toContain("gemini-3.1-flash-tts-preview");
+    expect(calledUrl).toContain("gemini-3.8-flash-lite-tts");
     expect(calledUrl).toContain(":generateContent");
   });
 });
@@ -494,7 +494,7 @@ describe("404 for unknown routes", () => {
 // ---------------------------------------------------------------------------
 
 describe("TTS model override: non-TTS model routes to Gemini pipeline", () => {
-  test("model 'gemini-3.1-flash' is remapped to gemini-3.1-flash-tts-preview", async () => {
+  test("model 'gemini-3.1-flash' is remapped to gemini-3.8-flash-lite-tts", async () => {
     let calledUrl = "";
     stubFetch(async (url) => {
       calledUrl = String(url);
@@ -512,7 +512,7 @@ describe("TTS model override: non-TTS model routes to Gemini pipeline", () => {
 
     // Must have been remapped to the TTS model and routed to :generateContent,
     // NOT the IU /audio/speech passthrough.
-    expect(calledUrl).toContain("gemini-3.1-flash-tts-preview");
+    expect(calledUrl).toContain("gemini-3.8-flash-lite-tts");
     expect(calledUrl).toContain(":generateContent");
   });
 });
@@ -529,7 +529,7 @@ describe("error_text: upstream error body captured in usage row", () => {
 
     const req = authed(new Request("http://localhost/v1/audio/speech", {
       method: "POST",
-      body: JSON.stringify({ input: "Hello", model: "gemini-3.1-flash-tts-preview" }),
+      body: JSON.stringify({ input: "Hello", model: "gemini-3.8-flash-lite-tts" }),
       headers: { "content-type": "application/json" },
     }));
     const res = await handleRequest(req);

@@ -45,7 +45,7 @@ async function defaultModel(envOverride: string, configKey: "ttsModel" | "sttMod
   return (await import("./config")).config[configKey];
 }
 
-const TTS_MODEL = await defaultModel("RT_TTS_MODEL", "ttsModel", "gemini-3.1-flash-tts-preview");
+const TTS_MODEL = await defaultModel("RT_TTS_MODEL", "ttsModel", "gemini-3.8-flash-lite-tts");
 const STT_MODEL = await defaultModel("RT_STT_MODEL", "sttModel", "gpt-transcribe");
 const VOICE = process.env["RT_VOICE"] ?? "Charon";
 const PROXY_KEY = process.env["PROXY_API_KEY"] ?? "";

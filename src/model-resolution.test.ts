@@ -3,7 +3,7 @@
  *
  * config.ts reads env at import time, so env is set before the dynamic import.
  * With no STT_MODEL/TTS_MODEL override the config defaults apply
- * (gpt-transcribe / gemini-3.1-flash-tts-preview).
+ * (gpt-transcribe / gemini-3.8-flash-lite-tts).
  */
 import { describe, expect, test } from "bun:test";
 
@@ -69,7 +69,7 @@ describe("resolveTtsRoute", () => {
   test("empty model defaults to the Gemini pipeline (config.ttsModel is a Gemini id)", () => {
     const r = resolveTtsRoute("");
     expect(r.provider).toBe("gemini");
-    expect(r.model).toBe("gemini-3.1-flash-tts-preview");
+    expect(r.model).toBe("gemini-3.8-flash-lite-tts");
   });
 
   test("a Gemini TTS model routes to the gemini provider as-is", () => {
@@ -88,7 +88,7 @@ describe("resolveTtsRoute", () => {
     // itself a Gemini TTS id — so the fallback provider is gemini, not passthrough.
     const r = resolveTtsRoute("gemini-3.1-flash");
     expect(r.provider).toBe("gemini");
-    expect(r.model).toBe("gemini-3.1-flash-tts-preview");
+    expect(r.model).toBe("gemini-3.8-flash-lite-tts");
   });
 });
 

@@ -13,7 +13,7 @@ process.env["PROXY_API_KEY"] ??= "test-proxy-secret";
 process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=macwhisper-secret-token";
 process.env["TTS_PREP"] ??= "off";
 
-const { audioDuration, compressForStt, concatPcm, detectSilence, parseOutputFormat, pcmToWav, transcode } = await import("./audio");
+const { audioDuration, compressForStt, concatPcm, detectSilence, parseOutputFormat, pcmToWav, silencePcm, transcode } = await import("./audio");
 
 describe("parseOutputFormat", () => {
   test("empty string defaults to mp3", () => {
@@ -56,6 +56,15 @@ describe("pcmToWav", () => {
     expect(str(36, 4)).toBe("data");
     expect(view.getUint32(40, true)).toBe(pcm.byteLength);
     expect(new Uint8Array(buf, 44)).toEqual(pcm);
+  });
+});
+
+describe("silencePcm", () => {
+  test("is 400 ms of zeroed s16le mono, sample-aligned", () => {
+    const gap = silencePcm(24000);
+    expect(gap.byteLength).toBe(19_200);
+    expect(gap.every((b) => b === 0)).toBe(true);
+    expect(silencePcm(22050).byteLength % 2).toBe(0);
   });
 });
 

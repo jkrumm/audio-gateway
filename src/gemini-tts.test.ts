@@ -23,7 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { synthChunksConcurrent, handleGeminiSpeech, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
+const { synthChunksConcurrent, handleGeminiSpeech, synthBody, sseAudio, geminiWantsPrep, streamSettled, PREP_STYLE, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -98,7 +98,7 @@ describe("handleGeminiSpeech — spoken summary", () => {
     });
 
     const res = await handleGeminiSpeech({
-      model: "gemini-3.1-flash-tts-preview",
+      model: "gemini-3.8-flash-lite-tts",
       input: "Ein längerer Satz, der zusammengefasst werden soll.",
       voice: "Charon",
       responseFormat: "mp3",
@@ -356,5 +356,213 @@ describe("rawFetch transport retry", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("synthBody — 3.8 request shape", () => {
+  test("style travels in parts[].speechMetadata, never as a spoken prefix", () => {
+    const body = synthBody("Charon", { style: "calm, warm, conversational", text: "Hallo <short pause> Welt." }, { rawPcm: true }) as {
+      contents: Array<{ parts: Array<{ text: string; speechMetadata?: { style: string } }> }>;
+      generationConfig: Record<string, unknown>;
+    };
+    const part = body.contents[0]?.parts[0];
+    expect(part?.text).toBe("Hallo <short pause> Welt.");
+    expect(part?.speechMetadata).toEqual({ style: "calm, warm, conversational" });
+    expect(body.generationConfig["responseFormat"]).toEqual({ audio: { mimeType: "AUDIO_L16" } });
+    expect(body.generationConfig["temperature"]).toBeUndefined();
+    expect(JSON.stringify(body)).not.toContain("systemInstruction");
+  });
+
+  test("an empty style omits speechMetadata; the stream body omits responseFormat", () => {
+    const body = synthBody("Charon", { style: "", text: "Hi" }, { rawPcm: false }) as {
+      contents: Array<{ parts: Array<Record<string, unknown>> }>;
+      generationConfig: Record<string, unknown>;
+    };
+    expect(body.contents[0]?.parts[0]).toEqual({ text: "Hi" });
+    expect(body.generationConfig["responseFormat"]).toBeUndefined();
+  });
+});
+
+describe("geminiWantsPrep", () => {
+  test("briefing model preps, chat model does not", () => {
+    expect(geminiWantsPrep("gemini-3.8-flash-tts")).toBe(true);
+    expect(geminiWantsPrep("gemini-3.8-flash-lite-tts")).toBe(false);
+  });
+});
+
+describe("sseAudio", () => {
+  test("extracts base64 PCM, ignores events without audio, throws on garbled ones", () => {
+    const ok = JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from([1, 0, 2, 0]).toString("base64") } }] } }] });
+    expect([...(sseAudio(ok) ?? [])]).toEqual([1, 0, 2, 0]);
+    expect(sseAudio(JSON.stringify({ usageMetadata: { candidatesTokenCount: 1 } }))).toBeNull();
+    expect(() => sseAudio("not json")).toThrow(/unparseable/);
+  });
+});
+
+describe("handleGeminiSpeech — pcm streaming", () => {
+  const sse = (...pcms: number[][]): Response => {
+    const events = pcms.map((b) => `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from(b).toString("base64"), mimeType: "audio/l16;rate=24000" } }] } }] })}\n\n`);
+    // Split mid-event to prove the SSE framing survives arbitrary network chunking.
+    const text = events.join("");
+    const cut = Math.floor(text.length / 2);
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(text.slice(0, cut)));
+        c.enqueue(new TextEncoder().encode(text.slice(cut)));
+        c.close();
+      },
+    });
+    return new Response(stream, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+
+  test("pcm requests hit streamGenerateContent and pass the bytes through, sample-aligned", async () => {
+    let calledUrl = "";
+    let sent: { contents: Array<{ parts: Array<{ text: string }> }> } | undefined;
+    setFetch(async (url, init) => {
+      calledUrl = String(url);
+      sent = JSON.parse(String(init?.body)) as typeof sent;
+      return sse([1, 0, 2], [0, 3, 0]); // odd split: 3 + 3 bytes → 6 aligned bytes overall
+    });
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo Welt.", voice: "Charon", responseFormat: "pcm", summarize: false });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("audio/pcm");
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect([...bytes]).toEqual([1, 0, 2, 0, 3, 0]);
+    expect(calledUrl).toContain(":streamGenerateContent?alt=sse");
+    expect(sent?.contents[0]?.parts[0]?.text).toBe("Hallo Welt.");
+    await streamSettled(res);
+  });
+
+  test("an upstream error before the first byte is a thrown error, not a 200 stream", async () => {
+    setFetch(async () => new Response("boom", { status: 500 }));
+    await expect(
+      handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo Welt.", voice: "Charon", responseFormat: "pcm", summarize: false }),
+    ).rejects.toThrow(/HTTP 500/);
+  });
+
+  test("non-pcm formats keep the whole-file generateContent path", async () => {
+    let calledUrl = "";
+    setFetch(async (url) => {
+      calledUrl = String(url);
+      return geminiAudio(new Uint8Array(4800));
+    });
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", voice: "Charon", responseFormat: "wav", summarize: false });
+    expect(res.status).toBe(200);
+    expect(streamSettled(res)).toBeUndefined();
+    expect(calledUrl).toContain(":generateContent");
+    expect(calledUrl).not.toContain("stream");
+  });
+});
+
+describe("prep style hygiene", () => {
+  test("a sentence of direction from prep is replaced by the constant style", async () => {
+    // config.ttsPrep is "off" in tests, so exercise via summarize, which always calls the LLM.
+    let sent = "";
+    setFetch(async (url, init) => {
+      if (String(url).includes("/chat/completions")) {
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify({ lang: "de", title: "T", chunks: [{ style: "Sprich bitte ganz langsam und sehr warm, wie ein guter alter Freund am Kamin", text: "Satz." }] }) } }] }),
+          { status: 200 },
+        );
+      }
+      sent = String(init?.body);
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+    await handleGeminiSpeech({ model: "gemini-3.8-flash-tts", input: "Ein Satz zum Zusammenfassen.", voice: "Charon", responseFormat: "mp3", summarize: true });
+    expect(sent).toContain(JSON.stringify({ style: PREP_STYLE }));
+  });
+});
+
+describe("handleGeminiSpeech — pcm streaming failure modes", () => {
+  const event = (bytes: number[]): string =>
+    `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { data: Buffer.from(bytes).toString("base64") } }] } }] })}\n\n`;
+  const body = (...texts: string[]): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const t of texts) c.enqueue(new TextEncoder().encode(t));
+          c.close();
+        },
+      }),
+      { status: 200 },
+    );
+
+  test("an in-band error event after audio fails the stream (settled rejects, body errors)", async () => {
+    setFetch(async () => body(event([1, 0]), `data: ${JSON.stringify({ error: { message: "quota" } })}\n\n`));
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", voice: "Charon", responseFormat: "pcm", summarize: false });
+    const settled = streamSettled(res);
+    await expect(res.arrayBuffer()).rejects.toThrow();
+    await expect(settled).rejects.toThrow(/quota/);
+  });
+
+  test("a stream with no audio events fails before the first byte", async () => {
+    setFetch(async () => body(`data: ${JSON.stringify({ usageMetadata: { candidatesTokenCount: 1 } })}\n\n`));
+    await expect(
+      handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", voice: "Charon", responseFormat: "pcm", summarize: false }),
+    ).rejects.toThrow(/no audio/);
+  });
+
+  test("a malformed trailing event fails the stream instead of ending it short", async () => {
+    setFetch(async () => body(event([1, 0]), 'data: {"candidates":[{"cont'));
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", voice: "Charon", responseFormat: "pcm", summarize: false });
+    const settled = streamSettled(res);
+    await expect(res.arrayBuffer()).rejects.toThrow();
+    await expect(settled).rejects.toThrow(/unparseable/);
+  });
+
+  test("a connection reset before the first byte is retried", async () => {
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      if (calls === 1) throw new Error("socket closed");
+      return body(event([5, 0]));
+    });
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", voice: "Charon", responseFormat: "pcm", summarize: false });
+    expect([...new Uint8Array(await res.arrayBuffer())]).toEqual([5, 0]);
+    expect(calls).toBe(2);
+  });
+
+  test("multi-chunk pcm joins chunks with 400 ms of silence, none before the first", async () => {
+    // Two sentences, each over the word ceiling so enforceChunkLimits splits them into two chunks.
+    const sentence = `${Array.from({ length: 140 }, () => "wort").join(" ")}.`;
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return body(event([7, 0]));
+    });
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: `${sentence} ${sentence}`, voice: "Charon", responseFormat: "pcm", summarize: false });
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    expect(calls).toBe(2);
+    expect(bytes.byteLength).toBe(2 + 19_200 + 2); // 400 ms @ 24 kHz s16 = 19,200 bytes
+    expect(bytes[0]).toBe(7);
+    expect(bytes[2]).toBe(0);
+    expect(bytes[bytes.byteLength - 2]).toBe(7);
+    await streamSettled(res);
+  });
+
+  test("cancelling the body stops further chunk requests and settles cleanly", async () => {
+    const sentence = `${Array.from({ length: 140 }, () => "wort").join(" ")}.`;
+    let calls = 0;
+    setFetch(async () => {
+      calls++;
+      return body(event([1, 0]));
+    });
+    const res = await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: `${sentence} ${sentence} ${sentence}`, voice: "Charon", responseFormat: "pcm", summarize: false });
+    const settled = streamSettled(res);
+    await res.body?.cancel();
+    await settled;
+    expect(calls).toBeLessThan(3);
+  });
+});
+
+describe("chat lane input (no prep)", () => {
+  test("markdown and units are cleaned deterministically before synthesis", async () => {
+    let sentText = "";
+    setFetch(async (_url, init) => {
+      sentText = (JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ text: string }> }> }).contents[0]?.parts[0]?.text ?? "";
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+    await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input: "**Heute** wird es 22°C warm ☀️", voice: "Charon", responseFormat: "mp3", summarize: false });
+    expect(sentText).toBe("Heute wird es 22 Grad warm");
   });
 });

@@ -1,4 +1,5 @@
 import { config } from "./config";
+import { streamSettled } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { flushOtel } from "./otel";
@@ -87,7 +88,20 @@ export async function handleRequest(req: Request): Promise<Response> {
     if (req.method === "POST" && path.endsWith("/audio/transcriptions")) {
       return await handleTranscriptions(req, callerFromToken(req));
     }
-    if (req.method === "POST" && path.endsWith("/audio/speech")) return await handleSpeech(req, callerFromToken(req));
+    if (req.method === "POST" && path.endsWith("/audio/speech")) {
+      const response = await handleSpeech(req, callerFromToken(req));
+      // A streamed body is still being written after the handler returns; keep it counted so a
+      // graceful shutdown drains it instead of cutting the audio off.
+      const settled = streamSettled(response);
+      if (settled) {
+        inFlight++;
+        const done = (): void => {
+          inFlight--;
+        };
+        settled.then(done, done);
+      }
+      return response;
+    }
     if (req.method === "GET" && path.endsWith("/models")) return await handleModels();
     if (isPodcastPath(path)) return await handlePodcasts(req, path, callerFromToken(req));
   } catch (err) {

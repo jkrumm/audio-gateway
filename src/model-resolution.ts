@@ -4,7 +4,7 @@
  * Callers express intent via the endpoint (/audio/speech = TTS,
  * /audio/transcriptions = STT); the gateway owns model selection. A caller
  * sending a wrong or missing model id (e.g. "gemini-3.1-flash" instead of
- * "gemini-3.1-flash-tts-preview") is remapped here before it reaches any
+ * "gemini-3.8-flash-lite-tts") is remapped here before it reaches any
  * upstream, so a bad model id never produces a confusing 503 at the wrong
  * upstream path. The correct model lives in ONE place (env TTS_MODEL /
  * STT_MODEL → config) and is never duplicated in call-sites.

@@ -1,6 +1,6 @@
 import { parseOutputFormat } from "./audio";
 import { config } from "./config";
-import { handleGeminiSpeech } from "./gemini-tts";
+import { handleGeminiSpeech, streamSettled } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { GEMINI_TTS, resolveTtsRoute } from "./model-resolution";
@@ -227,7 +227,18 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
               style,
               similarityBoost,
             });
-      recordSpeechRequest(response.status);
+      // A streamed body is still being written: its summary row (audio seconds, bytes) is
+      // recorded when the stream ends, not now.
+      const settled = streamSettled(response);
+      if (!settled) {
+        recordSpeechRequest(response.status);
+        return response;
+      }
+      getActiveSpan().setAttributes({ "audio.streamed": true });
+      settled.then(
+        () => recordSpeechRequest(response.status),
+        (err: unknown) => recordSpeechRequest(500, (err instanceof Error ? err.message : String(err)).slice(0, 500)),
+      );
       return response;
     } catch (err) {
       // The lane threw past its own error handling (e.g. a fail-fast synth

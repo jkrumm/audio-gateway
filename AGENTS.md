@@ -48,8 +48,19 @@ pipeline (both retired 2026-06-17).
 - `src/speech.ts` — TTS dispatcher: `resolveTtsRoute` (model-resolution.ts) picks the lane —
   gemini / replicate / passthrough — then rejects an unrecognized `response_format` (mp3/opus/
   wav/pcm) before handing off.
-- `src/gemini-tts.ts` — Gemini expressive pipeline (config/fetch/ffmpeg deps). Also exports
-  `rawFetch` (503/429-retrying fetch), shared by the Replicate lane.
+- `src/gemini-tts.ts` — Gemini 3.8 expressive pipeline (config/fetch/ffmpeg deps); request shapes,
+  tag vocabulary and traps follow modelpick `docs/gemini-tts.md` (IU-proven; do not re-probe).
+  Style rides in `parts[].speechMetadata.style` (a `"Style: text"` prefix is read aloud;
+  `systemInstruction`/`speechConfig.speechMetadata` 400). Prep runs only for models in
+  `TTS_GEMINI_PREP_MODELS` (briefing `gemini-3.8-flash-tts`); the chat default
+  `gemini-3.8-flash-lite-tts` is one raw call. `response_format: pcm` streams via
+  `streamGenerateContent?alt=sse` (sample-aligned passthrough, 400 ms zero join between chunks,
+  billed from duration × 25 tokens/s because streamed `usageMetadata` is wrong; the
+  `speech-request` row is recorded when the body ends — see `streamSettled`). mp3/opus/wav stay
+  whole-file (Slack needs a complete body + `X-Audio-Title`). pcm contract: a failure before the
+  first audio byte is a normal HTTP error; one after it ABORTS the chunked body (clients see a
+  transfer error, never a clean EOF) and the usage row carries the real status. Also exports `rawFetch`
+  (503/429-retrying fetch), shared by the Replicate lane.
 - `src/replicate-tts.ts` — ElevenLabs models (flash-v2.5, turbo-v2.5, v3) via the IU gateway's
   Replicate route: create prediction → poll if not immediately `succeeded` → fetch the delivery
   MP3. Prep-LLM gating is per-model (`config.ttsReplicatePrepModels`, default `elevenlabs/v3`) —

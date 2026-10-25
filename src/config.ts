@@ -163,7 +163,15 @@ export const config = {
    * Gateway owns this default so callers (Argo dashboard, Hermes) need not know
    * model names. Requires IU_GEMINI_BASE_URL to be set for synthesis to succeed.
    */
-  ttsModel: process.env["TTS_MODEL"] ?? "gemini-3.1-flash-tts-preview",
+  ttsModel: process.env["TTS_MODEL"] ?? "gemini-3.8-flash-lite-tts",
+  /**
+   * Comma-separated Gemini TTS model ids (or prefixes) that get the prep LLM pass
+   * (spoken-form numbers, chunking, one constant `style`, 3.8 `<tags>`). A model not
+   * listed skips prep — a single synth call with no LLM round trip, the chat fast path.
+   * Chat runs on `gemini-3.8-flash-lite-tts` (off); briefings on `gemini-3.8-flash-tts` (on).
+   * `summarize: true` still forces the summary LLM regardless of this list.
+   */
+  ttsGeminiPrepModels: process.env["TTS_GEMINI_PREP_MODELS"] ?? "gemini-3.8-flash-tts",
   /**
    * Default STT model injected when a `/audio/transcriptions` request omits
    * `model`. Empty model would otherwise be forwarded to IU, which 400s with
@@ -278,11 +286,12 @@ export const config = {
    * speech, so chunks are kept to ~45 s. `targetWords` is the preferred size when
    * regrouping; `maxWords`/`maxBytes` are hard ceilings that trigger a re-split at
    * natural boundaries (paragraphs → sentences → last-resort word split). The byte
-   * ceiling stays well under Gemini's 4000-byte text-field limit.
+   * ceiling (~1,000 chars; German umlauts are 2 bytes) is the IU-measured fidelity limit for 3.8
+   * (docs/gemini-tts.md §Limits and chunking).
    */
   ttsChunkTargetWords: num("TTS_CHUNK_TARGET_WORDS", 110),
   ttsChunkMaxWords: num("TTS_CHUNK_MAX_WORDS", 150),
-  ttsChunkMaxBytes: num("TTS_CHUNK_MAX_BYTES", 1800),
+  ttsChunkMaxBytes: num("TTS_CHUNK_MAX_BYTES", 1100),
   /**
    * Prep behaviour for Gemini TTS:
    * - `always` (default): run the LLM prep for every request (short input → one cheap call).
