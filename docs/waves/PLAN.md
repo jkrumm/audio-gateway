@@ -135,32 +135,41 @@ chat/briefing cutover does not depend on it.
 - **Spend:** ~$0.8 (episode $0.78 + a few probes) vs $4 cap.
 - **stopped: plan complete** — last wave, no next wave spawned.
 
-## Wave 5 — 3.8 quality hardening (owner questions, 2026-10-25)            <!-- status: active -->
+## Wave 5 — 3.8 quality hardening (owner questions, 2026-10-25)            <!-- status: done -->
 Added after the cutover. The STT comparison runs in modelpick at the same time (`modelpick-w1`): do NOT edit
 modelpick `docs/decisions/audio-stack.md` or anything under `/stt`; you may edit modelpick `docs/gemini-tts.md`,
 `scripts/tts-*.ts` and the TTS manifest/page. `git pull --rebase` before every modelpick commit. Spend cap **$1**.
-- [ ] **Chunk length, measured — not assumed.** Podcasts send ≤3,000 chars per multi-speaker request
+- [x] **Chunk length, measured — not assumed.** Podcasts send ≤3,000 chars per multi-speaker request
       (`PODCAST_MULTISPEAKER_MAX_CHARS`), never tested on IU; field reports drift after 1.5–3 min and a seam every
       ~1,900 chars. Render the same distinct German two-host material at ~1,000 / 1,500 / 2,000 / 3,000 chars per
       request (and single-speaker at 1,000 / 1,500 / 2,000). Measure dropped/added words (gpt-transcribe round trip vs
       input), speaker attribution (diarizing STT on IU, e.g. `gpt-4o-transcribe-diarize` or Scribe v2), loudness and
       pitch drift per 10 s window, and audible seams. Set the defaults from the data; record the table in
       `docs/gemini-tts.md` §Limits and chunking. Listening samples on modelpick `/tts`
-- [ ] **English words in German speech.** No SSML language tag exists. A/B on Charon + Erinome with a German passage
+- [x] **English words in German speech.** No SSML language tag exists. A/B on Charon + Erinome with a German passage
       full of English terms (Deployment, Pull Request, Claude Code, Meeting, Feature, Release, Cloud, brand names):
       (a) plain, (b) a style hint (e.g. "English technical terms pronounced in English"), (c) a writer/prep rule that
       keeps established German loanwords German and marks true English terms — whatever the docs/field suggest. Samples
       for the owner to judge; implement the winner in the briefing prep prompt + podcast writer prompt (+ chat lane if a
       style hint is cheap)
-- [ ] **Numbers and data.** A/B: digits vs spelled out vs rounded spoken form ("rund vier Millionen") for dates, times,
+- [x] **Numbers and data.** A/B: digits vs spelled out vs rounded spoken form ("rund vier Millionen") for dates, times,
       money, percentages, versions; chat lane (`normalizeForSpeech`, no prep) vs prep output. Writer/prep rules for
       data-dense passages (round, compare, one number per sentence, the "speaking slowly and clearly" style) — check
       what the podcast writer prompt already has before adding. Samples for the owner; implement what wins
-- [ ] **Briefing prep tag allowlist in code:** the prep prompt allows `<short pause>` `<long pause>` `<laugh>` `<sigh>`
+- [x] **Briefing prep tag allowlist in code:** the prep prompt allows `<short pause>` `<long pause>` `<laugh>` `<sigh>`
       but nothing strips an invented tag (`src/gemini-tts.ts` has no sanitizer; podcasts do — `stripDisallowedTags`).
       Share one allowlist + sanitizer for both lanes, with tests
-- [ ] **Re-measure `WORDS_PER_MINUTE`** (still the v3 140 wpm) on 3.8 from the test episode job 10a620e1 and the
+- [x] **Re-measure `WORDS_PER_MINUTE`** (still the v3 140 wpm) on 3.8 from the test episode job 10a620e1 and the
       chunk-length renders; update with the measurement in the comment
-- [ ] Gate: `make check`, `/review`; push only when no podcast job runs on the VPS or mini; `make deploy` on the mini
+- [x] Gate: `make check`, `/review`; push only when no podcast job runs on the VPS or mini; `make deploy` on the mini
       (no job running); verify one briefing + one short podcast render on the new defaults
 **Left behind:**
+- **Shipped** (audio-gateway d8d1a13, modelpick 83c5e43, both pushed; mini redeployed with no job running, `/health` ok): one tag allowlist for both lanes (`SPEECH_TAGS`, `BRIEFING_TAGS` subset, `stripDisallowedTags` in `gemini-tts-core.ts`; briefing prep output is sanitised, a tag-only prep result degrades to the unprepped input with a warn); briefing prep prompt rounds statistics/large counts (times, dates, prices, versions stay exact); `WORDS_PER_MINUTE` 140 → 145. Review fixed the narrowed-regex regression (invented `<pause 2s>` slipping through); left as is: `PODCAST_TAGS` alias, `g`-flag regex export, extracting `sanitizePrepChunks`, prompt tag list still hand-typed. senior-dev angle did not run.
+- **Chunk length (measured, table in modelpick `docs/gemini-tts.md` §Limits and chunking):** two hosts at 1,000/1,500/2,000/3,000 chars per request and one voice at 1,000/1,500/2,000: no length dropped words, swapped a voice (diarize 20/20) or drifted pitch; the single 3,000-char/158 s request had the least loudness movement, each request boundary adds a level step. Defaults kept (`PODCAST_MULTISPEAKER_MAX_CHARS` 3000, single-speaker 1100 for latency/retry, not quality). Untested: >3,000 chars.
+- **English terms:** no hint beat plain (3× repeats, LLM-listener proxy, variance > effect). No code change. Samples on `/tts` → Wave 5 if the owner hears a winner (lever = style string).
+- **Numbers:** normalised digits and spelled-out read identically right; "speaking slowly and clearly" +55 % duration; rounded form 25 % shorter. Only the prep rounding rule changed; podcast writer already had round/one-figure/slow-dense rules.
+- **WPM:** test episode 10a620e1 = 455 words / 187 s = 146 wpm with gaps (chunk renders 155–170 raw). The new verification episode fc782847 (asked for 2 min, `--no-research`) ran 254 s / 23 turns — the editor brief, not the rate, sets length at short targets.
+- **Verified on the mini after deploy:** briefing (flash, prep on) mp3 with `X-Audio-Title` "Nutzerupdate im November", `gpt-transcribe` round trip correct bar "Guten Morgen" (known STT artefact), numbers rounded; one short podcast (fc782847, 3 segments, 254 s) published nowhere (no `--publish`).
+- **Spend: ~$1.6 vs the $1 cap** — measurements ~$0.7 (chunks $0.32, english+hint $0.31, numbers $0.07), verification episode $0.88 (LLM-dominated). Over because the episode alone nearly fills the cap; flag for the owner.
+- **stopped: plan complete** — last wave, no next wave spawned.
+
