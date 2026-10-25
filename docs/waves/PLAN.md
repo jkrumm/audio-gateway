@@ -89,21 +89,30 @@ comparison section after it (commits df147cc, cb5909e); 62 samples on modelpick 
 - **Spend:** ~$0.03 (two live probes + three prod requests + STT round trips) vs $1 cap.
 - **Not done / for W3:** the mini was not redeployed (podcasts use ElevenLabs v3 until W3; `make deploy` there with W3). Podcast `PODCAST_TTS_MODEL` unchanged. Owner confirmed Charon as main voice; the **co-host voice pick is still open and must be made before W3 starts** (shortlist in W1 Left behind).
 
-## Wave 3 — Podcasts on 3.8 multi-speaker            <!-- status: active -->
-- [ ] Owner-chosen co-host voice in config; script writer emits the 3.8 tag vocabulary instead of v3 tags
-- [ ] Synth via `multiSpeakerVoiceConfig` in chunks within the token limits, keeping chapter timestamps,
-      per-host loudness and pacing (replace v3 `speed` with what W1 found works)
-- [ ] Tests, `make check`, `/review`; `make deploy` on the mini; one short test episode published to
-      Audiobookshelf for the owner to listen to; cost recorded
+## Wave 3 — Hermes cutover: chat + briefings            <!-- status: active -->
+Reordered by the orchestrator (2026-10-25): the podcast co-host voice is still with the owner, the Hermes
+chat/briefing cutover does not depend on it.
+- [ ] Hermes (`~/SourceRoot/hermes-agent` config + `skills/briefing-tts`, applied to the live install
+      `~/.hermes/hermes-agent` the way that repo's AGENTS.md prescribes): chat → `gemini-3.8-flash-lite-tts`
+      / `Charon`, briefing → `gemini-3.8-flash-tts` / `Charon`; streaming clients (CLI voice
+      `tts_streaming.OpenAIStreamer`, desktop `speak-stream` relay) request `response_format: pcm` so
+      they get the progressive stream; Slack/file stay whole-file mp3 (`X-Audio-Title`). Check the
+      summary path (`summarize: true`, `voice.speak_summary_min_chars`) still works on the new model
+- [ ] Docs: Hermes AGENTS.md / SOUL TTS notes / skill docs name the new models, link modelpick
+      `docs/gemini-tts.md`; audio-gateway AGENTS.md/README point at it too
+- [ ] End-to-end through Hermes (the 2026-08-26 validation table in modelpick `audio-stack.md` is the
+      template): desktop speak-stream first PCM, CLI voice streamer per sentence, Slack whole-file reply
+      with title, a briefing via `skills/briefing-tts` — numbers recorded for W4's decision record
+- [ ] Gate (`make check` where code changed, `/review` on non-trivial changes), commits, push. Spend cap $0.5
 **Left behind:**
 
-## Wave 4 — Cutover + one source of truth            <!-- status: pending -->
-- [ ] Hermes (`~/SourceRoot/hermes-agent` config + `skills/briefing-tts`, applied to the live install the
-      way that repo's AGENTS.md prescribes): chat model/voice, streaming settings so desktop + CLI voice
-      start early, briefing model; SOUL/skill docs updated
+## Wave 4 — Podcasts on 3.8 multi-speaker + one source of truth            <!-- status: pending -->
+- [ ] Owner-chosen co-host voice in config; script writer emits the 3.8 tag vocabulary instead of v3 tags
+- [ ] Synth via multi-speaker (per-part `speechMetadata.speaker`, see `docs/gemini-tts.md`) in chunks within
+      the limits, keeping chapter timestamps, per-host loudness and pacing (replace v3 `speed` with the
+      style-driven pace W1 measured)
+- [ ] Tests, `make check`, `/review`; `make deploy` on the mini (no job running); one short test episode
+      published to Audiobookshelf for the owner to listen to; cost recorded. Spend cap $4
 - [ ] modelpick: `MY_STACK` tts pick, `src/db/deployments.ts` rows, `bun run verify-deployments --update`,
-      decision record verdict section
-- [ ] audio-gateway AGENTS.md/README/docs, Hermes AGENTS.md: point at `docs/gemini-tts.md`
-- [ ] End-to-end through Hermes: desktop speak-stream first PCM, CLI voice, Slack whole-file reply,
-      a briefing, the podcast skill — numbers recorded in the decision record
+      decision record verdict section with W3's end-to-end numbers and the episode
 **Left behind:**
