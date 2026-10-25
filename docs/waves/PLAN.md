@@ -112,7 +112,13 @@ chat/briefing cutover does not depend on it.
 - **Spend:** ~$0.03 vs $0.5 cap. Podcast co-host voice pick is still open for W4.
 
 ## Wave 4 — Podcasts on 3.8 multi-speaker + one source of truth            <!-- status: active -->
-- [ ] Owner-chosen co-host voice in config; script writer emits the 3.8 tag vocabulary instead of v3 tags
+- [ ] Co-host voice: owner picked **Erinome** (2026-10-25), host A stays **Charon**. Config + script writer emits the
+      3.8 tag vocabulary instead of v3 tags
+- [ ] **C2PA bug (found by the owner's ear, 2026-10-25):** a 3.8 unary WAV carries a trailing `C2PA` chunk (~6 KB,
+      content credentials) after `data`; code that strips 44 bytes and keeps the rest plays it as ~0.13 s of loud
+      noise. Prod is clean today only because unary asks `AUDIO_L16`. Make `stripWavHeader` (`src/gemini-tts.ts`)
+      parse RIFF chunks and return only the `data` chunk, with a test; podcast synth must use `AUDIO_L16` or the
+      same parser. Note the trap in modelpick `docs/gemini-tts.md` and fix `scripts/tts-audition.ts` (`wavPcm`)
 - [ ] Synth via multi-speaker (per-part `speechMetadata.speaker`, see `docs/gemini-tts.md`) in chunks within
       the limits, keeping chapter timestamps, per-host loudness and pacing (replace v3 `speed` with the
       style-driven pace W1 measured)
