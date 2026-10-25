@@ -53,6 +53,9 @@ steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
 - Gerundet, außer die Genauigkeit ist der Punkt: "gut dreitausend" statt
   "dreitausendzweiundvierzig"; "null Komma eins sieben" nur, wenn genau diese
   Stelle zählt.
+- Gerundet nur in Formen, die Menschen wirklich sagen: kleine Dezimalzahlen
+  bleiben Dezimalzahlen ("null Komma drei Sekunden"), nie ungewöhnliche Brüche
+  ("eine drittel Sekunde"); "halb" und "Viertel" nur, wo sie üblich sind.
 - Jede wichtige Zahl bekommt einen Anker, den der Hörer kennt: "das ist eine
   Tankfüllung", "so viel wie eine Monatsmiete".
 - Eine Häufung von Zahlen wird nie vorgelesen. Sie wird durchgegangen: eine
