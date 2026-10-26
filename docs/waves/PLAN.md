@@ -39,45 +39,45 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
   price unknown (LMArena creative ~1519, near Opus 1516–1534) — find it. No German writing evidence exists for any.
 - First bake-off cost/episode (projected, uncached): haiku $0.07, deepseek $0.11, gpt-6-sol $0.37, Opus $1.73.
 
-## Wave 3 — Expression, context, rematch            <!-- status: active -->
-- [ ] **Per-turn delivery.** Add an optional `delivery` to script turns, chosen from a small fixed English vocabulary
+## Wave 3 — Expression, context, rematch            <!-- status: done (partial rematch — see Left behind) -->
+- [x] **Per-turn delivery.** Add an optional `delivery` to script turns, chosen from a small fixed English vocabulary
       in code (≈8–10 strings, e.g. curious, amused, surprised, serious, thoughtful/slower, energetic/faster, dry,
       warm — your call, each verified on IU as never spoken). Writer prompt: baseline = no delivery; set it where the
       moment changes. Synth: `style = turn.delivery ?? host baseline`; dense turns keep the slow style. ElevenLabs
       fallback lane ignores it. Revision/tightening must preserve it.
-- [ ] **Tag policy from evidence, not fear.** Replace the "one tag every six turns" rule with a band (e.g. per segment
+- [x] **Tag policy from evidence, not fear.** Replace the "one tag every six turns" rule with a band (e.g. per segment
       a few well-placed pauses and real reactions; laughs only where something is funny) and make the fact & speech
       editor flag MISUSE (placement, staging, invented tags), not mere presence. Pick the band from the listening test.
-- [ ] **Deterministic expression + segmentation lint** in `src/podcast-lint.ts`, fed to reviewers like the existing
+- [x] **Deterministic expression + segmentation lint** in `src/podcast-lint.ts`, fed to reviewers like the existing
       lint and recorded in the job profile: tag not in allowlist; tag as the first word of a short turn; adjacent
       tags; tags per segment below/above the band; delivery outside the vocabulary; same non-baseline delivery on 3+
       consecutive turns; delivery on a turn under N words; >1 CAPS emphasis per turn. Segmentation: every
       multi-speaker unit ≤ 3,000 chars, never across a segment, no unit that ends on a question whose answer opens
       the next unit (prefer cutting after an answer); report unit count and size spread. Tests for every rule.
-- [ ] **Listening proof for expression (cheap, synth only):** take one finished improved-pipeline script segment and
+- [x] **Listening proof for expression (cheap, synth only):** take one finished improved-pipeline script segment and
       voice it 3 ways — A as today (no tags, constant style), B tag band, C tag band + per-turn delivery. Blind on
       `/tts` as a new open question "Expressiveness".
-- [ ] **Context for the rematch:** regenerate the bake-off inputs with the production research stage ON (dossier with
+- [x] **Context for the rematch:** regenerate the bake-off inputs with the production research stage ON (dossier with
       glossary, prior coverage) for episode `8ee3a4df`, then a fresh frozen outline from the current prompts. If
       something else in the writer's context is clearly missing for a stranger-listener (e.g. what earlier episodes
       already explained), add it only if cheap and measured — note it otherwise.
-- [ ] **Fix Sonnet's format failure** in the claude branch: research the current Anthropic way to force a JSON object
+- [x] **Fix Sonnet's format failure** in the claude branch: research the current Anthropic way to force a JSON object
       (structured outputs / `output_config.format`, or a tool) with adaptive thinking on IU; fall back to one repair
       retry. Test with a recorded screenplay reply.
-- [ ] **Writer rematch, IU only**, full production per-segment flow INCLUDING tightening, Wave 2 + Wave 3 prompts,
+- [x] **Writer rematch, IU only**, full production per-segment flow INCLUDING tightening, Wave 2 + Wave 3 prompts,
       the research dossier, opening + interaction segments, voiced with the expressive synth: `claude-opus-5-5`
       (baseline, cached), `claude-sonnet-5-5`, `claude-haiku-5-5`, `gpt-6.1-sol`, `gpt-6-luna`, `gemini-4-argon`,
       `gemini-3.8-flash`, plus one **hybrid**: the best cheap drafter + Opus only for the revision pass. Record per
       candidate: cost/episode with caching (cache tokens from usage), words vs target, lint + expression-lint counts,
       wall time, failures. Blind on `/tts` as "Podcast writer — rematch" (old bake-off stays as reference).
-- [ ] modelpick `docs/decisions/podcast-writer.md`: dated rematch section with the table and a **ranked
+- [x] modelpick `docs/decisions/podcast-writer.md`: dated rematch section with the table and a **ranked
       recommendation** (quality evidence, cost/episode); verdict pending the owner's ears. Record the expression
       findings in `docs/gemini-tts.md` if new facts were measured.
-- [ ] **(10) Research without the starvation budget (architecture, BEFORE the rematch).** Brain AND web, whatever it
+- [x] **(10) Research without the starvation budget (architecture, BEFORE the rematch).** Brain AND web, whatever it
       takes. OWNER CORRECTION: NO per-episode USD ceiling and no call cap by default (quality over cost; savings come
       from choosing an efficient model) — only identical-query dedupe and the existing hang/idle guards, tool description says web research is EXPECTED for anything the listener
       needs that notes/brain do not explain; research spend in the job profile.
-- [ ] **(11) Agentic writer (architecture, BEFORE the rematch).** The single-shot draft cannot measure its own text.
+- [x] **(11) Agentic writer (architecture, BEFORE the rematch).** The single-shot draft cannot measure its own text.
       Per-segment draft + revision become a tool loop on the existing `src/llm-tools.ts` `runToolLoop` (no new
       framework): `lint_segment` (lint + expression/segmentation, metrics: words vs target, turn lengths, questions,
       tags/delivery), `glossary_lookup` / `brain_search` / `brain_read`, `submit_segment` (validates JSON + lint, rejects
@@ -86,25 +86,35 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
       cleaner. Reviewer panel stays after the loop. Measure one segment vs single-shot (lint, words/target, cost, wall);
       then the rematch runs with this writer for every candidate. Single-shot rematch partials (Opus, Haiku, Luna) kept
       in `data/wave3/singleshot/` as the "before" ($2.1 of the $4 cap spent there).
-- [ ] **(12) Learnings from job 503c28f0 ("Mit Schale, mit Erde", regression fixture `src/__fixtures__/episode-503c28f0.*`).**
+- [x] **(12) Learnings from job 503c28f0 ("Mit Schale, mit Erde", regression fixture `src/__fixtures__/episode-503c28f0.*`).**
       (a) meta-hedging: "steht nicht in deinen Notizen"/"das wissen wir nicht" ~9x — prompt rule 6b + lint
       `notes-ignorance` (blocking in the agent) and `meta-hedge` (>2 per episode); (b) the listener brief binds the editor's
       humor (`playfulAsk` raises "sparse" to "natural" + editor prompt); (c) turn ownership — prompt rule 6c, editor roles
       and lint `host-imbalance`. v2 regeneration of the same topic is the owner's, after deploy (source/brief stay in
       the job request and `/tmp/produce/source.md`).
-- [ ] **(8) Expression in every lane.** Delivery vocabulary + tag allowlist as one shared module in `gemini-tts-core`
+- [x] **(8) Expression in every lane.** Delivery vocabulary + tag allowlist as one shared module in `gemini-tts-core`
       (podcast, briefing, chat use the same words). Briefing prep: per-chunk style from the vocabulary (stable baseline,
       deviations where the content turns) and a tag band instead of "sparse" (`PREP_STYLE` / `BRIEFING_TAGS` in
       `gemini-tts.ts`). Chat lane (flash-lite, prep off): no extra LLM call — allowlisted inline tags in the INPUT pass
       through, invalid ones are stripped, optional request `style` the caller can set (Hermes writes tags itself; the
       hermes-agent side is the owner's). Listening proof per lane inside the "Expressiveness" question on `/tts`
       (briefing: baseline vs expressive; chat: plain vs tagged), synth-only.
-- [ ] **(9) Research stage looks up external names.** The research-gateway tool is wired (max 2 calls) but was used once
+- [x] **(9) Research stage looks up external names.** The research-gateway tool is wired (max 2 calls) but was used once
       in ~10 episodes ("only for a fact the episode hinges on … sparingly"). The listener problem is unexplained
       third-party names (Cortex, engrams, DBOS): make the stage look up external names/projects/tools that neither
       source nor brain explains (batched into one query), feed the result into the glossary. Measure on `8ee3a4df`
       with research on: glossary size and first-mention names introduced. `PODCAST_RESEARCH_MAX_CALLS` stays bounded.
-- [ ] Ship proven code (delivery field, synth wiring, lint, prompt/tag policy, Sonnet fix) with tests, `/review`, gates;
+- [x] Ship proven code (delivery field, synth wiring, lint, prompt/tag policy, Sonnet fix) with tests, `/review`, gates;
       commit per concern; push; `make deploy` on the mini only when no podcast job runs; modelpick deployed + verified
       (`/tts` 200, every new audio file resolves). Report actual IU spend.
 **Left behind:**
+- **The rematch is partial** — the $4 IU cap (spent $3.73 + ~$0.1 research gateway) stopped it after the architecture work
+  (agentic writer, research redesign, 503c28f0 fixes) and a first single-shot pass ($2.1, kept in `data/wave3/singleshot/`
+  as the "before") consumed most of it. Measured on the final design: `claude-haiku-5-5` (agentic) and `gpt-6.1-sol`
+  (single-shot — IU serves its function tools only on `/v1/responses`). Not run: `gpt-6-luna` (aborted mid-run by the
+  cap), `gemini-4-argon`, `gemini-3.8-flash`, `claude-sonnet-5-5`, `claude-opus-5-5` agentic baseline, the hybrid —
+  ~$4.5 more. Owner decision: raise the cap, or accept Sol vs Haiku as the blind pair.
+- Follow-up: a `/v1/responses` transport in `runToolLoop` would put gpt-6.1-sol (the cost leader) on the agentic loop.
+- Tag band not chosen from the owner's ears yet (lint band 1–3.5 per ten turns, prompt 'one every four to eight').
+- Sample `Expressiveness` and `Podcast writer — rematch` questions are on `/tts`; the Opus baseline is missing from the latter.
+- The modelpick `writer-rematch` experiment, decision record and `docs/gemini-tts.md` are committed and pushed; modelpick deploy is the modelpick tab's.

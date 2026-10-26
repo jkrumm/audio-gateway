@@ -28,7 +28,7 @@ type Outline = import("../src/podcast-script").Outline;
 type ReviewNote = import("../src/podcast-script").ReviewNote;
 type PodcastScriptRequest = import("../src/podcast-script").PodcastScriptRequest;
 
-const ledger = new SpendLedger("./data/wave3/usage.db", Number(process.env["WAVE3_CAP_USD"] ?? 4), 0.25, Number(process.env["WAVE3_PRIOR_USD"] ?? 0.12));
+const ledger = new SpendLedger("./data/wave3/usage.db", Number(process.env["WAVE3_CAP_USD"] ?? 4), Number(process.env["WAVE3_RESERVE_USD"] ?? 0.25), Number(process.env["WAVE3_PRIOR_USD"] ?? 0.12));
 ledger.installFetchGuard([new URL(config.iuBaseUrl).host, new URL(config.iuGeminiBaseUrl).host]);
 
 const argv = process.argv.slice(2);
