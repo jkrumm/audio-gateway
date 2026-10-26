@@ -132,6 +132,12 @@ pipeline (both retired 2026-06-17).
   `stripWavHeader` parses RIFF chunks — 3.8 WAVs carry a trailing C2PA chunk that is noise if kept.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
   (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
+- `scripts/writer-bakeoff.ts` — one-off, spend-capped harness comparing voice-owner models: freezes one outline for a
+  finished episode (`data/writer-bakeoff/`, own usage ledger — never the production sink), runs the production
+  draft → reviewer panel → revision flow per candidate for two segments and voices them with the production Gemini
+  path. Grok is swapped onto OpenRouter around the writer calls only (`OPENROUTER_API_KEY`). It reuses the pipeline's
+  exported internals (`segmentPrompt`, `reviewEpisode`, `reviseSegments`, …); run it as its own process, never on the
+  :7719 instance. Results feed modelpick `/tts` → "Podcast writer".
 - `src/cover.ts` — episode cover art via the image-gateway; best-effort, never fails a job.
 - `src/audiobookshelf.ts` — Audiobookshelf publish client: upload → scan → poll → patch metadata/cover/episode.
 - `src/brain-note.ts` — writes a finished episode's transcript back into the second brain
