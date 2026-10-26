@@ -118,3 +118,28 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
 - Tag band not chosen from the owner's ears yet (lint band 1–3.5 per ten turns, prompt 'one every four to eight').
 - Sample `Expressiveness` and `Podcast writer — rematch` questions are on `/tts`; the Opus baseline is missing from the latter.
 - The modelpick `writer-rematch` experiment, decision record and `docs/gemini-tts.md` are committed and pushed; modelpick deploy is the modelpick tab's.
+
+## Wave 4 — Finish the rematch, Sol on the loop, Audiobookshelf hygiene            <!-- status: active -->
+**Owner, 2026-10-26: no spend ceiling — quality over cost.** The harness keeps a runaway stop only (IU $15 for this wave,
+checked before every call); it is not a budget. A podcast job may be running — `make deploy` refuses then; wait, never kill.
+- [ ] **`/v1/responses` transport in `runToolLoop`** so `gpt-6.1-sol` (the cost leader) runs the agentic writer like
+      everyone else (IU serves its function tools only there — Wave 3 finding). Research the current Responses API tool
+      shape first; keep the chat-completions path unchanged; tests with recorded replies.
+- [ ] **Finish the rematch on the final design**: `claude-opus-5-5` agentic (the baseline — currently missing on `/tts`),
+      `claude-sonnet-5-5`, `gpt-6.1-sol` agentic, `gpt-6-luna`, `gemini-4-argon`, `gemini-3.8-flash`, and the hybrid (best
+      cheap drafter + Opus revision). Same frozen inputs as Wave 3. Voice, add to the blind "Podcast writer — rematch"
+      question, update the modelpick decision record with the full table and a ranked recommendation. Writer default
+      stays `claude-opus-5-5` until the owner's ears decide.
+- [ ] **A/B fixture:** compare job `503c28f0` (v1, old pipeline) and the v2 job of the same topic (the orchestrator starts
+      it) on the Wave 3 lint metrics (meta-hedges, host balance, tags/delivery, humor) — a short table in the decision record.
+- [ ] **Audiobookshelf hygiene** (library "Podcasts", show "Brain Sonderausgabe", 13+ episodes; API via `ABS_URL` over
+      https from `.env.mini.publish.tpl`). Finding: only 4 episodes are marked finished although the owner listened to
+      many; superseded versions (e.g. "Factory v2" next to "Factory v2.2") and a 3-minute Gemini test episode are listed.
+      (1) Find out from listening sessions (`/api/me/listening-sessions` or equivalent — research the ABS API) why progress
+      does not stick (client, device, offline sync) and report. (2) Add a `podcast` CLI subcommand `abs-tidy` that lists
+      finished/abandoned/superseded/test episodes and, with `--apply`, marks listened-through ones finished and removes
+      superseded/test ones — dry run by default; deletion only with explicit `--apply`. Do NOT apply it in this wave; the
+      owner reviews the dry-run output first. (3) When a new episode supersedes an older one on the same topic, the
+      publish step can mark the old one (metadata note or finished) — propose, implement only if small.
+- [ ] Gates, `/review`, commit per concern, push, deploy when no job runs. Report spend.
+**Left behind:**
