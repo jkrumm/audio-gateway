@@ -705,7 +705,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   files.script = join(dir, "script.json");
   const persistedScript: PersistedPodcastScript = { ...script, hosts };
   await writeFile(files.script, JSON.stringify(persistedScript, null, 2), "utf8");
-  const profile = buildEpisodeProfile({ brief, script, dossier, hosts });
+  const profile = buildEpisodeProfile({ brief, script, dossier, hosts, requestedMinutes: request.minutes });
   if (agentRuns.length > 0) {
     profile.agent = { runs: agentRuns.length, rounds: agentRuns.reduce((n, r) => n + r.rounds, 0), rejections: agentRuns.reduce((n, r) => n + r.rejections, 0), fellBack: agentRuns.filter((r) => r.fellBack).length };
   }

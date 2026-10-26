@@ -64,6 +64,8 @@ export interface EpisodeBrief {
   avoid: string[];
   /** How to introduce unfamiliar names/terms in this episode (uses the glossary). */
   glossaryPolicy: string;
+  /** The listener's concrete questions and habits from the brief/source ("raw carrots, unwashed, from the bag"), each owed an explicit verdict. */
+  asks?: string[];
 }
 
 /** What the ledger remembers about a finished episode — the editor's history and the `past_episodes` tool read this. */
@@ -88,6 +90,14 @@ export interface EpisodeProfile {
   expression?: { tags: number; deliveries: number; findings: Record<string, number> };
   /** The agentic writer's loops (podcast-agent.ts): runs, model rounds, rejected submits, loops that ended without an accepted submit. Absent when the single-shot writer ran. */
   agent?: { runs: number; rounds: number; rejections: number; fellBack: number };
+  /** The length the caller asked for; `minutes` is what the editor planned (it may shorten by at most 20%). */
+  requestedMinutes?: number;
+  /** Final spoken words, and their ratio to the requested length at 145 words/minute; `lengthShort` when under 80%. */
+  words?: number;
+  lengthVsRequested?: number;
+  lengthShort?: boolean;
+  /** Listener asks (editor-extracted): how many, how many have no verdict turn in their segment, and whether the opening frames the question. */
+  asks?: { total: number; uncovered: number; openingFramed: boolean };
   /** Multi-speaker request segmentation of the synth stage (lintSegmentation); absent on the ElevenLabs lane and older episodes. */
   segmentation?: { units: number; minChars: number; meanChars: number; maxChars: number; findings: string[] };
 }

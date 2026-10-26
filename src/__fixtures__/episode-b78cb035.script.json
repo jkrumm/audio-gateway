@@ -1,0 +1,315 @@
+{
+  "title": "Schale dran oder schälen? Die ehrliche Rückstands-Rechnung",
+  "description": "Lena und Jonas legen die Zahlen zu Karotte, Kiwi, Süßkartoffel und Hokkaido auf den Küchentisch: einundvierzig von einundvierzig Karotten mit Rückständen, ein stark belastetes Möhrengrün ohne eigenen Grenzwert, eine Kiwischale ohne belegtes Nährstoffplus und eine Süßkartoffel, bei der die Herkunft zählt. Am Ende steht pro Lebensmittel ein klares Fazit — inklusive der einen Sache, die Johannes beim Hokkaido wirklich ändern sollte, und der Lücke, die die Daten offenlassen.",
+  "coverPrompt": "Square, text-free painterly podcast cover for a German food-knowledge show. Early-morning kitchen counter: a bunch of carrots with lush green tops spilling across the frame, one halved kiwi with green flesh and fuzzy brown skin, a purple sweet potato, and a cut Hokkaido pumpkin with orange flesh turned up. Water droplets on the carrot skins, a faint dusting of dark soil near the pumpkin stem and on the cutting board. Cool laboratory-blue shadow along the left edge, warm amber kitchen light from the right. Loose expressive oil brushwork, visible strokes, slightly rough edges, curious mood with a hint of scientific scrutiny. No text, no letters, no labels.",
+  "genres": [
+    "food science",
+    "health",
+    "comedic conversation"
+  ],
+  "language": "de",
+  "segments": [
+    {
+      "title": "Karotte: Wurzel harmlos, Grün belastet",
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Das Grün. Wenn man an einer Möhre über etwas streiten kann, dann über das Kraut oben dran. Hingeschaut hat das Landeslabor von Baden-Württemberg, das Chemische und Veterinäruntersuchungsamt Stuttgart, kurz CVUA. Es kauft Ware im Handel und misst selbst."
+        },
+        {
+          "speaker": "A",
+          "text": "Fang bei der Wurzel an. Was hat das CVUA in ganz normalen Karotten gefunden?"
+        },
+        {
+          "speaker": "B",
+          "text": "Konventionelle Handelsware, einundvierzig Proben. <short pause> Alle einundvierzig hatten Rückstände. Zwei davon lagen über dem Höchstgehalt."
+        },
+        {
+          "speaker": "A",
+          "text": "Moment. Das Bundesamt, das die Funde aller Länder zusammenzählt, kurz BVL, meldet doch die Hälfte aller Proben als sauber. Wie passt das zusammen?",
+          "delivery": "curious"
+        },
+        {
+          "speaker": "B",
+          "text": "Beides stimmt. Das BVL schaut breit über alle Lebensmittel und Herkünfte. Das CVUA nimmt gezielt konventionelle Karotten aus einer Region. Und Rückstand heißt erst mal nur: messbar da."
+        },
+        {
+          "speaker": "A",
+          "text": "Und was trennt „mit Rückständen“ von „über dem Höchstgehalt“? Klingt für mich beides gleich unappetitlich."
+        },
+        {
+          "speaker": "B",
+          "text": "Der Höchstgehalt ist meist keine Gesundheitsgrenze, sondern eine Verkaufsregel. Die gesundheitliche Grenze, die akute Referenzdosis, liegt in aller Regel weit darüber. Also: einundvierzigmal messbar, zweimal nicht mehr verkaufbar."
+        },
+        {
+          "speaker": "A",
+          "text": "Dann zu dem Teil, um den es dir eigentlich geht."
+        },
+        {
+          "speaker": "B",
+          "text": "Im Herbst zweitausendvierundzwanzig hat das CVUA vierzehn deutsche Möhren erstmals getrennt untersucht, Wurzel und Blatt einzeln. In der Wurzel: im Mittel null Komma null acht Milligramm pro Kilo. <short pause> Im Blatt: zwei Komma null drei. Das Grün ist also rund fünfundzwanzigmal stärker belastet als die Möhre, an der es hängt. Und es steckt mehr Verschiedenes drin: im Blatt im Schnitt knapp vierzehn Wirkstoffe pro Probe. In der Wurzel knapp sechs."
+        },
+        {
+          "speaker": "A",
+          "text": "Fünfundzwanzigmal — ausgerechnet der Teil, den gerade alle als Resteverwertung fürs Pesto entdecken. Wie viele Blätter lagen denn über dem Höchstgehalt?"
+        },
+        {
+          "speaker": "B",
+          "text": "Das ist der Haken: Für Karottenblätter gibt es gar keinen. Die europäische Verordnung, die für jedes Lebensmittel die Obergrenzen festlegt, kennt bei der Möhre nur die Wurzel. Das Labor hat deshalb als Notbehelf den Höchstgehalt für Rucola genommen. Es waren vierzehn Blattproben. <short pause> In neun davon lag mindestens ein Stoff darüber. Insgesamt kamen dreizehn Überschreitungen zusammen.",
+          "delivery": "dry"
+        },
+        {
+          "speaker": "A",
+          "text": "Man misst also ein Möhrenkraut an einem Salat, weil es selbst keine Messlatte hat. <chuckle> Und Johannes, was heißt das für deine Karotte aus der Tüte?"
+        },
+        {
+          "speaker": "B",
+          "text": "Die Wurzel ist der harmlose Teil. Bio liegt sogar bei null Komma null null neun, also bei knapp einem Zehntel. Und laut Verbraucherzentrale, der öffentlich geförderten Verbraucherberatung, entfernt gründliches Abspülen unter fließendem Wasser rund die Hälfte der oberflächlichen Rückstände. Schälen hält sie bei Äpfeln, Birnen oder Gurken für nicht notwendig und nicht empfehlenswert.",
+          "delivery": "warm"
+        },
+        {
+          "speaker": "A",
+          "text": "Auf deiner Einkaufsliste steht allerdings ein Bund, keine Tüte. Und am Bund hängt das Grün."
+        },
+        {
+          "speaker": "B",
+          "text": "Falls das bei dir im Pesto landet, ist das der eine Ort, an dem die Rückstandsfrage wirklich beißt. Fünfundzwanzigmal mehr, und keine eigene Grenze. Vom konventionellen Bund würde ich das Kraut weglassen."
+        }
+      ]
+    },
+    {
+      "title": "Kiwi: Schale, Rückstände und Allergen",
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Zweiundneunzig Prozent der Kiwis hatten Rückstände. Und genau eine Probe lag über dem Höchstgehalt."
+        },
+        {
+          "speaker": "A",
+          "text": "Eine einzige von gut drei Dutzend. Was war da drauf?"
+        },
+        {
+          "speaker": "B",
+          "text": "Eine Kiwi aus Italien, mit einem Mittel gegen Schimmel, das erst nach der Ernte aufgebracht wird — Thiabendazol."
+        },
+        {
+          "speaker": "A",
+          "text": "Wenn das erst nach der Ernte draufkommt, müsste es fast komplett in der Schale sitzen."
+        },
+        {
+          "speaker": "B",
+          "text": "Tut es. Schälen entfernt bei der Kiwi rund achtundachtzig Prozent eines solchen Nachlager-Fungizids. <short pause> Im Fruchtfleisch bleiben oft unter fünf Prozent."
+        },
+        {
+          "speaker": "A",
+          "text": "Die achtundachtzig kommen aber aus einem Tauchbad-Versuch, oder? Da kriegt die Kiwi mehr ab als jede, die bei Johannes im Regal liegt."
+        },
+        {
+          "speaker": "B",
+          "text": "Stimmt, die Zahl ist eher zu hoch. Die Richtung bleibt trotzdem dieselbe."
+        },
+        {
+          "speaker": "A",
+          "text": "Heißt das für Johannes: ab jetzt schälen?"
+        },
+        {
+          "speaker": "B",
+          "text": "Für die Rückstände nicht. Die Verbraucherzentrale sagt ausdrücklich: Schälen ist dafür nicht nötig. Spannender ist das andere Argument — die Schale soll ja gesund sein."
+        },
+        {
+          "speaker": "A",
+          "text": "Mehr Ballaststoffe, mehr Vitamine. Wer hat das eigentlich gemessen?"
+        },
+        {
+          "speaker": "B",
+          "text": "Die Vergleiche stehen in einer Übersicht von zweitausendachtzehn. Deren Quelle ist ein vertraulicher Bericht, bezahlt von Zespri — dem großen Kiwi-Vermarkter. <chuckle> Und gemessen wurde nur die goldgelbe Sorte. Für die grüne, haarige Schale gibt es schlicht keine Daten.",
+          "delivery": "amused"
+        },
+        {
+          "speaker": "A",
+          "text": "Und die Studie mit drei Kiwis am Tag samt Schale?"
+        },
+        {
+          "speaker": "B",
+          "text": "Achtunddreißig Teilnehmende, vier Wochen. Die Verstopfung wurde besser — mit Schale und ohne. Einen direkten Vergleich Schale gegen Fruchtfleisch gab es gar nicht."
+        },
+        {
+          "speaker": "A",
+          "text": "Die belastbare Erkenntnis lautet also: Kiwis essen hilft. Irgendwie."
+        },
+        {
+          "speaker": "B",
+          "text": "Ungefähr. Dafür bringt die Schale zwei Dinge mit. Ein Stoff, der bei Nierensteinen eine Rolle spielt, liegt dort höher — Oxalat, laut den Forschern trotzdem unproblematisch. Und das Hauptallergen der Kiwi, Aktinidin, steckt in der grünen etwa viermal konzentrierter als in der goldgelben."
+        },
+        {
+          "speaker": "A",
+          "text": "Und was heißt das für den Abend-Smoothie von Johannes?"
+        },
+        {
+          "speaker": "B",
+          "text": "Lass die Schale dran, wenn sie dir schmeckt. Rückstände sind kein Grund dagegen — ein belegtes Nährstoffplus ist sie aber auch nicht. Falls du die grüne nimmst und es im Mund kribbelt: schälen. Das ist das Allergen, kein Pestizid.",
+          "delivery": "warm"
+        }
+      ]
+    },
+    {
+      "title": "Süßkartoffel: Herkunft statt Schälen",
+      "turns": [
+        {
+          "speaker": "A",
+          "text": "Lass mich raten: die Süßkartoffel. Die ist in den Zahlen des Bundesamts am lautesten."
+        },
+        {
+          "speaker": "B",
+          "text": "Genau die. Es gibt Mittel, die Getreidehalme kurz halten, damit das Feld beim Sturm nicht umkippt — Wachstumsregulatoren. Zwei davon heißen Mepiquat und Chlormequat. <short pause> Jetzt die Süßkartoffel. Das Bundesamt hat zweihundertneunzehn Proben ausgewertet. Vier Komma sechs Prozent wurden beanstandet. Das sind rund zehn Proben. Vor allem wegen genau dieser beiden Halmverkürzer."
+        },
+        {
+          "speaker": "A",
+          "text": "Halmverkürzer auf einer Knolle ohne Halm. Klingt nach verbotenem Stoff auf dem Teller.",
+          "delivery": "curious"
+        },
+        {
+          "speaker": "B",
+          "text": "Genau das stimmt nicht. Mepiquat ist in der Europäischen Union zugelassen, gerade verlängert bis zweitausendvierzig. Der Befund heißt: auf einer Süßkartoffel hier nicht zugelassen. Die Ursache liegt außerhalb der EU. Und ein Land fiel auf — Ägypten, mit einer Beanstandungsquote von zehn Komma neun Prozent. Ungefähr jede neunte Probe."
+        },
+        {
+          "speaker": "A",
+          "text": "Wie viele Proben stecken dahinter? Und heißt beanstandet schon, dass das Gerät knapp über der Linie ausschlägt?"
+        },
+        {
+          "speaker": "B",
+          "text": "Fünf von sechsundvierzig. Kleine Stichprobe, ein paar Kisten. Und nein: Beanstandet wird erst, wenn der Wert auch nach Abzug der Messunsicherheit noch über dem Höchstgehalt liegt, also über der Verkaufsgrenze. Abgezogen wird üblicherweise die Hälfte. Da wird großzügig zugunsten der Knolle gerechnet."
+        },
+        {
+          "speaker": "A",
+          "text": "Also Ägypten meiden, Bio-Kiste nehmen, Sache erledigt?"
+        },
+        {
+          "speaker": "B",
+          "text": "Nicht ganz. Das Landesamt für Verbraucherschutz und Lebensmittelsicherheit in Niedersachsen, kurz LAVES, fand in hundertundeiner Probe sechs über dem Höchstgehalt. Darunter zwei Bio-Proben aus Spanien — mit Mepiquat. Herkunft ist ein Fingerzeig, kein Siegel."
+        },
+        {
+          "speaker": "A",
+          "text": "Mepiquat bleibt zugelassen und taucht trotzdem auf. Wie sieht es aus, wenn ein Stoff wirklich rausfliegt?"
+        },
+        {
+          "speaker": "B",
+          "text": "Kurzer Umweg in den Kartoffelkeller. Kartoffeln treiben im Lager aus. Dagegen gab es einen alten Keimhemmer, der heißt Chlorpropham. Seit zweitausendzwanzig ist er in der EU verboten. Heute arbeiten die Lager mit Kälte, mit Carvon, einem Wirkstoff aus Minzöl, und mit einem Gas namens Eins-Vier-Dimethylnaphthalin. <chuckle> Minzöl im Kartoffelkeller — Wellness für Knollen.",
+          "delivery": "amused"
+        },
+        {
+          "speaker": "A",
+          "text": "Und genau da rät die Verbraucherzentrale zum Schälen: wenn auf dem Sack nach der Ernte behandelt steht. Einer der seltenen Fälle, in denen Schälen wirklich etwas bringt."
+        },
+        {
+          "speaker": "B",
+          "text": "Aber zurück zur Möhre — ihre Wurzel bleibt der Maßstab. Die liegt laut Bundesamt bei höchstens null Komma neun Prozent Beanstandungen. Die Süßkartoffel bei vier Komma sechs. Gleiche Erde, andere Liga. Du backst sie mit Schale. Würdest du sie jetzt schälen wie die behandelte Kartoffel?"
+        },
+        {
+          "speaker": "A",
+          "text": "Ungern. Schälen kostet rund ein Drittel des Kaliums. Bei den Ballaststoffen sind es etwa siebzehn Prozent. Für so einen Verlust hätte ich gern einen Grund mit Zahl."
+        },
+        {
+          "speaker": "B",
+          "text": "Den gibt dir keine Behörde. Das Monitoring bereitet Knollengemüse gewaschen und geschält auf, Amtsdaten zur Schale gibt es schlicht nicht. Meine Rechnung: Schale dran, abwaschen, beim Kauf aufs Schild schauen. Steht da Ägypten, nimm die andere Kiste."
+        }
+      ]
+    },
+    {
+      "title": "Hokkaido: Waschen, nicht schälen",
+      "turns": [
+        {
+          "speaker": "B",
+          "text": "Sieben von neun Kürbisproben hatten Rückstände, keine einzige über dem Höchstgehalt. Und die staatliche Ernährungsberatung, das Bundeszentrum für Ernährung, sagt: Der Hokkaido muss nicht geschält werden, er wird samt Schale verarbeitet."
+        },
+        {
+          "speaker": "A",
+          "text": "Dann ist er der entspannteste Fall. Warum soll Johannes ausgerechnet hier etwas ändern?",
+          "delivery": "curious"
+        },
+        {
+          "speaker": "B",
+          "text": "Wegen des Messers. <short pause> Wer ungewaschen schneidet, zieht die Erde mitten durchs Fruchtfleisch und verteilt sie aufs Brett. Das ist Küchenhygiene."
+        },
+        {
+          "speaker": "A",
+          "text": "Aber er backt ihn doch. Erwischt die Hitze nicht alles?"
+        },
+        {
+          "speaker": "B",
+          "text": "Die meisten Keime. Siebzig Grad für zwei Minuten töten Darmbakterien, die ein Gift bilden, die heißen EHEC. Auch Toxoplasma, einen Parasiten aus Katzenkot, der monatelang in Erde überlebt. Sporen überleben das Kochen aber — Reste also schnell in den Kühlschrank."
+        },
+        {
+          "speaker": "A",
+          "text": "Und wenn er die Schale einfach großzügig abschneidet?"
+        },
+        {
+          "speaker": "B",
+          "text": "Dann landet das Beste im Müll. Die orangen Farbstoffe, Carotinoide, stecken vor allem in der Schale. Gut tausend Milligramm pro Kilo.",
+          "delivery": "dry"
+        },
+        {
+          "speaker": "A",
+          "text": "Und im Fruchtfleisch, das übrig bliebe?"
+        },
+        {
+          "speaker": "B",
+          "text": "Gut zweihundert. Die Schale hat rund fünfmal so viel."
+        },
+        {
+          "speaker": "A",
+          "text": "Und wann gehört er trotzdem nicht auf den Teller?"
+        },
+        {
+          "speaker": "B",
+          "text": "Wenn er bitter schmeckt. Dann gehört er in den Abfall. Die Bitterstoffe heißen Cucurbitacine, sie können schwer vergiften — und Kochen zerstört sie nicht.",
+          "delivery": "serious"
+        },
+        {
+          "speaker": "A",
+          "text": "Also nichts, was man mit Salz und Sahne noch rettet. Ausspucken, weg damit."
+        },
+        {
+          "speaker": "B",
+          "text": "Wirklich beißen tut die Rückstandsfrage nur beim Karottengrün. Zwei Komma null drei Milligramm pro Kilo im Grün. <short pause> In der Wurzel null Komma null acht."
+        },
+        {
+          "speaker": "A",
+          "text": "Dann ändert sich bei zwei Gewohnheiten wirklich etwas. Die Süßkartoffel hängt am Herkunftsland. Und beim Hokkaido geht es um die Erde am Messer.",
+          "delivery": "thoughtful"
+        },
+        {
+          "speaker": "B",
+          "text": "Die Kiwi im Smoothie bleibt, wie sie ist. Und an der Karotte lohnt nur das Grün den Streit."
+        },
+        {
+          "speaker": "A",
+          "text": "Eine Lücke bleibt offen: Niemand hat gemessen, wie viel der akuten Referenzdosis, also der gesundheitlichen Grenze, typische Rückstände ausschöpfen. Für diese Woche heißt das: den Hokkaido vor dem Messer waschen. Und bei der Süßkartoffel aufs Herkunftsland schauen.",
+          "delivery": "serious"
+        }
+      ]
+    }
+  ],
+  "wordCount": 1517,
+  "topics": [
+    "Pestizidrückstände",
+    "Karottengrün",
+    "Kiwischale",
+    "Süßkartoffel-Herkunft",
+    "Hokkaido-Hygiene"
+  ],
+  "hosts": [
+    {
+      "id": "A",
+      "name": "Jonas",
+      "voice": "Charon",
+      "speed": 0.94
+    },
+    {
+      "id": "B",
+      "name": "Lena",
+      "voice": "Erinome",
+      "speed": 1
+    }
+  ]
+}

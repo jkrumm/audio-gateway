@@ -1,3 +1,4 @@
+import { ASK_COVERAGE_MIN, askCoverage } from "./podcast-asks";
 import { DELIVERY_STYLES, endsOnQuestion, isDeliveryKey, SPEECH_TAGS, TAG_PATTERN } from "./gemini-tts-core";
 import type { ReviewNote, ScriptSegment } from "./podcast-script";
 
@@ -24,7 +25,7 @@ export type ExpressionRule =
 export interface LintFinding {
   segmentIndex: number;
   turnIndex: number | null;
-  rule: ExpressionRule | "meta-hedge" | "notes-ignorance" | "host-imbalance" | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term";
+  rule: ExpressionRule | "meta-hedge" | "notes-ignorance" | "host-imbalance" | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term" | "ask-uncovered" | "opening-unframed";
   message: string;
 }
 
@@ -58,6 +59,10 @@ export interface LintOptions {
   hostNames?: string[];
   /** The episode source. When given, an all-caps token only counts as an acronym if the source spells it that way — the writer uses single CAPS words for emphasis ("KEIN Run"). */
   source?: string;
+  /** Listener asks and the segment (index into the linted array) that owes each one an explicit verdict. */
+  asks?: Array<{ ask: string; segmentIndex: number }>;
+  /** When set, the FIRST linted segment must frame at least one of these (the asks, the outline's through-line) within its first turns. */
+  openingFrame?: string[];
 }
 
 const SHORT_TURN_WORDS = 8;
@@ -385,8 +390,36 @@ export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}):
 
   findings.push(...unintroducedTerms(segments, opts));
   findings.push(...expressionFindings(segments, opts, metrics));
+  findings.push(...askFindings(segments, opts));
   findings.push(...conversationFindings(segments, metrics));
   return { metrics, findings };
+}
+
+/** Turns at the head of the first segment that must frame what the episode answers. */
+const OPENING_FRAME_TURNS = 4;
+const OPENING_FRAME_MIN = 0.4;
+/** A verdict can span a question and its answer: up to this many consecutive turns are read together. */
+const VERDICT_WINDOW_TURNS = 3;
+
+/** An ask is addressed when one turn, or two consecutive ones, cover most of its distinctive words — the verdict turn. */
+function askFindings(segments: ScriptSegment[], opts: LintOptions): LintFinding[] {
+  const findings: LintFinding[] = [];
+  for (const { ask, segmentIndex } of opts.asks ?? []) {
+    const turns = segments[segmentIndex]?.turns;
+    if (!turns) continue;
+    const texts = turns.map((t) => stripTags(t.text));
+    const best = texts.reduce((n, _, i) => Math.max(n, askCoverage(ask, texts.slice(i, i + VERDICT_WINDOW_TURNS).join(" "))), 0);
+    if (best < ASK_COVERAGE_MIN) {
+      findings.push({ segmentIndex, turnIndex: null, rule: "ask-uncovered", message: `The listener asked "${ask}" and no turn here gives a verdict on it. Answer it explicitly (yes / no / depends, and what to do), early in the segment, before any side story.` });
+    }
+  }
+  if (opts.openingFrame?.length && segments[0]) {
+    const head = segments[0].turns.slice(0, OPENING_FRAME_TURNS).map((t) => stripTags(t.text)).join(" ");
+    if (!opts.openingFrame.some((frame) => askCoverage(frame, head) >= OPENING_FRAME_MIN)) {
+      findings.push({ segmentIndex: 0, turnIndex: 0, rule: "opening-unframed", message: `The first ${OPENING_FRAME_TURNS} turns never say what this episode answers. Open by naming the listener's question in one or two plain lines (playful is fine), then go into detail.` });
+    }
+  }
+  return findings;
 }
 
 /** The measured facts, as a block the reviewers read next to the draft. */
@@ -402,6 +435,6 @@ export function renderLintReport(report: LintReport): string {
 /** The findings unambiguous enough to send to the writer without a reviewer's judgement. */
 export function lintNotes(report: LintReport): ReviewNote[] {
   return report.findings
-    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term" || f.rule === "notes-ignorance" || f.rule === "meta-hedge")
+    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term" || f.rule === "notes-ignorance" || f.rule === "meta-hedge" || f.rule === "ask-uncovered" || f.rule === "opening-unframed")
     .map((f) => ({ segmentIndex: f.segmentIndex, turnIndex: f.turnIndex, reviewer: "lint", note: f.message }));
 }

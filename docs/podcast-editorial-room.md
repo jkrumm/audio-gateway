@@ -113,8 +113,20 @@ interface EpisodeBrief {
   avoid: string[];
   /** How to introduce unfamiliar names/terms in this episode (uses the glossary). */
   glossaryPolicy: string;
+  /** The listener's concrete questions/habits (0–8), each owed an explicit verdict. Optional: older briefs have none. */
+  asks?: string[];
 }
 ```
+
+**Asks, opening, length (Wave 5).** The editor extracts `asks` from the listener brief and source. The outline assigns each to
+exactly one segment (`answers`; `withAssignedAsks` places any it missed by textual fit). The segment writer and the agent
+loop see the asks their segment owns; lint rules `ask-uncovered` (no verdict turn — a window of up to three consecutive turns
+must cover 40% of the ask's distinctive words) and `opening-unframed` (the first four turns say nothing of an ask or the
+outline's through-line) are advisory and go to the revision as notes; the dramaturge is told to fail a segment that swaps an ask
+for adjacent material. The keyword match is a tripwire, not a judge: v1 of the carrot episode scores 0.43 on the raw-carrot
+ask, v2 (carrot greens instead) 0.29. The editor may shorten a request by at most 20% (`minutesFloor`, raised in code and
+logged); the job profile records `requestedMinutes`, `words`, `lengthVsRequested`, `lengthShort` (< 80% of the requested length
+at 145 words/minute) and `asks {total, uncovered, openingFramed}`.
 
 Prompt stance: *you are the editor, not the writer. The material decides the show. Vary
 against the history on purpose — a technical topic gets a straight, dense walkthrough with
@@ -208,7 +220,7 @@ pulls, never resolves conflicts (that is `brain-sync`'s contract). Follow
 |-|-|-|-|
 | `sourcePaths` | `string[]` | `[]` | brain-relative note paths, read and appended to `source` (which becomes optional when paths are given) |
 | `research` | `boolean` | `true` | run the research stage |
-| `pinMinutes` | `boolean` | `false` | the editor may not deviate from `minutes` |
+| `pinMinutes` | `boolean` | `false` | the editor may not deviate from `minutes`; unpinned, it may go longer or at most 20% shorter |
 | `brainNote` | `boolean` | `true` | write the transcript note back into the brain |
 
 `GET /v1/podcasts/:id` adds `profile`, `brief`, and links `dossier`/`brief`. Progress stages

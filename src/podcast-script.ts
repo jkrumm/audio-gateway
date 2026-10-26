@@ -1,3 +1,4 @@
+import { assignAsks } from "./podcast-asks";
 import { callAnthropicMessages } from "./anthropic-messages";
 import { DELIVERY_KEYS, SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_PATTERN } from "./gemini-tts-core";
 import { rawFetch } from "./gemini-tts";
@@ -86,6 +87,10 @@ export interface PodcastScript {
   wordCount: number;
   /** 3–6 short archive labels from the metadata pass; `[]` when that pass was skipped or failed. */
   topics: string[];
+  /** The listener asks and the segment that owns each (outline assignment); absent on older scripts. */
+  asks?: Array<{ ask: string; segmentIndex: number }>;
+  /** What the opening was checked against (the asks, the through-line). */
+  openingFrame?: string[];
 }
 
 export interface ScriptWriterOptions {
@@ -131,6 +136,8 @@ interface OutlineSegmentSpec {
   targetWords: number;
   /** The question/disagreement this segment turns on. */
   tension: string;
+  /** Listener asks (from the brief's `asks`) this segment owes an explicit verdict. */
+  answers?: string[];
 }
 
 /** A fact/twist/decision deliberately withheld until a specific later segment. */
@@ -416,6 +423,7 @@ export function parseOutline(raw: string): Outline {
       keyFacts,
       targetWords: typeof obj["target_words"] === "number" && obj["target_words"] > 0 ? Math.round(obj["target_words"]) : 200,
       tension: typeof obj["tension"] === "string" ? obj["tension"].trim() : "",
+      answers: Array.isArray(obj["answers"]) ? obj["answers"].filter((a): a is string => typeof a === "string" && a.trim().length > 0) : [],
     };
   });
 
@@ -605,6 +613,7 @@ function renderEpisodeBrief(req: PodcastScriptRequest): string {
     `- Rhythm: ${brief.rhythm}`,
     `- Length: about ${brief.minutes} minutes across ${brief.segments} segment(s).`,
   ];
+  if (brief.asks?.length) lines.push(`- Listener asks (each needs an explicit verdict): ${brief.asks.join(" | ")}`);
   if (brief.devices.length > 0) lines.push(`- Devices to use (and only these): ${brief.devices.join("; ")}`);
   if (brief.avoid.length > 0) lines.push(`- Avoid (patterns from recent episodes, do not repeat them): ${brief.avoid.join("; ")}`);
   if (brief.glossaryPolicy.trim()) lines.push(`- Unfamiliar names and terms: ${brief.glossaryPolicy}`);
@@ -634,6 +643,18 @@ ${renderEpisodeBrief(req)}
 8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
 }
 
+/** What the first lines may frame: the listener's asks, or the question the outline says the episode answers. Empty when neither exists. */
+export const openingFrameOf = (brief: EpisodeBrief, outline: Outline): string[] => [...(brief.asks ?? []), ...(outline.throughLine ? [outline.throughLine] : [])];
+
+/** The outline's ask assignments in the shape lint wants. */
+export const outlineAsks = (outline: Outline): Array<{ ask: string; segmentIndex: number }> =>
+  outline.segments.flatMap((seg, segmentIndex) => (seg.answers ?? []).map((ask) => ({ ask, segmentIndex })));
+
+/** Every listener ask lands in exactly one segment (the outline writer's pick where it named one, else the best textual fit). */
+export function withAssignedAsks(outline: Outline, asks: string[]): Outline {
+  return { ...outline, segments: assignAsks(outline.segments, asks) };
+}
+
 export function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string, voice = ""): string {
   const languageLabel = LANGUAGE_LABEL[req.language];
   const brief = req.episodeBrief;
@@ -650,10 +671,10 @@ You are writing the OUTLINE for this episode — break the story inside what the
   - hook: the opening beat itself — a concrete scene, a striking number, or the open question itself. It must not summarize the episode or preview its conclusions.
   - reveals: things worth deliberately withholding — a number, a decision, a twist — each tied to the 0-based index of the segment where it should land. Segments before that index may gesture at it without giving it away.
   - digressions: planned side-trips (an anecdote, a concrete example, a "what if") — each tied to the 0-based index of the segment that should host it, plus a one-line return_hook: the line that pulls the conversation back to the main thread afterward.
-- Every key_facts entry must be a fact, number or rule taken verbatim (or near-verbatim) from the source — these are the load-bearing details each segment MUST speak aloud.
+${brief.asks?.length ? `- LISTENER ASKS — the listener raised these concrete questions/habits; each one gets an explicit verdict in exactly one segment, and the segment that owns it is built around giving that verdict first, before any side story:\n${brief.asks.map((a) => `  • ${a}`).join("\n")}\n  Put each ask, copied verbatim, into the "answers" array of the segment that answers it. A segment may also follow the notes into territory the listener did not ask about (a shopping list is not a question), but never at the cost of an ask. The FIRST segment frames the episode in its first lines: it says plainly what the episode answers (the listener's question, one or two lines, playful is fine) before any detail.\n` : "- The FIRST segment frames the episode in its first lines: it says plainly what the episode answers (the listener's question, one or two lines, playful is fine) before any detail.\n"}- Every key_facts entry must be a fact, number or rule taken verbatim (or near-verbatim) from the source — these are the load-bearing details each segment MUST speak aloud.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"motif":"<motif, or \\"\\" when the brief did not ask for one>","through_line":"<the one question the episode answers, or \\"\\">","hook":"<the opening beat, or \\"\\" when the brief did not ask for one>","reveals":[{"text":"<what gets revealed>","segment":<0-based segment index>}],"digressions":[{"beat":"<the side-trip>","segment":<0-based segment index>,"return_hook":"<the line that returns to the thread>"}],"segments":[{"title":"<segment title>","goal":"<what this segment accomplishes>","key_facts":["<verbatim fact from the source>"],"target_words":<number>,"tension":"<what pulls the listener through this segment: the open question, the curiosity, or the reveal it is heading for — a conflict only if the material is genuinely contested>"}]}`;
+{"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"motif":"<motif, or \\"\\" when the brief did not ask for one>","through_line":"<the one question the episode answers, or \\"\\">","hook":"<the opening beat, or \\"\\" when the brief did not ask for one>","reveals":[{"text":"<what gets revealed>","segment":<0-based segment index>}],"digressions":[{"beat":"<the side-trip>","segment":<0-based segment index>,"return_hook":"<the line that returns to the thread>"}],"segments":[{"title":"<segment title>","goal":"<what this segment accomplishes>","key_facts":["<verbatim fact from the source>"],"target_words":<number>,"tension":"<what pulls the listener through this segment: the open question, the curiosity, or the reveal it is heading for — a conflict only if the material is genuinely contested>","answers":["<listener ask this segment answers, verbatim, or none>"]}]}`;
 }
 
 export function segmentPrompt(params: {
@@ -670,7 +691,7 @@ export function segmentPrompt(params: {
   const brief = req.episodeBrief;
   const [hostA, hostB] = req.hosts;
   const bridgeInstruction = index === 0
-    ? `This is the FIRST segment — it opens the episode, and the brief's OPENING is binding: ${brief.opening}. Do not add a cold open, a station intro or a hook the brief did not ask for.`
+    ? `This is the FIRST segment — it opens the episode, and the brief's OPENING is binding: ${brief.opening}. Do not add a cold open, a station intro or a hook the brief did not ask for. Within the first three turns the hosts say plainly what this episode answers — the listener's question, in one or two lines (playful is fine) — so nobody starts on a detail without a frame.`
     : `The previous segment ended aiming at: "${previous?.goal ?? ""}". Open with a natural bridge from that into this segment — never re-introduce the show.`;
   const wrapInstruction = index === total - 1
     ? `This is the LAST segment — it closes the episode, and the brief's CLOSING is binding: ${brief.closing}. Do not add takeaways, an outlook or a sign-off the brief did not ask for.`
@@ -688,7 +709,7 @@ What pulls the listener through this segment: ${segment.tension}
 Roles here — ${hostA.name} (A): ${brief.roles.A}; ${hostB.name} (B): ${brief.roles.B}. Tone: ${brief.tone}. Humor: ${HUMOR_INSTRUCTION[brief.humor]} Rhythm: ${brief.rhythm}${brief.glossaryPolicy.trim() ? `\nUnfamiliar names and terms: ${brief.glossaryPolicy}` : ""}
 Key facts this segment MUST speak, verbatim where possible:
 ${segment.keyFacts.map((f) => `- ${f}`).join("\n")}
-${outline.motif ? `\nRunning motif of the episode (return to it once, lightly, if it fits): ${outline.motif}\n` : ""}
+${segment.answers?.length ? `\nThe listener ASKED these — this segment owes each one an explicit verdict (yes / no / it depends on X, and what to do), spoken early, in plain words, before any side story:\n${segment.answers.map((a) => `- ${a}`).join("\n")}\n` : ""}${outline.motif ? `\nRunning motif of the episode (return to it once, lightly, if it fits): ${outline.motif}\n` : ""}
 ${outline.throughLine ? `\nThe episode's through-line (the one question it's really answering — circle it, don't state it outright): ${outline.throughLine}\n` : ""}
 ${devicesInstruction}${bridgeInstruction}
 ${wrapInstruction}
@@ -785,7 +806,7 @@ type ReviewerRole = (typeof REVIEWER_ROLES)[number];
 
 const REVIEWER_INSTRUCTIONS: Record<ReviewerRole, (req: PodcastScriptRequest) => string> = {
   dramaturge: (req) =>
-    `You are the DRAMATURGE reviewing a finished two-host podcast draft AGAINST ITS EPISODE BRIEF — not against a fixed curve, and not against what podcasts usually do. This show has no house shape; the brief below is the only shape this episode owes anyone. Check: does the episode do what the brief decided (format, opening, closing, the roles each host was given); is the rhythm the one the brief asked for; does it avoid what the brief said to avoid; are the brief's devices — if it listed any — actually earning their place; and, just as important, has the draft added devices NOBODY asked for (an unearned cold open, a forced running joke, a bolted-on set of takeaways, a disagreement staged for its own sake) that should simply go. Check specifically for a MANUFACTURED ARGUMENT: an objection that is conceded one turn later, a host who takes a side only so the other has someone to answer, "ja, aber" hedges, positions that are not in the SOURCE. Unless the brief names a genuinely contested question, the episode should read as one host sharing what they know while the other asks sharp questions — flag every staged disagreement and say what the exchange should be instead (a question, a missing fact, a consequence). If the brief asked for reveals or digressions, check they land in the segment they were assigned to and that a digression returns to the point.
+    `You are the DRAMATURGE reviewing a finished two-host podcast draft AGAINST ITS EPISODE BRIEF — not against a fixed curve, and not against what podcasts usually do. This show has no house shape; the brief below is the only shape this episode owes anyone. Check: does the episode do what the brief decided (format, opening, closing, the roles each host was given); is the rhythm the one the brief asked for; does it avoid what the brief said to avoid; are the brief's devices — if it listed any — actually earning their place; and, just as important, has the draft added devices NOBODY asked for (an unearned cold open, a forced running joke, a bolted-on set of takeaways, a disagreement staged for its own sake) that should simply go. Check specifically for a MANUFACTURED ARGUMENT: an objection that is conceded one turn later, a host who takes a side only so the other has someone to answer, "ja, aber" hedges, positions that are not in the SOURCE. Unless the brief names a genuinely contested question, the episode should read as one host sharing what they know while the other asks sharp questions — flag every staged disagreement and say what the exchange should be instead (a question, a missing fact, a consequence). LISTENER ASKS: the brief lists the listener's concrete questions; every one needs an explicit, spoken verdict in the segment that owns it — yes / no / depends, and what to do. A segment that talks around an ask, or swaps it for adjacent material (a side ingredient, a related story), has FAILED it: flag that as the first note, with the ask quoted. Also check the episode's first lines say what the episode answers; an opening that starts on a detail with no frame is a note. If the brief asked for reveals or digressions, check they land in the segment they were assigned to and that a digression returns to the point.
 
 THE BRIEF THIS EPISODE OWES:
 ${renderEpisodeBrief(req)}`,
@@ -1440,8 +1461,11 @@ async function writeEpisodeMetadata(params: {
  */
 const LEAD_BALANCED_POINTS = 10;
 
-export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: PodcastScript; dossier: Dossier; hosts?: PodcastHost[] }): EpisodeProfile {
-  const { brief, script, dossier, hosts = [] } = params;
+/** An episode this far under the length the caller asked for is flagged in the profile and the log. */
+const SHORT_SHARE = 0.8;
+
+export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: PodcastScript; dossier: Dossier; hosts?: PodcastHost[]; requestedMinutes?: number }): EpisodeProfile {
+  const { brief, script, dossier, hosts = [], requestedMinutes } = params;
   const words = { A: 0, B: 0 };
   for (const segment of script.segments) {
     for (const turn of segment.turns) words[turn.speaker] += countWords(turn.text);
@@ -1463,7 +1487,26 @@ export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: Podca
     researchCalls: dossier.toolCalls.filter((c) => c.tool === "research").length,
     ...(dossier.researchUsd !== undefined && { researchUsd: Math.round(dossier.researchUsd * 1000) / 1000 }),
     expression: expressionSummary(lintSegments(script.segments, { hostNames: hosts.map((h) => h.name) })),
+    ...lengthProfile({ requestedMinutes, words: total }),
+    ...asksProfile({ brief, script, hostNames: hosts.map((h) => h.name) }),
   };
+}
+
+function lengthProfile(params: { requestedMinutes?: number; words: number }): Partial<EpisodeProfile> {
+  const { requestedMinutes, words } = params;
+  if (!requestedMinutes) return { words };
+  const ratio = Math.round((words / (requestedMinutes * WORDS_PER_MINUTE)) * 100) / 100;
+  const lengthShort = ratio < SHORT_SHARE;
+  if (lengthShort) log.warn("podcast episode is under 80% of the requested length", { requestedMinutes, words, ratio });
+  return { requestedMinutes, words, lengthVsRequested: ratio, lengthShort };
+}
+
+function asksProfile(params: { brief: EpisodeBrief; script: PodcastScript; hostNames: string[] }): Partial<EpisodeProfile> {
+  const { brief, script, hostNames } = params;
+  const asks = brief.asks ?? [];
+  if (asks.length === 0) return {};
+  const findings = lintSegments(script.segments, { hostNames, asks: script.asks ?? [], openingFrame: script.openingFrame ?? asks }).findings;
+  return { asks: { total: asks.length, uncovered: findings.filter((f) => f.rule === "ask-uncovered").length, openingFramed: !findings.some((f) => f.rule === "opening-unframed") } };
 }
 
 export async function writePodcastScript(req: PodcastScriptRequest, opts: ScriptWriterOptions): Promise<PodcastScript> {
@@ -1494,7 +1537,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         reasoningEffort: resolveReasoningEffort(opts.models.outline, opts.efforts?.outline),
         retryOnTruncation: true,
       }),
-    (raw) => normalizeOutlineTargets(pruneUnrequestedDevices(parseOutline(raw), req.episodeBrief), targetWords),
+    (raw) => withAssignedAsks(normalizeOutlineTargets(pruneUnrequestedDevices(parseOutline(raw), req.episodeBrief), targetWords), req.episodeBrief.asks ?? []),
   );
   opts.onProgress?.("outline", 1, 1);
 
@@ -1533,7 +1576,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   });
 
   let finalSegments = segments;
-  const lint = lintSegments(segments, { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source });
+  const lint = lintSegments(segments, { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source, asks: outlineAsks(outline), openingFrame: openingFrameOf(req.episodeBrief, outline) });
   log.info("podcast lint", { findings: lint.findings.length, rules: [...new Set(lint.findings.map((f) => f.rule))] });
   const reviewNotes = review
     ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, reviewEffort: opts.efforts?.review, showBible, lintReport: renderLintReport(lint), onProgress: opts.onProgress })
@@ -1600,5 +1643,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
     segments: publishedSegments,
     wordCount,
     topics,
+    ...(outlineAsks(outline).length > 0 && { asks: outlineAsks(outline) }),
+    ...(openingFrameOf(req.episodeBrief, outline).length > 0 && { openingFrame: openingFrameOf(req.episodeBrief, outline) }),
   };
 }

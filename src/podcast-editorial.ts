@@ -25,6 +25,12 @@ const EDITORIAL_ATTEMPTS = 2;
 /** Visible output is small (a JSON object of a few hundred words); the headroom is for the model's reasoning. */
 const EDITORIAL_TOKEN_BUDGET = 20000;
 
+/** The editor may shorten a request by at most this share: a 15-minute ask comes back as 12 at the least (v2 of 503c28f0 came back as 10). */
+const MAX_SHORTEN_SHARE = 0.2;
+
+/** Lowest minutes the editor may return for a requested length; the lower bound of the request still wins when it is higher. */
+export const minutesFloor = (requested: number): number => Math.ceil(requested * (1 - MAX_SHORTEN_SHARE));
+
 const MIN_BRIEF_SEGMENTS = 1;
 const MAX_BRIEF_SEGMENTS = 9;
 
@@ -113,6 +119,7 @@ export function defaultEpisodeBrief(input: Pick<EditorialInput, "minutes" | "lan
     devices: [],
     avoid: [],
     glossaryPolicy: "Introduce an unfamiliar name or term as what it IS before what it is CALLED, then reuse one short handle for it.",
+    asks: [],
   };
 }
 
@@ -152,7 +159,10 @@ export function parseEpisodeBrief(
   const minutesRaw = typeof parsed["minutes"] === "number" && Number.isFinite(parsed["minutes"]) ? Math.round(parsed["minutes"]) : input.minutes;
   const minutes = input.pinMinutes
     ? input.minutes
-    : clamp(minutesRaw, input.bounds.minMinutes, input.bounds.maxMinutes);
+    : clamp(minutesRaw, Math.max(input.bounds.minMinutes, minutesFloor(input.minutes)), input.bounds.maxMinutes);
+  if (!input.pinMinutes && minutes !== clamp(minutesRaw, input.bounds.minMinutes, input.bounds.maxMinutes)) {
+    log.warn("podcast editorial minutes raised to the length floor", { requested: input.minutes, editor: minutesRaw, minutes });
+  }
 
   // When the model left segments out, recompute it against the BRIEF's OWN
   // (already clamped/pinned) minutes — not the requested minutes fallback.segments
@@ -182,6 +192,7 @@ export function parseEpisodeBrief(
     devices: strList(parsed["devices"]),
     avoid: strList(parsed["avoid"]),
     glossaryPolicy: str(parsed["glossary_policy"] ?? parsed["glossaryPolicy"], fallback.glossaryPolicy),
+    asks: strList(parsed["asks"]),
   };
 }
 
@@ -189,12 +200,12 @@ export function parseEpisodeBrief(
 // Prompt
 // ---------------------------------------------------------------------------
 
-function editorialSystemPrompt(input: EditorialInput): string {
+export function editorialSystemPrompt(input: EditorialInput): string {
   const [hostA, hostB] = input.hosts;
   const languageLabel = LANGUAGE_LABEL[input.language];
   const lengthRule = input.pinMinutes
     ? `The length is PINNED at ${input.minutes} minutes — return exactly that number.`
-    : `The requested ${input.minutes} minutes are a hint, not an order. Argue for shorter or longer whenever the material warrants it and say why in the rationale; you may return anything between ${input.bounds.minMinutes} and ${input.bounds.maxMinutes} minutes.`;
+    : `The requested ${input.minutes} minutes are the default: the listener asked for that much, so hold it. Go longer when the material warrants it and say why in the rationale. Shorter is allowed only down to ${Math.max(input.bounds.minMinutes, minutesFloor(input.minutes))} minutes (anything lower is raised in code), and only when the material truly cannot fill the ask — say which part is thin; never shorten by dropping something the listener asked about. You may return anything between ${Math.max(input.bounds.minMinutes, minutesFloor(input.minutes))} and ${input.bounds.maxMinutes} minutes.`;
 
   return `You are the editor of "${input.series}". You do not write the episode; you decide what kind of episode this material deserves and hand the writers' room a brief.
 
@@ -220,7 +231,8 @@ Decide, and return as JSON:
 - roles: what ${hostA.name} (A) and ${hostB.name} (B) each ARE in this episode, given their personalities. Be concrete about who explains, who asks, who leads, and whether the split is even.
 - tone: how the episode should feel, in one or two sentences.
 - humor: exactly one of "none", "sparse", "natural". "none" is the right answer for a dense technical topic.
-- opening: how the episode starts. "Straight in with the topic, no cold open" is a perfectly good answer.
+- opening: how the episode starts. "Straight in with the topic, no cold open" is a perfectly good answer — but the first lines must still tell the listener what this episode answers (their question, in one or two plain lines, playful is fine). Never open cold on a detail the listener has no frame for.
+- asks: the listener's CONCRETE questions and habits from the LISTENER BRIEF and the source ("can I eat raw carrots straight from the bag, unwashed?"), one short sentence each, in the source's language, 0 to 8 entries. Each one will be owed an explicit verdict in the episode, so list every one the listener actually raised — and nothing you made up.
 - closing: how it ends. "Stop when the argument is finished" is a perfectly good answer.
 - rhythm: monologue share, pace, where the long explanations go and where quick exchanges belong.
 - devices: dramaturgy devices that genuinely fit THIS material — a motif, a withheld reveal, a planned digression. A live disagreement belongs here only if the source is genuinely contested; "two hosts, two sides" is not a device to reach for. An empty array is the normal answer; only list what earns its place.
@@ -230,7 +242,7 @@ Decide, and return as JSON:
 Write "format" in ${languageLabel}; write every other field in English — it is instruction for the writers' room, not a line anyone says on air.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"format":"","rationale":"","minutes":0,"segments":0,"roles":{"A":"","B":""},"tone":"","humor":"none|sparse|natural","opening":"","closing":"","rhythm":"","devices":[],"avoid":[],"glossary_policy":""}`;
+{"format":"","rationale":"","minutes":0,"segments":0,"roles":{"A":"","B":""},"tone":"","humor":"none|sparse|natural","opening":"","closing":"","rhythm":"","devices":[],"avoid":[],"glossary_policy":"","asks":[]}`;
 }
 
 function buildEditorialUserContent(input: EditorialInput): string {

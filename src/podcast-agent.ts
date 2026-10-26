@@ -8,6 +8,7 @@ import {
   buildRevisionUserContent,
   buildSegmentUserContent,
   revisionPrompt,
+  openingFrameOf,
   sanitizeTurns,
   segmentPrompt,
   writerBudget,
@@ -189,7 +190,15 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
   const { req, outline, index, mode } = params;
   const spec = outline.segments[index];
   if (!spec) throw new Error(`outline segment ${index} out of range`);
-  const lintOpts: LintOptions = { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source };
+  const openingFrame = openingFrameOf(req.episodeBrief, outline);
+  const lintOpts: LintOptions = {
+    glossaryTerms: req.dossier.glossary.map((g) => g.term),
+    hostNames: req.hosts.map((h) => h.name),
+    source: req.source,
+    // This lint sees one segment (index 0), so the asks are the ones this segment owns and the opening frame applies only to the first.
+    asks: (spec.answers ?? []).map((ask) => ({ ask, segmentIndex: 0 })),
+    ...(index === 0 && openingFrame.length > 0 ? { openingFrame } : {}),
+  };
   const measureTurns = (turns: ScriptTurn[]): Measured => measure({ turns, title: spec.title, target: spec.targetWords, req, lintOpts, maxUnitChars: opts.maxUnitChars });
 
   let lastMeasured: Measured | undefined;

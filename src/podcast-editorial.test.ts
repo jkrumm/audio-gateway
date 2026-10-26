@@ -18,7 +18,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { decideEpisodeBrief, defaultEpisodeBrief, parseEpisodeBrief, playfulAsk, renderHistoryTable } = await import("./podcast-editorial");
+const { decideEpisodeBrief, defaultEpisodeBrief, editorialSystemPrompt, minutesFloor, parseEpisodeBrief, playfulAsk, renderHistoryTable } = await import("./podcast-editorial");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
 type EditorialInput = import("./podcast-editorial").EditorialInput;
 type EpisodeSummary = import("./podcast-types").EpisodeSummary;
@@ -135,9 +135,33 @@ describe("defaultEpisodeBrief", () => {
   });
 });
 
+describe("parseEpisodeBrief — length floor and asks", () => {
+  test("the editor cannot shorten a request by more than 20% (v2 of 503c28f0 came back as 10 for 15)", () => {
+    const input = { ...INPUT, minutes: 15 };
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 10 }), input).minutes).toBe(12);
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 13 }), input).minutes).toBe(13);
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 25 }), input).minutes).toBe(25);
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 10 }), { ...input, pinMinutes: true }).minutes).toBe(15);
+    expect(minutesFloor(15)).toBe(12);
+  });
+
+  test("asks are read as a string list, absent means none", () => {
+    const withAsks = parseEpisodeBrief(JSON.stringify({ minutes: 20, asks: ["Karotten roh, ungewaschen aus der Tüte essen?", "  ", 3, "Kiwi mit Schale?"] }), INPUT);
+    expect(withAsks.asks).toEqual(["Karotten roh, ungewaschen aus der Tüte essen?", "Kiwi mit Schale?"]);
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 20 }), INPUT).asks).toEqual([]);
+  });
+
+  test("the editor prompt owes the listener a frame and extracts asks", () => {
+    const prompt = editorialSystemPrompt(INPUT);
+    expect(prompt).toContain("the first lines must still tell the listener what this episode answers");
+    expect(prompt).toContain("- asks:");
+    expect(prompt).toContain("never shorten by dropping something the listener asked about");
+  });
+});
+
 describe("parseEpisodeBrief", () => {
   test("parses a full reply", () => {
-    const brief = parseEpisodeBrief(FULL_BRIEF_JSON, INPUT);
+    const brief = parseEpisodeBrief(FULL_BRIEF_JSON, { ...INPUT, minutes: 8 });
     expect(brief.format).toBe("Kurzbriefing");
     expect(brief.minutes).toBe(7);
     expect(brief.segments).toBe(2);
@@ -158,7 +182,7 @@ describe("parseEpisodeBrief", () => {
     const long = parseEpisodeBrief(JSON.stringify({ minutes: 900, segments: 40 }), INPUT);
     expect(long.minutes).toBe(60);
     expect(long.segments).toBe(9);
-    const short = parseEpisodeBrief(JSON.stringify({ minutes: 1, segments: 0 }), INPUT);
+    const short = parseEpisodeBrief(JSON.stringify({ minutes: 1, segments: 0 }), { ...INPUT, minutes: 3 });
     expect(short.minutes).toBe(3);
     expect(short.segments).toBe(1);
   });
@@ -254,7 +278,8 @@ describe("decideEpisodeBrief", () => {
 
     expect(model).toBe("editor-model");
     expect(brief.format).toBe("Kurzbriefing");
-    expect(brief.minutes).toBe(7);
+    // The reply asks for 7 minutes against a 20-minute request: raised to the 80% floor.
+    expect(brief.minutes).toBe(16);
 
     expect(systemPrompt).toContain('You are the editor of "Brain Sonderausgabe"');
     expect(systemPrompt).toContain("You do not write the episode");
@@ -265,8 +290,8 @@ describe("decideEpisodeBrief", () => {
     expect(systemPrompt).toContain("The default is knowledge SHARING");
     expect(systemPrompt).toContain("A live disagreement belongs here only if the source is genuinely contested");
     expect(systemPrompt).toContain("Hosts: A = Jonas, B = Lena");
-    expect(systemPrompt).toContain("The requested 20 minutes are a hint");
-    expect(systemPrompt).toContain("between 3 and 60 minutes");
+    expect(systemPrompt).toContain("The requested 20 minutes are the default");
+    expect(systemPrompt).toContain("between 16 and 60 minutes");
 
     expect(userContent).toContain("SHOW BIBLE");
     expect(userContent).toContain("Jonas ist ruhig und präzise.");

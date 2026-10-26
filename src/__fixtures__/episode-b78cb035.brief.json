@@ -1,0 +1,28 @@
+{
+  "format": "Nachrechnung — der Landeslabor-Blick auf vier Gewohnheiten",
+  "rationale": "EXPLAINER, aber gespiegelt: Die Notiz ist zwei Tage zuvor schon als Urteils-Folge durchgerechnet worden, also trägt diese Folge nicht die Urteile, sondern den einen frischen Blickwinkel, den die Notizen seither dazugelegt haben — das baden-württembergische Landeslabor mit seinen eigenen, schärferen Zahlen, das Karottengrün als der einzige Ort, an dem die Rückstandsfrage wirklich beißt, und die Herkunfts- und Prozessgeschichten dahinter. Deshalb erklärt hier Lena, die Nachrechnerin, und Jonas stellt die Fragen, die die Zahlen selbst betreffen: was ein Fund bedeutet, wer eine Studie bezahlt hat, was niemand gemessen hat — das ist die Umkehr der letzten Folge, in der Jonas erklärt und geurteilt hat. Kurz statt fünfzehn Minuten, weil die vier Fazits stehen und nur der neue Winkel zu tragen ist.",
+  "minutes": 10,
+  "segments": 4,
+  "roles": {
+    "A": "Jonas fragt als derjenige, der die Notizen nicht geschrieben hat und die Zahlen prüft: Was heißt 'mit Rückständen' gegenüber 'über dem Höchstgehalt', wer hat die Kiwi-Schälstudie bezahlt, und was davon ist bei Johannes überhaupt relevant. Er bringt die Vorbehalte und die offene Lücke ein und hält das Fazit am Ende zusammen.",
+    "B": "Lena führt durch die Folge. Sie hat die Labordaten und rechnet nach: einundvierzig von einundvierzig Karotten, zweiundneunzig Prozent der Kiwis, zwei Komma null drei gegen null Komma null acht Milligramm pro Kilo im Grün, Ägypten mit zehn Komma neun Prozent. Sie ist die Expertin, nicht die Stichwortgeberin, und sie zieht die praktische Folge für Johannes."
+  },
+  "tone": "Leicht und neugierig, wie eine zweite Meinung von jemandem, der genauer hingeschaut hat; trocken da, wo die Zahlen es sind, nie belehrend, und mit echtem Interesse an dem, was das Labor sieht und das Bundesamt nicht.",
+  "humor": "natural",
+  "opening": "Direkt rein, ohne Rückblick auf die letzte Folge und ohne Zahlenstapel. Lenas erster Satz benennt den einen Teil der Möhre, um den es sich überhaupt zu streiten lohnt: das Grün.",
+  "closing": "Aufhören, wenn die vier Gewohnheiten durch sind. Letzter Satz ist die ehrliche Lücke — dass niemand gemessen hat, wie viel der gesundheitlichen Grenze typische Rückstände ausschöpfen — plus die eine Handlung für diese Woche: den Hokkaido vor dem Messer waschen, bei der Süßkartoffel aufs Herkunftsland schauen.",
+  "rhythm": "Lena trägt gut sechzig Prozent, mit langen Durchgängen in den Segmenten eins und drei, wo die Labordaten und die Herkunftsgeschichten am Stück erzählt werden müssen. Segment zwei und vier sind schnell getaktet: eine Zahl, eine Frage, eine Antwort, eine Zahl. Kein Turn über neunzig Wörter ohne eine Reaktion mit Substanz.",
+  "devices": [
+    "Eine kurze, geplante Abschweifung in die Kartoffellagerung — Chlorpropham-Verbot, dann Minzöl und das Gas 1,4-Dimethylnaphthalin — mit sichtbarem Weg zurück zur Möhre, weil sie zeigt, wie eine Zulassung praktisch endet.",
+    "Die Gegenüberstellung des Grünwerts und des Wurzelwerts als einziger durchgehaltener Anker: zwei Komma null drei gegen null Komma null acht, einmal eingeführt, im letzten Segment einmal wiederholt."
+  ],
+  "avoid": [
+    "Kein Urteil-pro-Lebensmittel-Format wie in der Folge vom 26. Oktober — die Fazits werden nur noch in einem Satz je Gewohnheit gestreift, nicht neu aufgebaut.",
+    "Höchstgehalt gegen akute Referenzdosis nicht noch einmal von vorn erklären; beide Begriffe in einem Halbsatz auffrischen und dann benutzen.",
+    "Kein Einstieg über eine offene Streitfrage und keine eröffnende Entscheidungsliste wie in den Factory-Folgen, kein gespielter Widerspruch, der im nächsten Turn zurückgenommen wird.",
+    "Die BVL-Gesamtzahlen (sechzehntausendvierhundertdreiundzwanzig Proben, Quoten nach Herkunft) nicht wieder vorlesen — sie sind zwei Tage alt.",
+    "Die drei Keimzahlen der Notiz (eins von zweitausenddreihundertachtundzwanzig, null Komma sechs vier, zwei Komma neun Prozent) kommen nicht vor; ebenso nicht die angebliche EU-2021-Regel zum Wachsen und nicht die von Zespri bezahlten Kiwi-Schälprozente.",
+    "Kein Cold Open, keine Zusammenfassung am Anfang, keine Takeaway-Liste am Ende."
+  ],
+  "glossaryPolicy": "Jeder Fachbegriff wird beim ersten Vorkommen in einem Satzteil als das eingeführt, was er ist, dann benannt: das Stuttgarter Landeslabor (CVUA Stuttgart), das Bundesamt (BVL), das Bundesinstitut für Risikobewertung (BfR). Danach nur noch die kurzen Kürzel. Mepiquat und Chlormequat werden als Wachstumsregulatoren für Getreide eingeführt, bevor die Süßkartoffel ins Spiel kommt; Thiabendazol als Nach-der-Ernte-Fungizid; Chlorpropham als alter Keimhemmer. 'Gewachst' wird als deutsches Kennzeichnungswort erklärt, ausdrücklich ohne Datum und ohne EU-Regel. Höchstgehalt und akute Referenzdosis werden in je einem Halbsatz aufgefrischt, nicht neu hergeleitet."
+}
