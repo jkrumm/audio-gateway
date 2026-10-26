@@ -155,6 +155,17 @@ export type AnthropicCallResult =
   | ({ ok: true; status: number } & AnthropicMessageResult)
   | { ok: false; status: number; errorText: string };
 
+/** `system` as one string, or as a cached prefix block plus the per-call remainder. */
+export function buildSystem(system: string, cacheablePrefix?: string): string | Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> {
+  if (!cacheablePrefix || !system.startsWith(cacheablePrefix)) return system;
+  const rest = system.slice(cacheablePrefix.length);
+  const blocks: Array<{ type: "text"; text: string; cache_control?: { type: "ephemeral" } }> = [
+    { type: "text", text: cacheablePrefix, cache_control: { type: "ephemeral" } },
+  ];
+  if (rest.trim()) blocks.push({ type: "text", text: rest });
+  return blocks;
+}
+
 /**
  * One Messages call with adaptive thinking. A non-2xx response comes back as
  * `{ok: false}` (the caller records usage and throws); a transient failure — 500/502/504,
@@ -168,6 +179,13 @@ export async function callAnthropicMessages(params: {
   system: string;
   user: string;
   maxTokens: number;
+  /**
+   * Leading part of `system` that is byte-identical across the calls of one episode (house
+   * rules, show bible, brief). When set and `system` starts with it, it becomes its own system
+   * block carrying a `cache_control` breakpoint, so repeat calls read it from the prompt cache
+   * (5-minute TTL, refreshed on every hit) instead of paying full input price.
+   */
+  cacheablePrefix?: string;
   timeoutMs?: number;
 }): Promise<AnthropicCallResult> {
   const body = JSON.stringify({
@@ -175,11 +193,15 @@ export async function callAnthropicMessages(params: {
     max_tokens: Math.max(ANTHROPIC_MIN_MAX_TOKENS, params.maxTokens),
     thinking: { type: "adaptive" },
     output_config: { effort: "high" },
-    system: params.system,
+    system: buildSystem(params.system, params.cacheablePrefix),
     messages: [{ role: "user", content: params.user }],
     stream: true,
   });
   const timeoutMs = params.timeoutMs ?? ATTEMPT_TIMEOUT_MS;
+  if (params.cacheablePrefix && !params.system.startsWith(params.cacheablePrefix)) {
+    // Silent otherwise: a prompt edit that drifts the prefix just stops caching, and that costs money.
+    log.warn("anthropic cacheable prefix does not lead the system prompt, calling uncached", { model: params.model });
+  }
   // Resolved before the loop: a non-derivable base is a config error, never worth retrying.
   const url = iuAnthropicUrl("/v1/messages");
 

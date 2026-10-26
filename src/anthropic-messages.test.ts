@@ -14,7 +14,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { parseAnthropicStream, callAnthropicMessages } = await import("./anthropic-messages");
+const { parseAnthropicStream, callAnthropicMessages, buildSystem } = await import("./anthropic-messages");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -173,5 +173,23 @@ describe("callAnthropicMessages — per-attempt timeout", () => {
     if (result.ok) return;
     expect(result.status).toBe(504);
     expect(result.errorText).toContain("no complete response");
+  });
+});
+
+describe("buildSystem — prompt-cache prefix", () => {
+  test("splits a matching prefix into a cached block plus the remainder", () => {
+    expect(buildSystem("BASE\n\nTAIL", "BASE")).toEqual([
+      { type: "text", text: "BASE", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "\n\nTAIL" },
+    ]);
+  });
+
+  test("keeps a plain string without a prefix, or when the prefix does not lead the system prompt", () => {
+    expect(buildSystem("BASE TAIL")).toBe("BASE TAIL");
+    expect(buildSystem("BASE TAIL", "OTHER")).toBe("BASE TAIL");
+  });
+
+  test("a prefix that is the whole prompt yields a single cached block", () => {
+    expect(buildSystem("BASE", "BASE")).toEqual([{ type: "text", text: "BASE", cache_control: { type: "ephemeral" } }]);
   });
 });

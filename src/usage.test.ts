@@ -472,3 +472,12 @@ describe("ElevenLabs pricing (per character at vendor list, contested unit)", ()
     expect(normalizeModel("whisper-20260101")).toBe("whisper");
   });
 });
+
+describe("computeCost — Claude prompt-cache reads", () => {
+  test("claude-opus-5-5 bills the cached part at the cache-read rate and the rest at the input rate", async () => {
+    const { computeCost } = await import("./usage");
+    const { costUsd } = computeCost("claude-opus-5-5", { inputTokens: 18_606, outputTokens: 5_490, cachedInputTokens: 10_253, audioTokens: null, audioSeconds: null, inputChars: null });
+    // (8,353 x $4 + 10,253 x $0.20 + 5,490 x $20) per million
+    expect(costUsd).toBeCloseTo((8_353 * 4 + 10_253 * 0.2 + 5_490 * 20) / 1e6, 6);
+  });
+});

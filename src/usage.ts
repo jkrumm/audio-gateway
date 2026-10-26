@@ -301,8 +301,8 @@ const RATES: Record<string, Rate> = {
   // tokens are billed as output and arrive inside completion_tokens, so they are
   // covered. `-eu` variants normalise onto the same key.
   // claude-opus-5-5: agent-gateway server/lib/models.ts (modelpick metric_snapshot / OpenRouter, 2026-10-17).
-  // Cache reads/writes are not split out — they bill at the full input rate here (an overstatement).
-  "claude-opus-5-5": { input: 4, output: 20 },
+  // Cache reads bill at $0.20/M, 5% of input (platform.claude.com pricing, read 2026-10-25); cache writes (1.25x) are not split out and bill at the input rate here.
+  "claude-opus-5-5": { input: 4, cachedInput: 0.2, output: 20 },
   "claude-opus-5": { input: 5, output: 25 },
   "claude-opus-4-8": { input: 5, output: 25 },
   "claude-opus-4-7": { input: 5, output: 25 },
