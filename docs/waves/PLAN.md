@@ -74,8 +74,8 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
       recommendation** (quality evidence, cost/episode); verdict pending the owner's ears. Record the expression
       findings in `docs/gemini-tts.md` if new facts were measured.
 - [ ] **(10) Research without the starvation budget (architecture, BEFORE the rematch).** Brain AND web, whatever it
-      takes: `PODCAST_RESEARCH_MAX_CALLS` default ~12 plus a per-episode USD runaway guard (`PODCAST_RESEARCH_MAX_USD`,
-      default $3), identical queries deduped, tool description says web research is EXPECTED for anything the listener
+      takes. OWNER CORRECTION: NO per-episode USD ceiling and no call cap by default (quality over cost; savings come
+      from choosing an efficient model) — only identical-query dedupe and the existing hang/idle guards, tool description says web research is EXPECTED for anything the listener
       needs that notes/brain do not explain; research spend in the job profile.
 - [ ] **(11) Agentic writer (architecture, BEFORE the rematch).** The single-shot draft cannot measure its own text.
       Per-segment draft + revision become a tool loop on the existing `src/llm-tools.ts` `runToolLoop` (no new

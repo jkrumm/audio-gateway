@@ -1,7 +1,7 @@
 /**
  * writer-rematch — the fair blind rematch of IU-only podcast writers (Wave 3).
  *
- * Full production per-segment flow INCLUDING tightening (Wave 2 + Wave 3 prompts, the research dossier, the fresh frozen outline from
+ * The agentic writer (podcast-agent.ts: draft and revision as a lint-measuring tool loop) for every candidate; full production per-segment flow INCLUDING tightening (Wave 2 + Wave 3 prompts, the research dossier, the fresh frozen outline from
  * data/wave3/), for the opening and the interaction segment, voiced with the expressive synth (tags + per-turn delivery). Only the voice
  * owner differs; reviewers are the production panel. One hybrid: the best cheap drafter's draft, Opus only for the revision pass.
  *
@@ -21,7 +21,7 @@ process.env["USAGE_SINK"] = "sqlite";
 const { config } = await import("../src/config");
 const script = await import("../src/podcast-script");
 const { lintSegments, lintNotes, renderLintReport, expressionSummary } = await import("../src/podcast-lint");
-const { resolveReasoningEffort } = await import("../src/model-resolution");
+const agentMod = await import("../src/podcast-agent");
 const { synthesizeSegment } = await import("./lib/bakeoff-synth");
 type ScriptSegment = import("../src/podcast-script").ScriptSegment;
 type Outline = import("../src/podcast-script").Outline;
@@ -42,15 +42,15 @@ interface Candidate {
   /** Rough IU spend for two segments incl. revision + tightening, before the first measurement. */
   estimateUsd: number;
 }
-// Cheap first, the Opus baseline early enough that the cap can never starve it; hybrid last (it reuses a finished draft).
+// Cheap first so the cap can only ever cut the expensive tail; the hybrid last (it reuses a finished draft). Opus agentic is ~$1.4 — the cap decides.
 const CANDIDATES: Candidate[] = [
-  { id: "claude-opus-5-5", model: "claude-opus-5-5", estimateUsd: 1.3 },
-  { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.2 },
-  { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.1 },
-  { id: "gemini-3.8-flash", model: "gemini-3.8-flash", estimateUsd: 0.2 },
-  { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.3 },
-  { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.4 },
-  { id: "claude-sonnet-5-5", model: "claude-sonnet-5-5", estimateUsd: 0.6 },
+  { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.25 },
+  { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.2 },
+  { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.4 },
+  { id: "gemini-3.8-flash", model: "gemini-3.8-flash", estimateUsd: 0.25 },
+  { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.45 },
+  { id: "claude-opus-5-5", model: "claude-opus-5-5", estimateUsd: 1.4 },
+  { id: "claude-sonnet-5-5", model: "claude-sonnet-5-5", estimateUsd: 0.7 },
 ];
 
 const countWords = (t: string): number => (t.match(/\S+/g) ?? []).length;
@@ -90,6 +90,7 @@ interface CandidateRun {
   hybridDrafter?: string;
   segments: Array<{ key: string; index: number; target: number; draftWords: number; finalWords: number; draft: ScriptSegment; final: ScriptSegment; lintFinal: ReturnType<typeof lintSegments>["findings"]; lintDraftFindings: number; expression: ReturnType<typeof expressionSummary> }>;
   notes: ReviewNote[];
+  agentRuns: import("../src/podcast-agent").AgentRun[];
   wallMs: { draft: number; review: number; revise: number };
   cost: { draftUsd: number; writerUsd: number; writerUncachedUsd: number; sharedUsd: number; cacheReadTokens: number; cacheWriteTokens: number };
   projectedWriterUsdPerEpisode: number;
@@ -116,9 +117,12 @@ function windowCost(model: string, fromId: number, toId: number): { writerUsd: n
   return { writerUsd, writerUncachedUsd, sharedUsd, cacheRead, cacheWrite, calls, failed };
 }
 
-async function draftSegment(model: string, index: number, parseFailures: { n: number }): Promise<ScriptSegment> {
+const makeAgent = (model: string, runs: import("../src/podcast-agent").AgentRun[]) =>
+  agentMod.createSegmentAgent({ model, reasoningEffort: agentMod.agentReasoningEffort(model), brainDir: config.brainDir || undefined, maxUnitChars: config.podcastMultiSpeakerMaxChars, onRun: (r) => runs.push(r) });
+
+async function draftSegment(model: string, index: number, parseFailures: { n: number }, agent: ReturnType<typeof makeAgent>): Promise<ScriptSegment> {
   const spec = outline.segments[index]!;
-  const turns = await script.callAndParse(
+  const singleShot = (): Promise<ScriptSegment["turns"]> => script.callAndParse(
     `segment ${index + 1} @${model}`,
     (attempt) =>
       script.callPodcastLlm({
@@ -140,6 +144,10 @@ async function draftSegment(model: string, index: number, parseFailures: { n: nu
       }
     },
   );
+  const turns = await agent.draft({ req, outline, index, total, showBible, voice }).catch((err: unknown) => {
+    console.warn(`agent draft failed for #${index} @${model}: ${err instanceof Error ? err.message.slice(0, 200) : String(err)} — single-shot fallback`);
+    return singleShot();
+  });
   return { title: spec.title, turns };
 }
 
@@ -152,9 +160,9 @@ async function reviewDrafts(drafts: ScriptSegment[]): Promise<ReviewNote[]> {
   return [...raw.map(remap), ...lengthRemapped, ...lintRemapped].filter((n) => n.segmentIndex === null || picks.some((p) => p.index === n.segmentIndex));
 }
 
-async function reviseAll(model: string, drafts: ScriptSegment[], notes: ReviewNote[]): Promise<ScriptSegment[]> {
+async function reviseAll(model: string, drafts: ScriptSegment[], notes: ReviewNote[], agent: ReturnType<typeof makeAgent>): Promise<ScriptSegment[]> {
   const revise = (segments: ScriptSegment[], withNotes: ReviewNote[]): Promise<ScriptSegment[]> =>
-    script.reviseSegments({ req, outline, segments, notes: withNotes, model, concurrency: 3, showBible, voice });
+    script.reviseSegments({ req, outline, segments, notes: withNotes, model, concurrency: 3, showBible, voice, agent });
   let final = sparse(drafts);
   if (notes.some((n) => picks.some((p) => p.index === n.segmentIndex))) final = await revise(final, notes);
   const stillLong = script.lengthNotes(final, outline).filter((n) => picks.some((p) => p.index === n.segmentIndex));
@@ -162,11 +170,13 @@ async function reviseAll(model: string, drafts: ScriptSegment[], notes: ReviewNo
   return picks.map((p) => final[p.index]!);
 }
 
-async function runCandidate(cand: Candidate, hybrid?: { drafter: string; drafts: ScriptSegment[]; notes: ReviewNote[]; draftWallMs: number; reviewWallMs: number; draftUsd: number }): Promise<CandidateRun> {
+async function runCandidate(cand: Candidate, hybrid?: { drafter: string; drafts: ScriptSegment[]; notes: ReviewNote[]; draftWallMs: number; reviewWallMs: number; draftUsd: number; agentRuns: import("../src/podcast-agent").AgentRun[] }): Promise<CandidateRun> {
   const startId = ledger.maxId();
   const parseFailures = { n: 0 };
+  const agentRuns: import("../src/podcast-agent").AgentRun[] = [];
+  const agent = makeAgent(cand.model, agentRuns);
   const t0 = Date.now();
-  const drafts = hybrid?.drafts ?? (await Promise.all(picks.map((p) => draftSegment(cand.model, p.index, parseFailures))));
+  const drafts = hybrid?.drafts ?? (await Promise.all(picks.map((p) => draftSegment(cand.model, p.index, parseFailures, agent))));
   const draftMs = hybrid?.draftWallMs ?? Date.now() - t0;
   const draftEndId = ledger.maxId();
 
@@ -178,7 +188,7 @@ async function runCandidate(cand: Candidate, hybrid?: { drafter: string; drafts:
 
   ledger.guard(cand.model === "claude-opus-5-5" ? 0.6 : 0.2);
   const t2 = Date.now();
-  const finals = await reviseAll(cand.model, drafts, notes);
+  const finals = await reviseAll(cand.model, drafts, notes, agent);
   const reviseMs = Date.now() - t2;
   const endId = ledger.maxId();
 
@@ -213,6 +223,7 @@ async function runCandidate(cand: Candidate, hybrid?: { drafter: string; drafts:
       };
     }),
     notes,
+    agentRuns: [...(hybrid?.agentRuns ?? []), ...agentRuns],
     wallMs: { draft: draftMs, review: reviewMs, revise: reviseMs },
     cost: { draftUsd, writerUsd, writerUncachedUsd, sharedUsd: reviewWindow.sharedUsd + reviseWindow.sharedUsd + draftWindow.sharedUsd, cacheReadTokens: draftWindow.cacheRead + reviseWindow.cacheRead, cacheWriteTokens: draftWindow.cacheWrite + reviseWindow.cacheWrite },
     projectedWriterUsdPerEpisode: writerUsd * scale,
@@ -246,7 +257,7 @@ for (const cand of CANDIDATES) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`${cand.id}: FAILED — ${message.slice(0, 300)}`);
     await writeJson(`./data/wave3/fail-${cand.id}.json`, { error: message });
-    runs.push({ id: cand.id, model: cand.model, segments: [], notes: [], wallMs: { draft: 0, review: 0, revise: 0 }, cost: { draftUsd: 0, writerUsd: 0, writerUncachedUsd: 0, sharedUsd: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, projectedWriterUsdPerEpisode: 0, projectedUncachedUsdPerEpisode: 0, calls: { writer: 0, failed: 0, parseFailures: 0 }, error: message });
+    runs.push({ id: cand.id, model: cand.model, segments: [], notes: [], agentRuns: [], wallMs: { draft: 0, review: 0, revise: 0 }, cost: { draftUsd: 0, writerUsd: 0, writerUncachedUsd: 0, sharedUsd: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }, projectedWriterUsdPerEpisode: 0, projectedUncachedUsdPerEpisode: 0, calls: { writer: 0, failed: 0, parseFailures: 0 }, error: message });
   }
 }
 
@@ -260,7 +271,7 @@ if ((!ONLY || ONLY.includes(hybridId)) && !existsSync(cachePath(hybridId))) {
     try {
       ledger.guard(0.9);
       console.log(`hybrid: drafter ${best.id} (draft score ${score(best).toFixed(1)}), Opus revises`);
-      const run = await runCandidate({ id: hybridId, model: "claude-opus-5-5", estimateUsd: 0.9 }, { drafter: best.id, drafts: best.segments.map((s) => s.draft), notes: best.notes, draftWallMs: best.wallMs.draft, reviewWallMs: best.wallMs.review, draftUsd: best.cost.draftUsd });
+      const run = await runCandidate({ id: hybridId, model: "claude-opus-5-5", estimateUsd: 0.9 }, { drafter: best.id, drafts: best.segments.map((s) => s.draft), notes: best.notes, draftWallMs: best.wallMs.draft, reviewWallMs: best.wallMs.review, draftUsd: best.cost.draftUsd, agentRuns: best.agentRuns });
       await writeJson(cachePath(hybridId), run);
       runs.push(run);
       console.log(`hybrid: ${run.segments.map((s) => `${s.key} ${s.finalWords}/${s.target}w`).join(", ")} writer ≤$${run.cost.writerUsd.toFixed(3)}`);
@@ -306,6 +317,6 @@ await writeJson("./data/wave3/summary.json", {
   episode: inputs.DEFAULT_EPISODE_ID,
   picks,
   spentUsd: ledger.spent(),
-  runs: runs.map((r) => ({ id: r.id, letter: letters[r.id], hybridDrafter: r.hybridDrafter, error: r.error, projectedWriterUsdPerEpisode: r.projectedWriterUsdPerEpisode, projectedUncachedUsdPerEpisode: r.projectedUncachedUsdPerEpisode, cost: r.cost, wallMs: r.wallMs, calls: r.calls, segments: r.segments.map((s) => ({ key: s.key, words: s.finalWords, target: s.target, lintFindings: s.lintFinal.length, expression: s.expression })) })),
+  runs: runs.map((r) => ({ id: r.id, letter: letters[r.id], hybridDrafter: r.hybridDrafter, error: r.error, projectedWriterUsdPerEpisode: r.projectedWriterUsdPerEpisode, projectedUncachedUsdPerEpisode: r.projectedUncachedUsdPerEpisode, cost: r.cost, wallMs: r.wallMs, calls: r.calls, agent: { runs: r.agentRuns.length, rounds: r.agentRuns.reduce((n, a) => n + a.rounds, 0), rejections: r.agentRuns.reduce((n, a) => n + a.rejections, 0), fellBack: r.agentRuns.filter((a) => a.fellBack).length }, segments: r.segments.map((s) => ({ key: s.key, words: s.finalWords, target: s.target, lintFindings: s.lintFinal.length, expression: s.expression })) })),
 });
 console.log(`done. Wave 3 spend (ledger + prior) $${ledger.spent().toFixed(3)} of $${ledger.capUsd}`);

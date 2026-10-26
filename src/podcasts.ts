@@ -624,7 +624,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
           {
             brainDir: config.brainDir || undefined,
             research: config.researchApiKey
-              ? { url: config.researchGatewayUrl, apiKey: config.researchApiKey, maxCalls: config.podcastResearchMaxCalls, maxUsd: config.podcastResearchMaxUsd }
+              ? { url: config.researchGatewayUrl, apiKey: config.researchApiKey, ...(config.podcastResearchMaxCalls > 0 && { maxCalls: config.podcastResearchMaxCalls }) }
               : undefined,
             history,
             model: config.podcastResearchModel,

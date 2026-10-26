@@ -254,17 +254,20 @@ describe("research tool", () => {
     expect(spend.usd).toBeCloseTo(0.03);
   });
 
-  test("the USD guard stops new runs once the reported spend reaches it", async () => {
+  test("no spend ceiling: reported spend accumulates for the profile but never blocks a run", async () => {
     const { fetchImpl, count } = scriptedFetch([
       rawRes(200, { jobId: "job-1" }),
-      rawRes(200, { status: "done", result: { report: "r1", cost: { totalUsd: 1.5 } } }),
+      rawRes(200, { status: "done", result: { report: "r1", cost: { totalUsd: 9 } } }),
+      rawRes(200, { jobId: "job-2" }),
+      rawRes(200, { status: "done", result: { report: "r2", cost: { totalUsd: 9 } } }),
     ]);
     const spend = { usd: 0 };
-    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 12, maxUsd: 1 }, spend, fetchImpl, pollIntervalMs: 0 });
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, spend, fetchImpl, pollIntervalMs: 0 });
     const tool = findTool(tools, "research");
     await tool.execute({ query: "q1" });
-    expect(await tool.execute({ query: "q2" })).toContain("spend guard reached");
-    expect(count()).toBe(2);
+    expect(await tool.execute({ query: "q2" })).toContain("r2");
+    expect(count()).toBe(4);
+    expect(spend.usd).toBe(18);
   });
 
   test("the tool description expects web research for what notes and brain do not explain", () => {

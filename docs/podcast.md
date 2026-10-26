@@ -240,8 +240,7 @@ row.
 | `RESEARCH_API_KEY` | unset | Bearer for the research gateway; empty disables the `research` tool. |
 | `PODCAST_RESEARCH_MODEL` / `PODCAST_RESEARCH_EFFORT` | `deepseek-v4.1-flash` / `high` | Tool-calling researcher (brain search/read, past episodes, research gateway). |
 | `PODCAST_EDITORIAL_MODEL` / `PODCAST_EDITORIAL_EFFORT` | `deepseek-v4.1-flash` / `high` | The editor — decides format/roles/tone/humor/length/rhythm per episode. |
-| `PODCAST_RESEARCH_MAX_CALLS` | `12` | research-gateway runs the researcher may start per job (web research is expected for what notes and brain do not explain; identical queries are deduped). |
-| `PODCAST_RESEARCH_MAX_USD` | `3` | Per-job runaway guard on the gateway's reported research spend; no new run starts past it. Spend lands in `profile.researchUsd`. |
+| `PODCAST_RESEARCH_MAX_CALLS` | `0` (unlimited) | Optional emergency valve on research-gateway runs per job. Quality over cost: web research is expected for what notes and brain do not explain, identical queries are deduped, and the gateway-reported spend lands in `profile.researchUsd` for visibility only. |
 | `PODCAST_HISTORY_DEPTH` | `8` | How many recent episode profiles the editor (and `past_episodes`) sees. |
 | `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | Number-word density above which a turn is synthesized slower. |
 | `PODCAST_DENSE_TURN_SLOWDOWN` | `0.06` | Speed delta applied to dense turns (clamped to the 0.7 floor). |

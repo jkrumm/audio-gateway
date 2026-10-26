@@ -571,9 +571,8 @@ export const config = {
   /** Reasoning effort for the editorial call, passed through `resolveReasoningEffort`. */
   podcastEditorialEffort: process.env["PODCAST_EDITORIAL_EFFORT"] ?? "high",
   /** Spend cap: research-gateway calls (each one real money) the researcher may spend per job. Not a step/round cap. */
-  podcastResearchMaxCalls: num("PODCAST_RESEARCH_MAX_CALLS", 12),
-  /** Per-episode research-gateway runaway guard (USD, as the gateway reports it); a run already in flight finishes, no new one starts past it. */
-  podcastResearchMaxUsd: num("PODCAST_RESEARCH_MAX_USD", 3),
+  /** Optional emergency valve on research-gateway runs per job; 0 = unlimited (the default — quality over cost). */
+  podcastResearchMaxCalls: num("PODCAST_RESEARCH_MAX_CALLS", 0),
   /** How many recent episode profiles the editor sees. */
   podcastHistoryDepth: num("PODCAST_HISTORY_DEPTH", 8),
   /** Number-word density (per word) above which a turn is synthesized slower. */
