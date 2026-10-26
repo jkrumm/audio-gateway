@@ -255,10 +255,13 @@ export function unitsForMultiSpeaker(turns: SynthTurnInput[], segmentLengths: nu
       const size = turns[i]?.text.length ?? 0;
       if (current.length > 0 && chars + size > maxChars) {
         const last = current[current.length - 1];
-        const carried = current.length > 1 && last !== undefined && endsOnQuestion(turns[last]?.text ?? "") ? [current.pop() as number] : [];
+        const lastSize = last === undefined ? 0 : (turns[last]?.text.length ?? 0);
+        // The question moves to the next run only when it still fits there together with the turn that triggered the cut.
+        const carry = current.length > 1 && last !== undefined && endsOnQuestion(turns[last]?.text ?? "") && lastSize + size <= maxChars;
+        if (carry) current.pop();
         units.push({ turnIndexes: current });
-        current = carried;
-        chars = carried.reduce((n, t) => n + (turns[t]?.text.length ?? 0), 0);
+        current = carry && last !== undefined ? [last] : [];
+        chars = carry ? lastSize : 0;
       }
       current.push(i);
       chars += size;

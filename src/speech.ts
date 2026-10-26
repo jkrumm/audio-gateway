@@ -99,7 +99,7 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
     similarityBoost = typeof json["similarity_boost"] === "number" ? json["similarity_boost"] : undefined;
     // Gemini lane: a key of the shared delivery vocabulary. `style` is a NUMBER for ElevenLabs, so a string there is read as the same thing.
     const delivery = json["delivery"] ?? (typeof json["style"] === "string" ? json["style"] : undefined);
-    deliveryRaw = typeof delivery === "string" && delivery.trim() ? delivery : undefined;
+    deliveryRaw = delivery === undefined || delivery === null ? undefined : typeof delivery === "string" ? (delivery.trim() ? delivery : undefined) : String(delivery);
   } catch {
     // Bug fix: non-JSON body → 400 JSON, no blank-model usage row.
     return Response.json(
@@ -118,15 +118,16 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
     );
   }
 
-  if (deliveryRaw !== undefined && !isDeliveryKey(deliveryRaw.trim().toLowerCase())) {
+  // Central model resolution: a wrong or absent model never reaches the upstream.
+  const route = resolveTtsRoute(requestedModel);
+
+  // Gemini lane only: a key of the shared delivery vocabulary. ElevenLabs keeps its own numeric `style`, so a string there is simply not ours to validate.
+  if (route.provider === "gemini" && deliveryRaw !== undefined && !isDeliveryKey(deliveryRaw.trim().toLowerCase())) {
     return Response.json(
       { error: { message: `unsupported delivery "${deliveryRaw}" — expected one of: ${DELIVERY_KEYS.join(", ")}`, type: "invalid_request_error" } },
       { status: 400 },
     );
   }
-
-  // Central model resolution: a wrong or absent model never reaches the upstream.
-  const route = resolveTtsRoute(requestedModel);
 
   // Whole-file clients (Slack auto-TTS) can't ask for a summary; decide it here
   // for long text on a prep-off Replicate model. pcm = a streaming client

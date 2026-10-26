@@ -318,7 +318,7 @@ function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { 
         return `error: invalid depth "${args.depth}", expected "quick" or "standard"`;
       }
       const depth = args.depth ?? "quick";
-      const key = normalize(args.query);
+      const key = `${args.depth ?? "quick"}\u0000${normalize(args.query)}`;
       const earlier = answered.get(key);
       if (earlier !== undefined) return `(this exact query was already run — same result)\n${earlier}`;
       if (research.maxCalls !== undefined && research.maxCalls > 0 && used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;

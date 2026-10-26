@@ -90,11 +90,11 @@ const TURNS_SCHEMA = {
   },
 } as const;
 
-const AGENT_ADDENDUM = `
+const agentAddendum = (hasBrain: boolean): string => `
 
 HOW YOU WORK IN THIS SESSION — you are not limited to one shot. You have tools, and you deliver by tool call, not by replying with JSON:
 1. Write the segment (or revise it), then call lint_segment with your turns. It measures the text: words against the target, turn lengths, questions, inline tags and deliveries per ten turns, the synth request size, and flags stock phrases, lectures, misused tags/deliveries and names used before they are introduced.
-2. Fix what it reports and measure again. Look up a name with glossary_lookup (the research dossier) or brain_search/brain_read (the listener's notes) before you explain it — never guess what something is.
+2. Fix what it reports and measure again. Look up a name with glossary_lookup (the research dossier)${hasBrain ? " or brain_search/brain_read (the listener's notes)" : ""} before you explain it — never guess what something is.
 3. Finish by calling submit_segment with the final turns. It re-checks the text: BLOCKING findings are rejected until fixed; ADVISORY findings are rejected once, and you may resubmit with acceptAdvisory (rule + a concrete reason) when a finding is wrong for this segment. submit_segment is the only way to finish; the text of your last message is ignored.
 The JSON output format described above is the shape of submit_segment's "turns" argument — do not print it.`;
 
@@ -125,11 +125,14 @@ interface Measured {
 }
 
 /** Measure a draft the way the pipeline will: sanitize, lint with the episode's own glossary, length against the target, synth segmentation. */
-function measure(params: { turns: ScriptTurn[]; title: string; target: number; index: number; req: PodcastScriptRequest; lintOpts: LintOptions; maxUnitChars: number }): Measured {
+function measure(params: { turns: ScriptTurn[]; title: string; target: number; req: PodcastScriptRequest; lintOpts: LintOptions; maxUnitChars: number }): Measured {
   const { title, target, req, lintOpts, maxUnitChars } = params;
   const turns = sanitizeTurns(params.turns);
   const segment: ScriptSegment = { title, turns };
   const lint = lintSegments([segment], lintOpts);
+  // sanitizeTurns already strips invented tags and tags on short lines, so those two rules only exist on the RAW turns — the writer must be told, not silently corrected.
+  const rawFindings = lintSegments([{ title, turns: params.turns }], lintOpts).findings.filter((f) => f.rule === "tag-not-allowed" || f.rule === "tag-leads-short-turn");
+  lint.findings.push(...rawFindings);
   const m = lint.metrics[0]!;
   const words = m.words;
   const over = target > 0 ? words / target - 1 : 0;
@@ -142,7 +145,12 @@ function measure(params: { turns: ScriptTurn[]; title: string; target: number; i
   const advisoryFindings = lint.findings.filter((f) => !BLOCKING_RULES.has(f.rule));
   const advisory: Measured["advisory"] = advisoryFindings.map((f) => ({ rule: f.rule, text: `turn ${f.turnIndex ?? "—"}: ${f.message}` }));
   const extra: string[] = [];
-  if (over > OVER_LENGTH) extra.push(`LENGTH: ${words} words against a target of ${target} (+${Math.round(over * 100)}%) — cut restatements, second examples and warm-up lines; keep every key fact.`);
+  const lengthFindings: LintFinding[] = [];
+  if (over > OVER_LENGTH) {
+    const message = `LENGTH: ${words} words against a target of ${target} (+${Math.round(over * 100)}%) — cut restatements, second examples and warm-up lines; keep every key fact.`;
+    extra.push(message);
+    lengthFindings.push({ segmentIndex: 0, turnIndex: null, rule: "monologue", message });
+  }
   else if (over < -0.3) advisory.push({ rule: "length-under", text: `${words} words against a target of ${target} (${Math.round(over * 100)}%) — fine only if every key fact is spoken.` });
   for (const f of seg.findings) advisory.push({ rule: "segmentation", text: f });
 
@@ -154,10 +162,10 @@ function measure(params: { turns: ScriptTurn[]; title: string; target: number; i
       : "BLOCKING: none",
     advisory.length > 0 ? `ADVISORY (fix, or accept with a reason on submit):\n${advisory.map((a) => `- [${a.rule}] ${a.text}`).join("\n")}` : "ADVISORY: none",
   ].join("\n");
-  return { turns, report, blocking: [...blocking, ...extra.map((e) => ({ segmentIndex: 0, turnIndex: null, rule: "monologue" as const, message: e }))], advisory };
+  return { turns, report, blocking: [...blocking, ...lengthFindings], advisory };
 }
 
-function glossaryTool(req: PodcastScriptRequest): ToolDef {
+function glossaryTool(req: PodcastScriptRequest, hasBrain: boolean): ToolDef {
   return {
     name: "glossary_lookup",
     description: "Look a name or term up in the episode's research dossier (glossary entries and the additions the researcher found). Returns the plain-words handle to use. Use it before you explain a name.",
@@ -167,7 +175,7 @@ function glossaryTool(req: PodcastScriptRequest): ToolDef {
       if (!term) return "error: give a term";
       const glossary = req.dossier.glossary.filter((g) => g.term.toLowerCase().includes(term) || term.includes(g.term.toLowerCase()));
       const additions = req.dossier.additions.filter((a) => a.text.toLowerCase().includes(term)).slice(0, 3);
-      if (glossary.length === 0 && additions.length === 0) return `nothing in the dossier for "${term}" — say only what the SOURCE implies, or search the brain`;
+      if (glossary.length === 0 && additions.length === 0) return `nothing in the dossier for "${term}" — say only what the SOURCE implies${hasBrain ? ", or search the brain" : ""}`;
       return [
         ...glossary.map((g) => `${g.term}: ${g.plain}`),
         ...additions.map((a) => `[${a.source}] ${a.text.slice(0, 600)}`),
@@ -182,7 +190,7 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
   const spec = outline.segments[index];
   if (!spec) throw new Error(`outline segment ${index} out of range`);
   const lintOpts: LintOptions = { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source };
-  const measureTurns = (turns: ScriptTurn[]): Measured => measure({ turns, title: spec.title, target: spec.targetWords, index, req, lintOpts, maxUnitChars: opts.maxUnitChars });
+  const measureTurns = (turns: ScriptTurn[]): Measured => measure({ turns, title: spec.title, target: spec.targetWords, req, lintOpts, maxUnitChars: opts.maxUnitChars });
 
   let lastMeasured: Measured | undefined;
   let accepted: ScriptTurn[] | undefined;
@@ -202,7 +210,7 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
         return measured.report;
       },
     },
-    glossaryTool(req),
+    glossaryTool(req, Boolean(opts.brainDir)),
     ...buildResearchTools({ brainDir: opts.brainDir, history: { recent: () => [], transcript: () => null }, model: opts.model }).filter((t) => t.name === "brain_search" || t.name === "brain_read"),
     {
       name: "submit_segment",
@@ -247,7 +255,7 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
 
   const result = await runToolLoop({
     model: opts.model,
-    systemPrompt: params.systemPrompt + AGENT_ADDENDUM,
+    systemPrompt: params.systemPrompt + agentAddendum(Boolean(opts.brainDir)),
     userContent: params.userContent,
     tools,
     maxCompletionTokens: writerBudget(spec.targetWords * 6, 1),
@@ -262,7 +270,9 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
   const turns = accepted ?? lastMeasured?.turns;
   opts.onRun?.({ mode, index, rounds: result.rounds, calls: result.calls, submits, rejections, accepted: acceptedAdvisory, fellBack });
   if (!turns || turns.length === 0) throw new Error(`segment agent ${mode} ${index + 1} ended without a measured draft`);
-  if (fellBack) log.warn("segment agent ended without an accepted submit, using the last measured draft", { mode, index, rounds: result.rounds, submits, rejections });
+  // A draft the gate itself rejects never ships: the caller falls back to the single-shot writer.
+  if (fellBack && lastMeasured && lastMeasured.blocking.length > 0) throw new Error(`segment agent ${mode} ${index + 1} ended on a draft with ${lastMeasured.blocking.length} blocking finding(s)`);
+  if (fellBack) log.warn("segment agent ended without an accepted submit, using the last measured draft (no blocking findings)", { mode, index, rounds: result.rounds, submits, rejections });
   return turns;
 }
 
@@ -271,7 +281,7 @@ export const agentReasoningEffort = (model: string): string | undefined => (mode
 
 export function createSegmentAgent(opts: SegmentAgentOptions): SegmentAgent {
   return {
-    draft: ({ req, outline, index, total, showBible, voice }) => {
+    draft: async ({ req, outline, index, total, showBible, voice }) => {
       const spec = outline.segments[index];
       if (!spec) throw new Error(`outline segment ${index} out of range`);
       return runAgent(opts, {
@@ -284,7 +294,7 @@ export function createSegmentAgent(opts: SegmentAgentOptions): SegmentAgent {
         userContent: buildSegmentUserContent({ req, outline, index }),
       });
     },
-    revise: ({ req, outline, segments, index, total, notes, showBible, voice }) => {
+    revise: async ({ req, outline, segments, index, total, notes, showBible, voice }) => {
       const spec = outline.segments[index];
       if (!spec) throw new Error(`outline segment ${index} out of range`);
       return runAgent(opts, {

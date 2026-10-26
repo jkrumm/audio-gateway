@@ -86,6 +86,8 @@ export interface EpisodeProfile {
   researchUsd?: number;
   /** Deterministic expression lint of the final script (podcast-lint.ts): allowed tags, writer-set deliveries, findings per rule. Absent on episodes before 2026-10-26. */
   expression?: { tags: number; deliveries: number; findings: Record<string, number> };
+  /** The agentic writer's loops (podcast-agent.ts): runs, model rounds, rejected submits, loops that ended without an accepted submit. Absent when the single-shot writer ran. */
+  agent?: { runs: number; rounds: number; rejections: number; fellBack: number };
   /** Multi-speaker request segmentation of the synth stage (lintSegmentation); absent on the ElevenLabs lane and older episodes. */
   segmentation?: { units: number; minChars: number; meanChars: number; maxChars: number; findings: string[] };
 }

@@ -261,6 +261,18 @@ describe("research tool", () => {
     expect(spend.usd).toBeCloseTo(0.03);
   });
 
+  test("the same query at a different depth is a new run", async () => {
+    const { fetchImpl, count } = scriptedFetch([
+      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "quick" } }),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "standard" } }),
+    ]);
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl, pollIntervalMs: 0 });
+    const tool = findTool(tools, "research");
+    await tool.execute({ query: "q", depth: "quick" });
+    expect(await tool.execute({ query: "q", depth: "standard" })).toContain("standard");
+    expect(count()).toBe(4);
+  });
+
   test("maxCalls 0 means unlimited, not exhausted", async () => {
     const { fetchImpl } = scriptedFetch([rawRes(200, { jobId: "j" }), rawRes(200, { status: "done", result: { report: "ok" } })]);
     const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 0 }, fetchImpl, pollIntervalMs: 0 });

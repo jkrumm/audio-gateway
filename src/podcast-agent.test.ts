@@ -111,6 +111,52 @@ describe("segment agent", () => {
     expect(runs[0]).toMatchObject({ fellBack: true, submits: 0 });
   });
 
+  test("a tag the sanitizer would silently strip is still a blocking finding on submit", async () => {
+    const withInvented = [{ speaker: "A", text: `Der Dienst heißt Warden, er ist ein Dienst, der den Arbeitszustand hält. <sniff> ${words(8, "alpha")}` }, ...CLEAN.slice(1)];
+    const { fetchImpl, bodies } = scripted([toolCall("submit_segment", { turns: withInvented }), toolCall("submit_segment", { turns: CLEAN })]);
+    await draft(fetchImpl);
+    expect(bodies[1]!.messages.find((m) => m.role === "tool")?.content).toContain("not in the allowed list");
+    const leading = [{ speaker: "A", text: "<laugh> Ja." }, ...CLEAN.slice(1)];
+    const second = scripted([toolCall("submit_segment", { turns: leading }), toolCall("submit_segment", { turns: CLEAN })]);
+    await draft(second.fetchImpl);
+    expect(second.bodies[1]!.messages.find((m) => m.role === "tool")?.content).toContain("first word of a short line");
+  });
+
+  test("a loop that ends on a draft the gate rejects throws, so the caller falls back to the single-shot writer", async () => {
+    const bad = [{ speaker: "A", text: `Nicht zuletzt zählt der Preis. ${words(10, "gamma")}` }, ...CLEAN.slice(1)];
+    const runs: AgentRun[] = [];
+    const { fetchImpl } = scripted([toolCall("lint_segment", { turns: bad }), plainReply("Fertig.")]);
+    await expect(draft(fetchImpl, (r) => runs.push(r))).rejects.toThrow(/blocking finding/);
+    expect(runs[0]).toMatchObject({ fellBack: true });
+  });
+
+  test("brain tools and the brain instruction exist only when a brain is configured; over-length blocks, under-length does not", async () => {
+    const without = scripted([toolCall("submit_segment", { turns: CLEAN })]);
+    await draft(without.fetchImpl);
+    expect(without.bodies[0]!.messages[0]!.content).not.toContain("brain_search");
+    const long = [{ speaker: "A", text: `Der Dienst heißt Warden, er ist ein Dienst, der den Arbeitszustand hält. ${words(80, "lang")}` }, { speaker: "B", text: "Und wo läuft er?" }];
+    const over = scripted([toolCall("submit_segment", { turns: long }), toolCall("submit_segment", { turns: CLEAN })]);
+    await draft(over.fetchImpl);
+    expect(over.bodies[1]!.messages.find((m) => m.role === "tool")?.content).toContain("LENGTH:");
+  });
+
+  test("a revision runs the same loop with the notes in its prompt", async () => {
+    const { fetchImpl, bodies } = scripted([toolCall("submit_segment", { turns: CLEAN })]);
+    const turns = await createSegmentAgent({ model: "writer", maxUnitChars: 3000, fetchImpl }).revise({
+      req: REQ,
+      outline: OUTLINE,
+      segments: [{ title: "Seg", turns: CLEAN as import("./podcast-script").ScriptTurn[] }],
+      index: 0,
+      total: 1,
+      notes: [{ segmentIndex: 0, turnIndex: null, reviewer: "dramaturge@m", note: "Mehr Humor an der richtigen Stelle." }],
+      showBible: "",
+      voice: "",
+    });
+    expect(turns).toHaveLength(3);
+    expect(bodies[0]!.messages[1]!.content).toContain("Mehr Humor an der richtigen Stelle.");
+    expect(bodies[0]!.messages[0]!.content).toContain("REVISING ONE SEGMENT");
+  });
+
   test("a model that never measured anything throws, so the caller can fall back to the single-shot writer", async () => {
     const { fetchImpl } = scripted([plainReply("Hier ist kein Tool-Aufruf.")]);
     await expect(draft(fetchImpl)).rejects.toThrow(/without a measured draft/);

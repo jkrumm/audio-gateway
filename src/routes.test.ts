@@ -200,6 +200,16 @@ describe("Bug fix: non-JSON speech body → 400, no usage row", () => {
     expect(JSON.stringify(await res.json())).toContain("curious");
   });
 
+  test("a string `style` on an ElevenLabs model is not ours to validate — no 400", async () => {
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ model: "elevenlabs/v3", input: "Hallo.", style: "calm" }),
+      headers: { "content-type": "application/json" },
+    }));
+    const res = await handleRequest(req).catch(() => new Response("upstream", { status: 502 }));
+    expect(res.status).not.toBe(400);
+  });
+
   test("writes NO usage row", async () => {
     const req = authed(new Request("http://localhost/v1/audio/speech", {
       method: "POST",

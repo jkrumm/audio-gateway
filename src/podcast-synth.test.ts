@@ -265,6 +265,9 @@ describe("multi-speaker units", () => {
     const q = { ...turn("A", 400), text: `${"x".repeat(399)}?` };
     const turns = [turn("A", 400), turn("B", 400), q, turn("B", 400), turn("A", 400)];
     expect(unitsForMultiSpeaker(turns, [5], 1300).map((u) => u.turnIndexes)).toEqual([[0, 1], [2, 3, 4]]);
+    // a question that would overflow the next run with its follower stays where it is
+    const tight = [turn("A", 400), { ...turn("B", 700), text: `${"x".repeat(699)}?` }, turn("A", 700)];
+    expect(unitsForMultiSpeaker(tight, [3], 1100).map((u) => u.turnIndexes)).toEqual([[0, 1], [2]]);
     // a lone question that would leave an empty run stays put
     const only = [{ ...turn("A", 900), text: `${"x".repeat(899)}?` }, turn("B", 900)];
     expect(unitsForMultiSpeaker(only, [2], 1000).map((u) => u.turnIndexes)).toEqual([[0], [1]]);

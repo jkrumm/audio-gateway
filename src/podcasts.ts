@@ -9,7 +9,7 @@ import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { buildEpisodeProfile, loadShowBible, type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
-import { agentReasoningEffort, createSegmentAgent } from "./podcast-agent";
+import { agentReasoningEffort, createSegmentAgent, type AgentRun } from "./podcast-agent";
 import { lintSegmentation } from "./podcast-lint";
 import {
   isGeminiModel,
@@ -666,6 +666,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   await writeFile(files.brief, JSON.stringify(brief, null, 2), "utf8");
   store.update(job.id, { brief, files: { ...files } });
 
+  const agentRuns: AgentRun[] = [];
   // 3. scripting (outline → segment → review → revise → metadata; progress reported by writePodcastScript's onProgress)
   const script = await writePodcastScript(
     {
@@ -693,7 +694,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
       },
       concurrency: 3,
       agent: config.podcastAgenticWriter
-        ? createSegmentAgent({ model: config.podcastWriteModel, reasoningEffort: agentReasoningEffort(config.podcastWriteModel), brainDir: config.brainDir || undefined, maxUnitChars: config.podcastMultiSpeakerMaxChars })
+        ? createSegmentAgent({ model: config.podcastWriteModel, reasoningEffort: agentReasoningEffort(config.podcastWriteModel), brainDir: config.brainDir || undefined, maxUnitChars: config.podcastMultiSpeakerMaxChars, onRun: (run) => agentRuns.push(run) })
         : undefined,
       showBiblePath: config.podcastShowBible,
       voicePath: config.podcastVoicePath,
@@ -705,6 +706,9 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   const persistedScript: PersistedPodcastScript = { ...script, hosts };
   await writeFile(files.script, JSON.stringify(persistedScript, null, 2), "utf8");
   const profile = buildEpisodeProfile({ brief, script, dossier, hosts });
+  if (agentRuns.length > 0) {
+    profile.agent = { runs: agentRuns.length, rounds: agentRuns.reduce((n, r) => n + r.rounds, 0), rejections: agentRuns.reduce((n, r) => n + r.rejections, 0), fellBack: agentRuns.filter((r) => r.fellBack).length };
+  }
   store.update(job.id, { title: script.title, description: script.description, files: { ...files }, profile });
 
   // 4. synthesizing
