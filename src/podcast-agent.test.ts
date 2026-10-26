@@ -10,7 +10,7 @@ process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
 process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
 process.env["USAGE_DB"] ??= ":memory:";
 
-const { createSegmentAgent } = await import("./podcast-agent");
+const { createSegmentAgent, agentReasoningEffort } = await import("./podcast-agent");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
 type ToolLoopFetch = import("./llm-tools").ToolLoopFetch;
 type AgentRun = import("./podcast-agent").AgentRun;
@@ -63,6 +63,15 @@ function scripted(replies: Array<{ status: number; body: string }>): { fetchImpl
 
 const draft = (fetchImpl: ToolLoopFetch, onRun?: (run: AgentRun) => void) =>
   createSegmentAgent({ model: "writer", maxUnitChars: 3000, fetchImpl, onRun }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" });
+
+describe("agentReasoningEffort", () => {
+  test("Claude gets high, gpt-6 none (tools + reasoning_effort 503), deepseek its family value", () => {
+    expect(agentReasoningEffort("claude-opus-5-5")).toBe("high");
+    expect(agentReasoningEffort("gpt-6.1-sol")).toBeUndefined();
+    expect(agentReasoningEffort("gpt-6-luna")).toBeUndefined();
+    expect(agentReasoningEffort("deepseek-v4.1-flash")).toBe("high");
+  });
+});
 
 describe("segment agent", () => {
   test("measures with lint_segment, fixes, and ends the loop on an accepted submit", async () => {
