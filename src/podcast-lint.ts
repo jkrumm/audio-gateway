@@ -25,7 +25,7 @@ export type ExpressionRule =
 export interface LintFinding {
   segmentIndex: number;
   turnIndex: number | null;
-  rule: ExpressionRule | "meta-hedge" | "notes-ignorance" | "host-imbalance" | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term" | "ask-uncovered" | "opening-unframed";
+  rule: ExpressionRule | "meta-hedge" | "notes-ignorance" | "research-gap" | "host-imbalance" | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term" | "ask-uncovered" | "opening-unframed";
   message: string;
 }
 
@@ -320,6 +320,8 @@ export function lintSegmentation(params: {
 const NOTES_IGNORANCE = /\b(steht|stand|stehen|ist|sind|findet sich|fehlt)\s+(\w+\s+){0,3}(nicht|nirgends|kein\w*)\s+(\w+\s+){0,3}in\s+(deinen|den|diesen|euren|unseren)\s+(notizen|unterlagen)\b|\bin\s+(deinen|den|diesen)\s+(notizen|unterlagen)\s+(steht|stand|findet sich|fehlt|gibt es)\s+(\w+\s+){0,3}(nicht|nichts|nirgends|kein\w*)|\bnicht\s+in\s+(deinen|den|diesen)\s+(notizen|unterlagen)\b/i;
 /** The "we don't know" tic. */
 const KNOWLEDGE_HEDGE = /\b(das|dies|es)\s+wissen\s+wir\s+(noch\s+|schlicht\s+|einfach\s+)?(nicht|nicht genau)\b|\bwissen\s+wir\s+(noch\s+)?nicht\b|\bdas\s+weiß\s+(man|ich|keiner|niemand)\s+(noch\s+)?nicht\b/i;
+/** Research named as having come up empty — a different tell than the notes-ignorance or knowledge-hedge phrasing. */
+const RESEARCH_GAP = /\b(dazu|hierzu|darüber)?\s*(haben wir|konnten wir)\s+(\w+\s+){0,3}(nichts|nicht)\s+(\w+\s+){0,3}(gefunden|herausfinden|finden können)\b|\bkeine\s+(informationen|infos|angaben|quellen|ergebnisse)\s+(dazu\s+)?gefunden\b/i;
 /** More hedges than this per episode is a tic, not an honesty. */
 const MAX_HEDGES_PER_EPISODE = 2;
 /** The quieter host owns less than this share of a segment's words, with turns this short on average, only prompts. */
@@ -338,6 +340,9 @@ function conversationFindings(segments: ScriptSegment[], metrics: SegmentMetrics
       }
       if (KNOWLEDGE_HEDGE.test(text) && ++hedges > MAX_HEDGES_PER_EPISODE) {
         findings.push({ segmentIndex, turnIndex, rule: "meta-hedge", message: `"Das wissen wir nicht" for the ${hedges}th time in this episode — a tic. Say a real evidence gap once where it matters; elsewhere give conditional advice or cut the hedge.` });
+      }
+      if (RESEARCH_GAP.test(text)) {
+        findings.push({ segmentIndex, turnIndex, rule: "research-gap", message: 'Research is named as having come up empty ("dazu haben wir nichts gefunden"). Never on air: fold a genuine gap into natural words once, or — if it is the episode\'s own open question near the close — turn it outward into the question the listener is left with.' });
       }
     });
     const m = metrics[segmentIndex];
@@ -438,6 +443,6 @@ export function renderLintReport(report: LintReport): string {
 /** The findings unambiguous enough to send to the writer without a reviewer's judgement. */
 export function lintNotes(report: LintReport): ReviewNote[] {
   return report.findings
-    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term" || f.rule === "notes-ignorance" || f.rule === "meta-hedge" || f.rule === "ask-uncovered" || f.rule === "opening-unframed")
+    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term" || f.rule === "notes-ignorance" || f.rule === "research-gap" || f.rule === "meta-hedge" || f.rule === "ask-uncovered" || f.rule === "opening-unframed")
     .map((f) => ({ segmentIndex: f.segmentIndex, turnIndex: f.turnIndex, reviewer: "lint", note: f.message }));
 }

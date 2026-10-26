@@ -201,4 +201,11 @@ describe("regression: episode 503c28f0 (the real 'Mit Schale, mit Erde' script)"
     expect(rules([seg([["A", "In deinen Notizen steht, dass der Dienst auf dem Mini läuft."]])])).not.toContain("notes-ignorance");
     expect(rules([seg([["A", "Ob bei dir jemand schwanger ist, steht nicht in deinen Notizen."]])])).toContain("notes-ignorance");
   });
+
+  test("research named as having come up empty is flagged, a real finding is not", () => {
+    expect(rules([seg([["A", "Dazu haben wir leider nichts gefunden."]])])).toContain("research-gap");
+    expect(rules([seg([["A", "Dazu konnten wir online nichts herausfinden."]])])).toContain("research-gap");
+    expect(rules([seg([["A", "Wir haben dazu keine Informationen gefunden."]])])).toContain("research-gap");
+    expect(rules([seg([["A", "Wir haben dazu einen guten Artikel gefunden."]])])).not.toContain("research-gap");
+  });
 });
