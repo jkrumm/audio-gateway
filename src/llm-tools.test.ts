@@ -347,4 +347,45 @@ describe("runToolLoop", () => {
       }),
     ).rejects.toThrow(/HTTP 500/);
   });
+
+  describe("/v1/responses transport (gpt-6.1)", () => {
+    // Replies recorded from IU 2026-10-26.
+    const callReply = rawRes(200, {
+      status: "completed",
+      output: [{ id: "fc_1", type: "function_call", status: "completed", arguments: '{"a":2,"b":3}', call_id: "call_1", name: "add" }],
+      usage: { input_tokens: 63, input_tokens_details: { cached_tokens: 0 }, output_tokens: 21 },
+    });
+    const finalReply = rawRes(200, {
+      status: "completed",
+      output: [{ id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "2 + 3 = 5." }] }],
+      usage: { input_tokens: 95, input_tokens_details: { cached_tokens: 40 }, output_tokens: 12 },
+    });
+    const addTool: ToolDef = { name: "add", description: "add", parameters: { type: "object", properties: {} }, execute: async (a) => String((a as { a: number; b: number }).a + (a as { a: number; b: number }).b) };
+
+    test("posts flat tools to /responses, echoes output items and answers with function_call_output", async () => {
+      const { fetchImpl, calls } = scriptedFetch([callReply, finalReply]);
+      const result = await runToolLoop({ model: "gpt-6.1-sol", systemPrompt: "sys", userContent: "2+3?", tools: [addTool], maxCompletionTokens: 500, stage: "test", usageEndpoint: "podcast-research", reasoningEffort: "high", fetchImpl });
+      expect(result.content).toBe("2 + 3 = 5.");
+      expect(result.rounds).toBe(2);
+      expect(result.calls).toMatchObject([{ tool: "add", ok: true }]);
+      expect(calls[0]!.url).toEndWith("/responses");
+      const first = calls[0]!.body as Record<string, unknown>;
+      expect(first["instructions"]).toBe("sys");
+      expect(first["max_output_tokens"]).toBe(500);
+      expect(first["reasoning"]).toEqual({ effort: "high" });
+      expect(first["tools"]).toEqual([{ type: "function", name: "add", description: "add", parameters: { type: "object", properties: {} } }]);
+      expect(first["input"]).toEqual([{ role: "user", content: "2+3?" }]);
+      const second = (calls[1]!.body as { input: unknown[] }).input;
+      expect(second[1]).toMatchObject({ type: "function_call", call_id: "call_1" });
+      expect(second[2]).toEqual({ type: "function_call_output", call_id: "call_1", output: "5" });
+    });
+
+    test("an incomplete reply cut at max_output_tokens retries with a doubled budget", async () => {
+      const cut = rawRes(200, { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output: [], usage: { input_tokens: 5, output_tokens: 500 } });
+      const { fetchImpl, calls } = scriptedFetch([cut, finalReply]);
+      const result = await runToolLoop({ model: "gpt-6.1-sol", systemPrompt: "s", userContent: "u", tools: [], maxCompletionTokens: 500, stage: "test", usageEndpoint: "podcast-research", fetchImpl });
+      expect(result.content).toBe("2 + 3 = 5.");
+      expect((calls[1]!.body as Record<string, unknown>)["max_output_tokens"]).toBe(1000);
+    });
+  });
 });

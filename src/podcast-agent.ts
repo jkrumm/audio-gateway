@@ -1,5 +1,5 @@
 import { DELIVERY_KEYS } from "./gemini-tts-core";
-import { runToolLoop, type ToolDef, type ToolLoopFetch } from "./llm-tools";
+import { runToolLoop, usesResponsesTransport, type ToolDef, type ToolLoopFetch } from "./llm-tools";
 import { log } from "./log";
 import { resolveReasoningEffort } from "./model-resolution";
 import { lintSegmentation, lintSegments, TAG_BAND_PER_TEN_TURNS, type LintFinding, type LintOptions } from "./podcast-lint";
@@ -165,9 +165,6 @@ function measure(params: { turns: ScriptTurn[]; title: string; target: number; r
   return { turns, report, blocking: [...blocking, ...lengthFindings], advisory };
 }
 
-/** gpt-6.1-sol serves function tools only on /v1/responses (chat/completions: 503 for every effort, and "none" is unsupported) — the single-shot writer handles it (probed 2026-10-26). */
-const NO_CHAT_TOOLS = /^gpt-6\.1/;
-
 function glossaryTool(req: PodcastScriptRequest, hasBrain: boolean): ToolDef {
   return {
     name: "glossary_lookup",
@@ -190,7 +187,6 @@ function glossaryTool(req: PodcastScriptRequest, hasBrain: boolean): ToolDef {
 /** One loop: `mode` draft or revise. Throws when the loop ends with nothing usable; the caller falls back to the single-shot writer. */
 async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "revise"; req: PodcastScriptRequest; outline: Outline; index: number; total: number; systemPrompt: string; userContent: string }): Promise<ScriptTurn[]> {
   const { req, outline, index, mode } = params;
-  if (NO_CHAT_TOOLS.test(opts.model)) throw new Error(`${opts.model} serves function tools only on /v1/responses — single-shot writer instead`);
   const spec = outline.segments[index];
   if (!spec) throw new Error(`outline segment ${index} out of range`);
   const lintOpts: LintOptions = { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source };
@@ -284,6 +280,7 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
 /** gpt-6.x on chat/completions rejects function tools combined with any reasoning effort but "none" (503 "set reasoning_effort to 'none'", probed 2026-10-26 — omitting the field falls into the same default), so a tool loop sends "none". */
 export const agentReasoningEffort = (model: string): string | undefined => {
   if (model.startsWith("claude-")) return "high";
+  if (usesResponsesTransport(model)) return "high";
   if (model.startsWith("gpt-6")) return "none";
   return resolveReasoningEffort(model, "high");
 };

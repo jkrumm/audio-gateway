@@ -65,9 +65,9 @@ const draft = (fetchImpl: ToolLoopFetch, onRun?: (run: AgentRun) => void) =>
   createSegmentAgent({ model: "writer", maxUnitChars: 3000, fetchImpl, onRun }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" });
 
 describe("agentReasoningEffort", () => {
-  test("Claude gets high, gpt-6 none (tools reject any other effort), deepseek its family value", () => {
+  test("Claude and gpt-6.1 (responses) get high, chat gpt-6 none (tools reject any other effort), deepseek its family value", () => {
     expect(agentReasoningEffort("claude-opus-5-5")).toBe("high");
-    expect(agentReasoningEffort("gpt-6.1-sol")).toBe("none");
+    expect(agentReasoningEffort("gpt-6.1-sol")).toBe("high"); // /v1/responses accepts real efforts
     expect(agentReasoningEffort("gpt-6-luna")).toBe("none");
     expect(agentReasoningEffort("deepseek-v4.1-flash")).toBe("high");
   });
@@ -166,10 +166,14 @@ describe("segment agent", () => {
     expect(bodies[0]!.messages[0]!.content).toContain("REVISING ONE SEGMENT");
   });
 
-  test("gpt-6.1 has no function tools on chat/completions: the agent throws before any request", async () => {
-    const { fetchImpl, bodies } = scripted([]);
-    await expect(createSegmentAgent({ model: "gpt-6.1-sol", maxUnitChars: 3000, fetchImpl }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" })).rejects.toThrow(/\/v1\/responses/);
-    expect(bodies).toHaveLength(0);
+  test("gpt-6.1 runs the agent loop on /v1/responses, not chat/completions", async () => {
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(url);
+      return { status: 200, headers: new Headers(), body: JSON.stringify({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "kein Tool" }] }], usage: { input_tokens: 1, output_tokens: 1 } }) };
+    }) as never;
+    await expect(createSegmentAgent({ model: "gpt-6.1-sol", maxUnitChars: 3000, fetchImpl }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" })).rejects.toThrow(/without a measured draft/);
+    expect(urls[0]).toEndWith("/responses");
   });
 
   test("a model that never measured anything throws, so the caller can fall back to the single-shot writer", async () => {

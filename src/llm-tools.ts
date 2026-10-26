@@ -15,7 +15,7 @@
 import { rawFetch, type RawResponse } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
-import { withSpan } from "./otel";
+import { withSpan, type Span } from "./otel";
 import type { ToolCallRecord } from "./podcast-types";
 import { recordUsage, type UsageRow } from "./usage";
 
@@ -87,6 +87,33 @@ interface OpenAiUsage {
   completion_tokens?: number;
 }
 
+/** Models whose function tools IU serves only on `/v1/responses` (chat/completions 503s; probed 2026-10-26). */
+const RESPONSES_ONLY = /^gpt-6\.1/;
+export const usesResponsesTransport = (model: string): boolean => RESPONSES_ONLY.test(model);
+
+interface ResponsesOutputItem {
+  type: string;
+  call_id?: string;
+  name?: string;
+  arguments?: string;
+  content?: Array<{ type: string; text?: string }>;
+  [key: string]: unknown;
+}
+
+interface ResponsesResponse {
+  status?: string;
+  incomplete_details?: { reason?: string } | null;
+  output?: ResponsesOutputItem[];
+  usage?: { input_tokens?: number; output_tokens?: number; input_tokens_details?: { cached_tokens?: number } };
+}
+
+/** A round's reply normalised across both transports; `raw` is what goes back into the transcript unchanged. */
+interface RoundReply {
+  message: ChatMessage;
+  finishReason?: string;
+  raw?: ResponsesOutputItem[];
+}
+
 interface ChatCompletionResponse {
   choices?: Array<{ message?: ChatMessage; finish_reason?: string }>;
   usage?: OpenAiUsage;
@@ -94,6 +121,46 @@ interface ChatCompletionResponse {
 
 function toolSchemas(tools: ToolDef[]): Array<{ type: "function"; function: { name: string; description: string; parameters: Record<string, unknown> } }> {
   return tools.map((t) => ({ type: "function" as const, function: { name: t.name, description: t.description, parameters: t.parameters } }));
+}
+
+function responsesToolSchemas(tools: ToolDef[]): Array<{ type: "function"; name: string; description: string; parameters: Record<string, unknown> }> {
+  return tools.map((t) => ({ type: "function" as const, name: t.name, description: t.description, parameters: t.parameters }));
+}
+
+/** Normalise a `/v1/responses` reply: output text joined, `function_call` items as chat-style tool calls, `raw` kept for echoing. */
+function parseResponsesReply(
+  res: RawResponse,
+  params: { model: string; usageEndpoint: string },
+  latencyMs: number,
+  span: Span,
+): RoundReply {
+  const parsed = JSON.parse(res.body) as ResponsesResponse;
+  const output = parsed.output ?? [];
+  const text = output
+    .filter((o) => o.type === "message")
+    .flatMap((o) => o.content ?? [])
+    .map((c) => (c.type === "output_text" ? (c.text ?? "") : ""))
+    .join("");
+  const toolCalls: ToolCallRequest[] = output
+    .filter((o) => o.type === "function_call")
+    .map((o) => ({ id: o.call_id ?? "", type: "function" as const, function: { name: o.name ?? "", arguments: o.arguments ?? "" } }));
+  const finishReason = parsed.status === "incomplete" && parsed.incomplete_details?.reason === "max_output_tokens" ? "length" : (parsed.status ?? undefined);
+  const usage = parsed.usage ?? {};
+  // Normalised to the chat usage shape so the usage ledger and rate table price both transports alike.
+  recordUsage({
+    endpoint: params.usageEndpoint as UsageRow["endpoint"],
+    model: params.model,
+    status: res.status,
+    latencyMs,
+    usageJson: {
+      prompt_tokens: usage.input_tokens,
+      completion_tokens: usage.output_tokens,
+      prompt_tokens_details: { cached_tokens: usage.input_tokens_details?.cached_tokens ?? 0 },
+      finish_reason: finishReason ?? null,
+    },
+  });
+  span.setAttributes({ "llm.output_tokens": usage.output_tokens ?? undefined, ...(finishReason && { "llm.finish_reason": finishReason }) });
+  return { message: { role: "assistant", content: text, ...(toolCalls.length > 0 && { tool_calls: toolCalls }) }, finishReason, raw: output };
 }
 
 async function callChat(params: {
@@ -106,7 +173,7 @@ async function callChat(params: {
   usageEndpoint: string;
   reasoningEffort?: string;
   fetchImpl: ToolLoopFetch;
-}): Promise<{ message: ChatMessage; finishReason?: string }> {
+}): Promise<RoundReply> {
   return withSpan(
     "audio.podcast.llm",
     {
@@ -116,17 +183,27 @@ async function callChat(params: {
     },
     async (span) => {
       const start = Date.now();
-      const body: Record<string, unknown> = {
-        model: params.model,
-        messages: params.messages,
-        max_completion_tokens: params.maxCompletionTokens,
-      };
-      if (params.tools.length > 0) body["tools"] = toolSchemas(params.tools);
-      if (params.reasoningEffort) body["reasoning_effort"] = params.reasoningEffort;
+      const responses = usesResponsesTransport(params.model);
+      const body: Record<string, unknown> = responses
+        ? {
+            model: params.model,
+            input: params.messages.filter((m) => m.role !== "system"),
+            instructions: params.messages.find((m) => m.role === "system")?.content ?? undefined,
+            max_output_tokens: params.maxCompletionTokens,
+            ...(params.tools.length > 0 && { tools: responsesToolSchemas(params.tools) }),
+            ...(params.reasoningEffort && { reasoning: { effort: params.reasoningEffort } }),
+          }
+        : {
+            model: params.model,
+            messages: params.messages,
+            max_completion_tokens: params.maxCompletionTokens,
+            ...(params.tools.length > 0 && { tools: toolSchemas(params.tools) }),
+            ...(params.reasoningEffort && { reasoning_effort: params.reasoningEffort }),
+          };
 
       let res: RawResponse;
       try {
-        res = await params.fetchImpl(iuUrl("/chat/completions"), {
+        res = await params.fetchImpl(iuUrl(responses ? "/responses" : "/chat/completions"), {
           method: "POST",
           headers: iuHeaders({ "content-type": "application/json" }),
           body: JSON.stringify(body),
@@ -146,6 +223,8 @@ async function callChat(params: {
         recordUsage({ endpoint: params.usageEndpoint as UsageRow["endpoint"], model: params.model, status: res.status, latencyMs, errorText });
         throw new Error(`Podcast ${params.stage} tool loop failed: HTTP ${res.status} ${res.body.slice(0, 300)}`);
       }
+
+      if (responses) return parseResponsesReply(res, params, latencyMs, span);
 
       const parsed = JSON.parse(res.body) as ChatCompletionResponse;
       const message = parsed.choices?.[0]?.message ?? { role: "assistant", content: "" };
@@ -203,7 +282,7 @@ async function runTool(tool: ToolDef, call: ToolCallRequest): Promise<{ content:
 async function callChatWithIdleGuard(
   params: Parameters<typeof callChat>[0],
   idleTimeoutMs: number,
-): Promise<{ message: ChatMessage; finishReason?: string }> {
+): Promise<RoundReply> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const idle = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
@@ -233,7 +312,7 @@ async function callChatWithIdleGuard(
 async function callTerminalRoundWithRetry(
   params: Parameters<typeof callChat>[0],
   idleTimeoutMs: number,
-): Promise<{ message: ChatMessage; finishReason?: string }> {
+): Promise<RoundReply> {
   const first = await callChatWithIdleGuard(params, idleTimeoutMs);
   const firstHasToolCalls = Boolean(first.message.tool_calls && first.message.tool_calls.length > 0);
   const firstIsEmpty = !(first.message.content ?? "").trim();
@@ -274,7 +353,7 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
   const calls: ToolCallRecord[] = [];
 
   for (let round = 1; ; round++) {
-    const { message } = await callTerminalRoundWithRetry(
+    const { message, raw } = await callTerminalRoundWithRetry(
       {
         model: params.model,
         messages,
@@ -294,14 +373,16 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
     }
 
     // Push the assistant message back EXACTLY as received — see file header.
-    messages.push(message);
+    // On /v1/responses the output items (reasoning included) are echoed, tool results go back as `function_call_output`.
+    if (raw) messages.push(...raw.map((item) => item as unknown as ChatMessage));
+    else messages.push(message);
     for (const call of message.tool_calls) {
       const tool = toolsByName.get(call.function.name);
       const result = tool
         ? await runTool(tool, call)
         : { content: `error: unknown tool "${call.function.name}"`, record: { tool: call.function.name, args: call.function.arguments, ok: false, ms: 0 } };
       calls.push(result.record);
-      messages.push({ role: "tool", tool_call_id: call.id, content: result.content });
+      messages.push(raw ? ({ type: "function_call_output", call_id: call.id, output: result.content } as unknown as ChatMessage) : { role: "tool", tool_call_id: call.id, content: result.content });
     }
     if (params.shouldStop?.()) return { content: "", calls, rounds: round };
   }
