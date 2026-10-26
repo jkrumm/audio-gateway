@@ -206,6 +206,13 @@ describe("past_episodes / past_transcript", () => {
 // research tool: budget, submit/poll, 429, failed
 // ---------------------------------------------------------------------------
 
+describe("dossier parsing resilience", () => {
+  test("a German quote closed with an ASCII quote still parses", () => {
+    const raw = '{"summary":"s","additions":[],"glossary":[{"term":"Titel","plain":"Der Beitrag „A software factory is just a durable workflow\" von Cortex"}],"priorCoverage":[],"openQuestions":[]}';
+    expect(parseDossier(raw).glossary[0]?.plain).toContain("durable workflow");
+  });
+});
+
 describe("research tool", () => {
   function scriptedFetch(responses: Array<{ status: number; body: string }>): { fetchImpl: ToolLoopFetch; count: () => number } {
     let i = 0;

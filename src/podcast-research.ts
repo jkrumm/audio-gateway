@@ -11,6 +11,7 @@ import { readdir, readFile, realpath } from "node:fs/promises";
 import { rawFetch } from "./gemini-tts";
 import { runToolLoop, type ToolDef, type ToolLoopFetch } from "./llm-tools";
 import { log } from "./log";
+import { repairGermanQuotes } from "./podcast-script";
 import type { Dossier, EpisodeHistory } from "./podcast-types";
 
 export interface ResearchInput {
@@ -411,7 +412,7 @@ function stringField(obj: Record<string, unknown>, key: string): string {
 export function parseDossier(raw: string): Dossier {
   const jsonText = extractJsonObject(raw);
   if (!jsonText) throw new Error("no JSON object found in research dossier response");
-  const parsed = JSON.parse(jsonText) as Record<string, unknown>;
+  const parsed = JSON.parse(repairGermanQuotes(jsonText)) as Record<string, unknown>;
 
   const additions = Array.isArray(parsed["additions"])
     ? (parsed["additions"] as unknown[]).map((item) => {
@@ -491,6 +492,24 @@ export async function runPodcastResearch(input: ResearchInput, deps: ResearchDep
     reasoningEffort: deps.reasoningEffort,
     fetchImpl: deps.fetchImpl,
   });
-  const dossier = parseDossier(result.content);
+  let dossier: Dossier;
+  try {
+    dossier = parseDossier(result.content);
+  } catch (err) {
+    // The research already ran (and cost money): ask once for the same content as valid JSON rather than losing the dossier.
+    log.warn("research dossier did not parse, asking for a JSON repair", { error: err instanceof Error ? err.message : String(err), chars: result.content.length, raw: result.content.slice(0, 6000) });
+    const fixed = await runToolLoop({
+      model: deps.model,
+      systemPrompt: "You repair JSON. The user message is a research dossier that should be ONE valid JSON object but is not (unescaped quotes inside strings, stray prose, a cut-off tail). Return the SAME content as a single valid JSON object — escape inner quotes, keep every entry, add nothing — and nothing else.",
+      userContent: result.content,
+      tools: [],
+      maxCompletionTokens: 32000,
+      stage: "research",
+      usageEndpoint: "podcast-research",
+      reasoningEffort: deps.reasoningEffort,
+      fetchImpl: deps.fetchImpl,
+    });
+    dossier = parseDossier(fixed.content);
+  }
   return { ...dossier, toolCalls: result.calls, researchUsd: spend.usd };
 }

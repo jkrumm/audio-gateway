@@ -302,7 +302,7 @@ export function extractJsonObject(raw: string): string {
 /** A German „…" quote closed with an unescaped ASCII `"` instead of `“` — Opus did this twice in a row
  *  on one segment (2026-10-19) and the JSON broke. `„` never occurs in JSON syntax, so closing it with
  *  `“` is safe; the repair is only used when the original fails to parse and the repaired one parses. */
-function repairGermanQuotes(json: string): string {
+export function repairGermanQuotes(json: string): string {
   if (!json.includes("„") || parses(json)) return json;
   const repaired = json.replace(/„([^"„“\n\\]*)"/g, "„$1“");
   if (!parses(repaired)) return json;
