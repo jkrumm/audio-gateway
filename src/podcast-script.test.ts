@@ -37,6 +37,8 @@ const {
   loadVoiceGuide,
   pruneUnrequestedDevices,
   PODCAST_TAGS,
+  SEGMENT_TURNS_SCHEMA,
+  callAndParse,
 } = await import("./podcast-script");
 const { _sink: usageSink } = await import("./usage");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
@@ -1331,6 +1333,31 @@ describe("callPodcastLlm — claude-* models use the native Anthropic Messages w
     expect(body["messages"]).toEqual([{ role: "user", content: "user content" }]);
     expect(body).not.toHaveProperty("reasoning_effort");
     expect(body).not.toHaveProperty("max_completion_tokens");
+  });
+
+  test("jsonSchema rides in output_config.format next to the effort; absent otherwise", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    setFetch(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return messagesStream();
+    });
+    await callPodcastLlm({ ...baseParams, jsonSchema: SEGMENT_TURNS_SCHEMA });
+    await callPodcastLlm(baseParams);
+    expect(bodies[0]?.["output_config"]).toEqual({ effort: "high", format: { type: "json_schema", schema: SEGMENT_TURNS_SCHEMA } });
+    expect(bodies[1]?.["output_config"]).toEqual({ effort: "high" });
+  });
+
+  test("a screenplay reply (the recorded Sonnet failure) is retried and the second JSON reply parses", async () => {
+    const screenplay =
+      "[A] Dazu gehört die Reihenfolge, in der es heute passiert ist. Zuerst engrams. Das ist die Open-Source-Fabrik von Cortex, und sie fährt Claude Code.\n[B] Und die Lizenz?";
+    const replies = [[screenplay], ['{"turns":[{"speaker":"A","text":"Zuerst engrams.","delivery":"curious"}]}']];
+    setFetch(async () => messagesStream({ text: replies.shift() ?? [] }));
+    const turns = await callAndParse(
+      "segment 1",
+      () => callPodcastLlm({ ...baseParams, model: "claude-sonnet-5-5", jsonSchema: SEGMENT_TURNS_SCHEMA }),
+      (raw) => sanitizeTurns(parseSegmentTurns(raw)),
+    );
+    expect(turns).toEqual([{ speaker: "A", text: "Zuerst engrams.", delivery: "curious" }]);
   });
 
   test("a larger writerBudget than the floor is honoured (retry doubles it)", async () => {

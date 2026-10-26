@@ -173,6 +173,28 @@ export interface ReviewNote {
 
 export const PODCAST_TAGS = SPEECH_TAGS;
 
+/** The segment/revision reply shape — `delivery` is optional (baseline turns omit it). Sent to Claude as `output_config.format`. */
+export const SEGMENT_TURNS_SCHEMA = {
+  type: "object",
+  properties: {
+    turns: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          speaker: { type: "string", enum: ["A", "B"] },
+          text: { type: "string" },
+          delivery: { type: "string", enum: DELIVERY_KEYS },
+        },
+        required: ["speaker", "text"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["turns"],
+  additionalProperties: false,
+} as const satisfies Record<string, unknown>;
+
 /** Below this many words a tag is the whole delivery — v3 then tends to speak it; strip instead. */
 const TAG_MIN_TURN_WORDS = 12;
 
@@ -973,6 +995,7 @@ async function callClaudeStage(params: LlmParams, span: Span): Promise<string> {
     user: params.userContent,
     maxTokens: params.maxCompletionTokens,
     cacheablePrefix: params.cacheableSystemPrefix,
+    jsonSchema: params.jsonSchema,
   });
   const latencyMs = Date.now() - start;
   span.setAttributes({ "http.status_code": result.status });
@@ -1044,6 +1067,8 @@ export async function callPodcastLlm(params: {
   retryOnTruncation?: boolean;
   /** Leading part of `systemPrompt` that is identical across an episode's calls; the Claude branch caches it (see `callAnthropicMessages`). Ignored by chat-completions models, which cache automatically or not at all. */
   cacheableSystemPrefix?: string;
+  /** Claude branch only: force the reply into this JSON Schema (see `callAnthropicMessages`). Chat-completions models ignore it. */
+  jsonSchema?: Record<string, unknown>;
 }): Promise<string> {
   return withSpan(
     "audio.podcast.llm",
@@ -1263,6 +1288,7 @@ export async function reviseSegments(params: {
             stage: "revise",
             usageEndpoint: "podcast-segment",
             cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
+            jsonSchema: SEGMENT_TURNS_SCHEMA,
           }),
         (raw) => sanitizeTurns(parseSegmentTurns(raw)),
       );
@@ -1476,6 +1502,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
           stage: "segment",
           usageEndpoint: "podcast-segment",
           cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
+          jsonSchema: SEGMENT_TURNS_SCHEMA,
         }),
       (raw) => sanitizeTurns(parseSegmentTurns(raw)),
     );

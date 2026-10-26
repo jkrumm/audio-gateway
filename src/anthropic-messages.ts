@@ -186,13 +186,20 @@ export async function callAnthropicMessages(params: {
    * (5-minute TTL, refreshed on every hit) instead of paying full input price.
    */
   cacheablePrefix?: string;
+  /**
+   * JSON Schema the reply must satisfy (`output_config.format`, grammar-constrained, GA — no beta header; research
+   * 2026-10-26). Opus 5.5 / Sonnet 5.5 reject forced `tool_choice`, so this is the only way to force a JSON object;
+   * Sonnet answered a segment as `[A] …` screenplay text without it. Changing the schema invalidates the prompt
+   * cache, so a stage passes one constant schema.
+   */
+  jsonSchema?: Record<string, unknown>;
   timeoutMs?: number;
 }): Promise<AnthropicCallResult> {
   const body = JSON.stringify({
     model: params.model,
     max_tokens: Math.max(ANTHROPIC_MIN_MAX_TOKENS, params.maxTokens),
     thinking: { type: "adaptive" },
-    output_config: { effort: "high" },
+    output_config: { effort: "high", ...(params.jsonSchema && { format: { type: "json_schema", schema: params.jsonSchema } }) },
     system: buildSystem(params.system, params.cacheablePrefix),
     messages: [{ role: "user", content: params.user }],
     stream: true,

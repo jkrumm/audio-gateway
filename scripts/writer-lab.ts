@@ -23,6 +23,7 @@ const CAP_USD = Number(process.env["LAB_CAP_USD"] ?? 3);
 if (!Number.isFinite(CAP_USD) || CAP_USD <= 0) throw new Error("LAB_CAP_USD must be a positive number");
 const PRICES: Record<string, { input: number; cached: number; output: number }> = {
   "claude-opus-5-5": { input: 4, cached: 0.2, output: 20 },
+  "claude-sonnet-5-5": { input: 2, cached: 0.1, output: 10 },
   "gpt-6-sol": { input: 2, cached: 0.2, output: 10 },
   "deepseek-v4.1-flash": { input: 0.3, cached: 0.06, output: 1.2 },
   "gemini-3.8-flash": { input: 0.75, cached: 0.75, output: 3.75 },
@@ -72,6 +73,31 @@ if (mode === "cache") {
   }
   const all = rows();
   all.forEach((r, i) => console.log(`call ${i + 1}: input ${r.input_tokens} (cache read ${cachedOf(r)}) output ${r.output_tokens} -> $${costOf(r).toFixed(4)}`));
+  console.log(`spent $${spent().toFixed(3)}`);
+} else if (mode === "format") {
+  // Sonnet's Wave 1 failure was screenplay text instead of the JSON object; prove output_config.format fixes it on IU.
+  const outline = await inputs.loadFrozenOutline();
+  const model = process.argv[3] ?? "claude-sonnet-5-5";
+  const index = 1;
+  guard(0.6);
+  const spec = outline.segments[index]!;
+  const turns = await script.callAndParse(
+    `segment @${model}`,
+    (attempt) =>
+      script.callPodcastLlm({
+        model,
+        systemPrompt: script.segmentPrompt({ req, outline, segment: spec, index, total: outline.segments.length, previous: outline.segments[index - 1], showBible, voice }),
+        userContent: script.buildSegmentUserContent({ req, outline, index }),
+        maxCompletionTokens: script.writerBudget(spec.targetWords * 6, attempt),
+        stage: "segment",
+        usageEndpoint: "podcast-segment",
+        cacheableSystemPrefix: script.baseSystemPrompt(req, showBible, voice),
+        jsonSchema: script.SEGMENT_TURNS_SCHEMA,
+      }),
+    (raw) => script.sanitizeTurns(script.parseSegmentTurns(raw)),
+    1,
+  );
+  console.log(`${model}: ${turns.length} turns, ${turns.filter((t) => t.delivery).length} with delivery, parsed on the first attempt`);
   console.log(`spent $${spent().toFixed(3)}`);
 } else if (mode === "editor") {
   const { decideEpisodeBrief } = await import("../src/podcast-editorial");
@@ -181,6 +207,6 @@ if (mode === "cache") {
   }
   console.log(`lab spend $${spent().toFixed(3)}`);
 } else {
-  console.error("usage: writer-lab.ts cache|editor [repeats]|prove [writers]");
+  console.error("usage: writer-lab.ts cache|format [model]|editor [repeats]|prove [writers]");
   process.exit(2);
 }
