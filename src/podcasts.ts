@@ -9,6 +9,7 @@ import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { buildEpisodeProfile, loadShowBible, type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
+import { agentReasoningEffort, createSegmentAgent } from "./podcast-agent";
 import { lintSegmentation } from "./podcast-lint";
 import {
   isGeminiModel,
@@ -691,6 +692,9 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
         metadata: config.podcastMetadataEffort,
       },
       concurrency: 3,
+      agent: config.podcastAgenticWriter
+        ? createSegmentAgent({ model: config.podcastWriteModel, reasoningEffort: agentReasoningEffort(config.podcastWriteModel), brainDir: config.brainDir || undefined, maxUnitChars: config.podcastMultiSpeakerMaxChars })
+        : undefined,
       showBiblePath: config.podcastShowBible,
       voicePath: config.podcastVoicePath,
       onProgress: (stage, done, total) => store.update(job.id, { progress: { stage, done, total } }),

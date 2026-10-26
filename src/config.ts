@@ -444,6 +444,8 @@ export const config = {
    * PODCAST_WRITE_MODEL=claude-opus-4-6.
    */
   podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "claude-opus-5-5",
+  /** Segment drafts and revisions as a tool loop that lints its own text (podcast-agent.ts); off → the single-shot calls. */
+  podcastAgenticWriter: oneOf("PODCAST_AGENTIC_WRITER", ["on", "off"] as const, "on") === "on",
   /**
    * Every reviewer role (dramaturge, conversation coach, fact & speech
    * editor) runs on EVERY listed model, all in parallel — cross-model notes

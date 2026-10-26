@@ -3,6 +3,7 @@ import { DELIVERY_KEYS, SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_P
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
+import type { SegmentAgent } from "./podcast-agent";
 import { expressionSummary, lintNotes, lintSegments, renderLintReport } from "./podcast-lint";
 import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, withSpan } from "./otel";
@@ -116,6 +117,8 @@ export interface ScriptWriterOptions {
   showBiblePath?: string;
   /** The owner's general voice guide (brain/voice.md), prepended to the show bible in the outline/segment/revision prompts. Path to a file; missing → no section, one warning. */
   voicePath?: string;
+  /** The agentic segment writer (podcast-agent.ts): drafts and revisions run as a tool loop that measures its own text. Absent → the single-shot calls. A loop that fails falls back to the single-shot call for that segment. */
+  agent?: SegmentAgent;
   onProgress?: (stage: string, done: number, total: number) => void;
 }
 
@@ -843,7 +846,7 @@ function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Ou
 // Revision prompts (per segment, targeted)
 // ---------------------------------------------------------------------------
 
-function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number; showBible: string; voice?: string }): string {
+export function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; segment: OutlineSegmentSpec; index: number; total: number; showBible: string; voice?: string }): string {
   const { req, outline, segment, index, total, showBible, voice = "" } = params;
   return `${baseSystemPrompt(req, showBible, voice)}
 
@@ -858,7 +861,7 @@ Return the FULL revised segment as STRICT JSON only, no markdown, no commentary:
 {"turns":[{"speaker":"A"|"B","text":"<what this host says>","delivery":"<optional: one of ${DELIVERY_KEYS.join(" | ")} — omit the field on a baseline turn>"}]}`;
 }
 
-function buildRevisionUserContent(params: {
+export function buildRevisionUserContent(params: {
   req: PodcastScriptRequest;
   outline: Outline;
   segments: ScriptSegment[];
@@ -1262,9 +1265,10 @@ export async function reviseSegments(params: {
   concurrency: number;
   showBible: string;
   voice: string;
+  agent?: SegmentAgent;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ScriptSegment[]> {
-  const { req, outline, segments, notes, model, concurrency, showBible, voice, onProgress } = params;
+  const { req, outline, segments, notes, model, concurrency, showBible, voice, agent, onProgress } = params;
   const total = segments.length;
   const toRevise = segments.map((_, index) => index).filter((index) => segmentNotesFor(notes, index).length > 0);
   onProgress?.("revise", 0, toRevise.length);
@@ -1277,21 +1281,28 @@ export async function reviseSegments(params: {
     if (!segmentSpec) throw new Error(`outline segment ${index} out of range`);
     const segmentNotes = segmentNotesFor(notes, index);
     try {
-      const turns = await callAndParse(
-        `revise ${index + 1}`,
-        (attempt) =>
-          callPodcastLlm({
-            model,
-            systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total, showBible, voice }),
-            userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
-            maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
-            stage: "revise",
-            usageEndpoint: "podcast-segment",
-            cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
-            jsonSchema: SEGMENT_TURNS_SCHEMA,
-          }),
-        (raw) => sanitizeTurns(parseSegmentTurns(raw)),
-      );
+      const singleShot = (): Promise<ScriptTurn[]> =>
+        callAndParse(
+          `revise ${index + 1}`,
+          (attempt) =>
+            callPodcastLlm({
+              model,
+              systemPrompt: revisionPrompt({ req, outline, segment: segmentSpec, index, total, showBible, voice }),
+              userContent: buildRevisionUserContent({ req, outline, segments, index, notes: segmentNotes }),
+              maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
+              stage: "revise",
+              usageEndpoint: "podcast-segment",
+              cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
+              jsonSchema: SEGMENT_TURNS_SCHEMA,
+            }),
+          (raw) => sanitizeTurns(parseSegmentTurns(raw)),
+        );
+      const turns = agent
+        ? await agent.revise({ req, outline, segments, index, total, notes: segmentNotes, showBible, voice }).catch((err: unknown) => {
+            log.warn("segment agent revision failed, falling back to the single-shot revision", { index, error: err instanceof Error ? err.message : String(err) });
+            return singleShot();
+          })
+        : await singleShot();
       // An empty revision is a failed one — never replace a written segment with nothing.
       if (turns.length > 0) revisedByIndex.set(index, turns);
     } catch (err) {
@@ -1488,7 +1499,8 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   const total = outline.segments.length;
   let segmentsDone = 0;
   const segments = await synthConcurrent(opts.concurrency, outline.segments, async (segmentSpec, index) => {
-    const turns = await callAndParse(
+    const singleShot = (): Promise<ScriptTurn[]> =>
+      callAndParse(
       `segment ${index + 1}`,
       (attempt) =>
         callPodcastLlm({
@@ -1507,6 +1519,12 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
         }),
       (raw) => sanitizeTurns(parseSegmentTurns(raw)),
     );
+    const turns = opts.agent
+      ? await opts.agent.draft({ req, outline, index, total, showBible, voice }).catch((err: unknown) => {
+          log.warn("segment agent draft failed, falling back to the single-shot draft", { index, error: err instanceof Error ? err.message : String(err) });
+          return singleShot();
+        })
+      : await singleShot();
     segmentsDone++;
     opts.onProgress?.("segment", segmentsDone, total);
     return { title: segmentSpec.title, turns } satisfies ScriptSegment;
@@ -1520,14 +1538,14 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
     : [];
   const notes = [...reviewNotes, ...lengthNotes(segments, outline), ...lintNotes(lint)];
   if (notes.length > 0) {
-    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, agent: opts.agent, onProgress: opts.onProgress });
   }
   // A revision that was asked to cut and still didn't: one more pass on those
   // segments only, with nothing but the cut on the table.
   const stillLong = lengthNotes(finalSegments, outline);
   if (stillLong.length > 0) {
     log.warn("podcast segments still over length after revision, tightening", { segments: stillLong.map((n) => n.segmentIndex) });
-    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, onProgress: opts.onProgress });
+    finalSegments = await reviseSegments({ req, outline, segments: finalSegments, notes: stillLong, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, agent: opts.agent, onProgress: opts.onProgress });
   }
 
   const wordCount = finalSegments.reduce((sum, seg) => sum + seg.turns.reduce((s, t) => s + countWords(t.text), 0), 0);

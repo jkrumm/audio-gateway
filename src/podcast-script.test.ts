@@ -527,6 +527,31 @@ describe("writePodcastScript", () => {
     expect(calls).toEqual(["outline", "segment", "segment", "segment"]);
   });
 
+  test("an injected segment agent writes the drafts; a failing agent falls back to the single-shot draft for that segment", async () => {
+    const calls: string[] = [];
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      if (!match) throw new Error("unexpected prompt");
+      calls.push(`single-shot ${match[1]}`);
+      return segmentResponse(Number(match[1]) - 1);
+    });
+    const agent = {
+      draft: async ({ index }: { index: number }) => {
+        if (index === 1) throw new Error("agent exploded");
+        return [{ speaker: "A" as const, text: `Agent Segment ${index} Zeile.` }];
+      },
+      revise: async () => [],
+    };
+    const script = await writePodcastScript(BASE_REQUEST, { models: MODELS, concurrency: 1, review: false, metadata: false, agent });
+    expect(script.segments[0]?.turns[0]?.text).toBe("Agent Segment 0 Zeile.");
+    expect(script.segments[1]?.turns[0]?.text).toContain("Segment 1 ");
+    expect(script.segments[2]?.turns[0]?.text).toBe("Agent Segment 2 Zeile.");
+    expect(calls).toEqual(["single-shot 2"]);
+  });
+
   test("review: true, metadata: true runs the full role split — outline on the outline model, segments and revisions on the write model, every reviewer role on every review model in parallel, then metadata", async () => {
     const calls: Array<{ stage: string; model: string }> = [];
 

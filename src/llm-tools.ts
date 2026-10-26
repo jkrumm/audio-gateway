@@ -57,6 +57,8 @@ export interface ToolLoopParams {
   fetchImpl?: ToolLoopFetch;
   /** Abort a round whose (non-streaming) model call produces nothing within this window. Default 30 min (a hang guard, not a budget); tests override. */
   roundIdleTimeoutMs?: number;
+  /** Checked after each round's tool results are in; true ends the loop at once (a "submit" tool already delivered the work — no closing round). */
+  shouldStop?: () => boolean;
 }
 
 export interface ToolLoopResult {
@@ -301,5 +303,6 @@ export async function runToolLoop(params: ToolLoopParams): Promise<ToolLoopResul
       calls.push(result.record);
       messages.push({ role: "tool", tool_call_id: call.id, content: result.content });
     }
+    if (params.shouldStop?.()) return { content: "", calls, rounds: round };
   }
 }

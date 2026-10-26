@@ -45,10 +45,12 @@ export function rowCost(row: LedgerRow): number {
   const details = (usage["prompt_tokens_details"] ?? {}) as { cached_tokens?: number };
   const cacheRead = Number(usage["cache_read_input_tokens"] ?? details.cached_tokens ?? 0);
   const cacheWrite = Number(usage["cache_creation_input_tokens"] ?? 0);
-  const input = row.input_tokens ?? 0;
+  // Tool-loop rows carry only the raw usage object (OpenAI shape), no token columns.
+  const input = row.input_tokens ?? Number(usage["prompt_tokens"] ?? 0);
+  const output = row.output_tokens ?? Number(usage["completion_tokens"] ?? 0);
   const plain = Math.max(0, input - cacheRead - cacheWrite);
   return (
-    (plain * (rate.input ?? 0) + cacheRead * (rate.cached ?? rate.input ?? 0) + cacheWrite * (rate.input ?? 0) * (rate.cacheWriteFactor ?? 1) + (row.output_tokens ?? 0) * (rate.output ?? 0)) /
+    (plain * (rate.input ?? 0) + cacheRead * (rate.cached ?? rate.input ?? 0) + cacheWrite * (rate.input ?? 0) * (rate.cacheWriteFactor ?? 1) + output * (rate.output ?? 0)) /
     1e6
   );
 }
