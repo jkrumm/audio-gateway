@@ -302,7 +302,7 @@ interface OpenAiUsage {
  * always calls the LLM) and the SUMMARY_SYSTEM_PROMPT is used instead. Usage is
  * recorded under `"speech-summary"` so summary calls are separable in telemetry.
  */
-async function runPrep(model: string, input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
+export async function runPrep(model: string, input: string, summarize: boolean): Promise<{ prep: PrepResult; ran: boolean }> {
   const usageEndpoint = summarize ? "speech-summary" : "speech-prep";
   const prepModel = summarize ? config.ttsSummaryModel : config.ttsPrepModel;
 
