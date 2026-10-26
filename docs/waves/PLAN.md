@@ -61,25 +61,25 @@ change** in this wave — the writer default stays `claude-opus-5-5` until the o
 - Findings feeding Wave 2: Opus writer cost ≈ $1.7/episode projected; `glm-5.3`/`kimi-k3` need 15–25 min per two segments;
   `gpt-6-sol` is 29 s / ≈ $0.37; the reviewers' notes were large (44–56 per candidate) and every candidate was revised.
 
-## Wave 2 — Learn and improve            <!-- status: active -->
+## Wave 2 — Learn and improve            <!-- status: done -->
 **Owner request (two addenda).** The bake-off is not just a ranking: learn from it and improve the pipeline. **IU cap $3
 (enforced per call, not per candidate)**; same no-deploy-during-job rule; writer MODEL default still waits for the owner's blind
 listening. Keep what works: fast pace, concise, technical, interesting — do not trade density for chatter (item 7).
-- [ ] 1 Cost levers, same voice owner: Anthropic prompt caching (`cache_control` on the stable prefix — system prompt, show bible,
+- [x] 1 Cost levers, same voice owner: Anthropic prompt caching (`cache_control` on the stable prefix — system prompt, show bible,
       dossier, outline — in the `claude-*` branch of `callPodcastLlm`/`anthropic-messages.ts`); measure the input-cost drop on one
       segment; check whether OpenAI-wire models cache automatically via IU (`prompt_tokens_details.cached_tokens`). Measure what each
       revision/tightening pass changes (diff size, notes resolved) and whether a pass can be dropped or made conditional.
       Facts: 2026-10-25 Opus `podcast-segment` = 24 calls, 388k input / 93k output tokens, $3.41, no `cache_control` anywhere.
-- [ ] 2 Learn from the scripts: read every candidate draft (`run-*.json`) against `docs/show-bible.md`; catalogue concrete failure
+- [x] 2 Learn from the scripts: read every candidate draft (`run-*.json`) against `docs/show-bible.md`; catalogue concrete failure
       patterns (AI-isms/stock phrases, lecture turns, monotone turn-taking, missing reactions/interruptions, weak hooks/endings,
       tag misuse) and what the strongest drafts did differently. Output: show-bible edits as short German before/after examples
       (not more rules), writer/reviewer prompt fixes, and a cheap deterministic script lint (turn-length variance, reaction/question
       ratio, banned phrases, monologue length, first-mention check — item 6) whose output is fed to the reviewers.
-- [ ] 3 Prove it: rewrite the interaction segment with the improved prompts on the current writer and the best-value candidate,
+- [x] 3 Prove it: rewrite the interaction segment with the improved prompts on the current writer and the best-value candidate,
       voice them, add before/after samples to the `/tts` "Podcast writer" question.
-- [ ] 4 Ship what is proven (caching, lint, prompt/show-bible edits) with tests, review and the gates; record findings in modelpick
+- [x] 4 Ship what is proven (caching, lint, prompt/show-bible edits) with tests, review and the gates; record findings in modelpick
       `docs/decisions/podcast-writer.md`.
-- [ ] 5 Episodes all sound the same (a scripted disagreement). Owner wants knowledge SHARING to dominate (one host knows and
+- [x] 5 Episodes all sound the same (a scripted disagreement). Owner wants knowledge SHARING to dominate (one host knows and
       explains, the other asks sharp questions, both add); disagreement only when the material is genuinely contested.
       Evidence: 5 of the last 8 briefs list a "live disagreement" device; format names repeat. Fix: reframe outline `tension`
       (`podcast-script.ts`) as the segment's pull (open question, curiosity, a reveal — not necessarily conflict); drop "a live
@@ -87,8 +87,21 @@ listening. Keep what works: fast pace, concise, technical, interesting — do no
       vary it against recent episodes (explainer/walkthrough, story, Q&A where the curious host drives, debate only if contested);
       let the dramaturge flag a manufactured argument; show-bible "Einwand" line. Test on the bake-off material that the brief no
       longer defaults to a debate.
-- [ ] 6 Hosts talk about places, people, projects and tools as if the listener knew them (private notes leak shared context).
+- [x] 6 Hosts talk about places, people, projects and tools as if the listener knew them (private notes leak shared context).
       Enforce: every proper name/place/project/internal term is introduced on first mention in one plain clause. The show-bible name
       rule exists but is not enforced: add it to the fact & speech editor review and to the deterministic lint (first-mention check).
-- [ ] 7 Guardrail on 5 and 6: pace, density and technical depth stay (measure words/turn and facts/minute before and after).
+- [x] 7 Guardrail on 5 and 6: pace, density and technical depth stay (measure words/turn and facts/minute before and after).
 **Left behind:**
+- Shipped (master, tests + review clean): prompt caching on Claude writer calls (`cacheablePrefix`, measured −52% input / −21% per call
+  on the second segment call, ~$0.8–0.9 of the $3.41 episode if warm); `src/podcast-lint.ts` fed to reviewers (stock-phrase and
+  unintroduced-term findings also become revision notes); outline `tension` reframed as the segment's pull; editor chooses a MODE
+  and no longer defaults to a debate (3/3 replays: Explainer, Explainer, Q&A, no disagreement device); dramaturge flags manufactured
+  arguments; writer + fact-editor name rule covers every name judged as a stranger; show-bible before/after pairs.
+- Measured, NOT shipped: revision rewrites 40–70% of words from 17–30 notes/segment (inflated by the 2-segment bake-off); a note cap or
+  conditional pass needs ears first. Moving the segment instruction tail out of the system prompt would make SOURCE + outline
+  cacheable (~7k more tokens/call); changes prompt layout, needs listening.
+- Proof: `/tts` "Podcast writer — improved pipeline" (Opus and gpt-6-sol, old vs new, blind). Opus lint 5 findings → 0, second host asks
+  11 questions, 23 turns vs 9. Not proven: density (fact-coverage proxy 2/8 → 3/11) and length (731 words vs 590 target; the lab run
+  skips the tightening pass). The writer MODEL default is unchanged and waits for the owner's blind listening.
+- Spend: lab ledger $1.05 at list price (cap $3, enforced before every call); research $0.04. Wave 1's caps were exceeded (see above).
+- Note for the owner: an episode produced on the mini only gets these changes after `make deploy` there (done at close-out if no job ran).
