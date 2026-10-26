@@ -60,8 +60,26 @@ describe("classifyEpisodes", () => {
     expect(rows.map((r) => r.supersededBy)).toEqual(["Factory v2.2 — neu", null, null, null]);
   });
 
+  test("superseding stays inside one show and a test episode never supersedes a real one", () => {
+    const rows = classifyEpisodes(
+      [
+        ep({ title: "Factory v1 — a", itemId: "show1", episodeId: "e1" }),
+        ep({ title: "Factory v2 — b", itemId: "show2", episodeId: "e2" }),
+        ep({ title: "Brief v1 — c", itemId: "show1", episodeId: "e3" }),
+        ep({ title: "Brief v2 — test", itemId: "show1", episodeId: "e4", durationSec: 120 }),
+      ],
+      NOW,
+    );
+    expect(rows.map((r) => r.supersededBy)).toEqual([null, null, null, null]);
+  });
+
   test("episodes under five minutes are tests", () => {
     const rows = classifyEpisodes([ep({ title: "Kurz", durationSec: 187 }), ep({ title: "Lang" })], NOW);
     expect(rows.map((r) => r.isTest)).toEqual([true, false]);
+  });
+
+  test("isTest boundary: 299s is a test, 300s and unknown duration are not", () => {
+    const rows = classifyEpisodes([ep({ title: "a", durationSec: 299 }), ep({ title: "b", durationSec: 300 }), ep({ title: "c", durationSec: 0 })], NOW);
+    expect(rows.map((r) => r.isTest)).toEqual([true, false, false]);
   });
 });

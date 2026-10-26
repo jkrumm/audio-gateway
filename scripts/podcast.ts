@@ -416,9 +416,20 @@ async function runAbsTidy(argv: string[]): Promise<void> {
     console.log("dry run — pass --apply to execute");
     return;
   }
-  for (const r of toFinish) await tidy.markFinished(r.episode);
-  for (const r of toRemove) await tidy.removeEpisode(r.episode);
-  console.log(`applied: ${toFinish.length} marked finished, ${toRemove.length} deleted`);
+  let failed = 0;
+  const run = async (what: string, r: (typeof rows)[number], act: () => Promise<void>): Promise<void> => {
+    try {
+      await act();
+      console.log(`${what}: ${r.episode.title}`);
+    } catch (err) {
+      failed++;
+      console.error(`${what} FAILED: ${r.episode.title} — ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  for (const r of toFinish) await run("marked finished", r, () => tidy.markFinished(r.episode));
+  for (const r of toRemove) await run("deleted", r, () => tidy.removeEpisode(r.episode));
+  console.log(`applied: ${toFinish.length + toRemove.length - failed} ok, ${failed} failed`);
+  if (failed > 0) process.exit(1);
 }
 
 // ---------------------------------------------------------------------------

@@ -269,7 +269,7 @@ LaunchAgent** (podcast pipeline, `:7719`).
   (submit, poll progress, download the finished episode), talks to the mini instance by default; see
   `docs/podcast.md`.
 - `bun run podcast -- abs-tidy [--apply]` — Audiobookshelf hygiene (run under `secrets-run` with
-  `.env.mini.publish.tpl`): dry run lists finished / needs-finish / abandoned / never-played /
+  `.env.tpl`, `.env.mini.tpl` and `.env.mini.publish.tpl` — config needs the IU vars at import): dry run lists finished / needs-finish / abandoned / never-played /
   superseded (older `vN` of the same base title) / test (<5 min) episodes from the listening
   sessions; `--apply` marks listened-through ones finished and hard-deletes superseded + test ones.
 - `bun run usage:tail [--db <path>] [--prod] [--since 30m|2h|1d|<ISO>] [--limit N] [--json]` — a

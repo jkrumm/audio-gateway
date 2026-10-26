@@ -144,7 +144,8 @@ function parseResponsesReply(
   const toolCalls: ToolCallRequest[] = output
     .filter((o) => o.type === "function_call")
     .map((o) => ({ id: o.call_id ?? "", type: "function" as const, function: { name: o.name ?? "", arguments: o.arguments ?? "" } }));
-  const finishReason = parsed.status === "incomplete" && parsed.incomplete_details?.reason === "max_output_tokens" ? "length" : (parsed.status ?? undefined);
+  // Chat vocabulary on both transports: completed → stop, cut at the token budget → length, anything else keeps its status.
+  const finishReason = parsed.status === "completed" ? "stop" : parsed.status === "incomplete" && parsed.incomplete_details?.reason === "max_output_tokens" ? "length" : (parsed.status ?? undefined);
   const usage = parsed.usage ?? {};
   // Normalised to the chat usage shape so the usage ledger and rate table price both transports alike.
   recordUsage({

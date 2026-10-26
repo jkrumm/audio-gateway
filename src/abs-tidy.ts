@@ -50,6 +50,8 @@ function newerVersion(a: number[], b: number[]): boolean {
   return false;
 }
 
+const isTestEpisode = (e: TidyEpisode): boolean => e.durationSec > 0 && e.durationSec < TEST_MAX_SECONDS;
+
 export function classifyEpisodes(episodes: TidyEpisode[], nowMs: number): TidyRow[] {
   const versions = episodes.map((episode) => ({ episode, v: versionedBase(episode.title) }));
   return episodes.map((episode) => {
@@ -64,8 +66,9 @@ export function classifyEpisodes(episodes: TidyEpisode[], nowMs: number): TidyRo
     else verdict = "in-progress";
 
     const own = versions.find((x) => x.episode === episode)?.v;
-    const newer = own && versions.find((x) => x.v && x.v.base === own.base && newerVersion(x.v.version, own.version));
-    return { episode, verdict, listenedThrough, supersededBy: newer ? newer.episode.title : null, isTest: episode.durationSec > 0 && episode.durationSec < TEST_MAX_SECONDS };
+    // Same show only, and a test episode never supersedes a real one — either would hard-delete the wrong file.
+    const newer = own && versions.find((x) => x.v && x.episode.itemId === episode.itemId && !isTestEpisode(x.episode) && x.v.base === own.base && newerVersion(x.v.version, own.version));
+    return { episode, verdict, listenedThrough, supersededBy: newer ? newer.episode.title : null, isTest: isTestEpisode(episode) };
   });
 }
 
@@ -83,16 +86,28 @@ interface AbsShow {
   media: { metadata: { title: string }; episodes?: Array<{ id: string; title?: string; duration?: number }> };
 }
 
+/** ABS list endpoints are paged (0-based `page`) and report `total`; read until every row is in, so nothing is silently dropped. */
+async function pageAll<T>(fetchPage: (page: number) => Promise<Record<string, unknown>>, key: string): Promise<T[]> {
+  const rows: T[] = [];
+  for (let page = 0; ; page++) {
+    const res = await fetchPage(page);
+    const chunk = (res[key] as T[] | undefined) ?? [];
+    rows.push(...chunk);
+    const total = Number(res["total"] ?? rows.length);
+    if (chunk.length === 0 || rows.length >= total) return rows;
+  }
+}
+
 /** Every episode of every show in the configured podcast library, with its progress record and listening sessions. */
 export async function loadTidyEpisodes(): Promise<{ episodes: TidyEpisode[]; clients: string[] }> {
   const library = await resolveLibrary();
   const [list, me, sessions] = await Promise.all([
-    absJson<{ results: Array<{ id: string }> }>(`/api/libraries/${library.id}/items?limit=100`),
+    pageAll<{ id: string }>((page) => absJson(`/api/libraries/${library.id}/items?limit=100&page=${page}`), "results"),
     absJson<AbsMe>("/api/me"),
-    absJson<{ sessions: AbsSession[] }>("/api/me/listening-sessions?itemsPerPage=1000"),
+    pageAll<AbsSession>((page) => absJson(`/api/me/listening-sessions?itemsPerPage=500&page=${page}`), "sessions"),
   ]);
   const episodes: TidyEpisode[] = [];
-  for (const { id } of list.results) {
+  for (const { id } of list) {
     const show = await absJson<AbsShow>(`/api/items/${id}?expanded=1`);
     for (const e of show.media.episodes ?? []) {
       const p = me.mediaProgress?.find((m) => m.libraryItemId === id && m.episodeId === e.id);
@@ -102,11 +117,11 @@ export async function loadTidyEpisodes(): Promise<{ episodes: TidyEpisode[]; cli
         title: e.title ?? "(untitled)",
         durationSec: e.duration ?? 0,
         progress: p ? { isFinished: p.isFinished, share: p.progress, lastUpdateMs: p.lastUpdate } : null,
-        sessions: sessions.sessions.filter((s) => s.libraryItemId === id && s.episodeId === e.id).map((s) => ({ currentTime: s.currentTime, updatedAtMs: s.updatedAt })),
+        sessions: sessions.filter((s) => s.libraryItemId === id && s.episodeId === e.id).map((s) => ({ currentTime: s.currentTime, updatedAtMs: s.updatedAt })),
       });
     }
   }
-  const clients = [...new Set(sessions.sessions.map((s) => s.deviceInfo?.clientName).filter((c): c is string => Boolean(c)))];
+  const clients = [...new Set(sessions.map((s) => s.deviceInfo?.clientName).filter((c): c is string => Boolean(c)))];
   return { episodes, clients };
 }
 
