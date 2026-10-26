@@ -1015,7 +1015,7 @@ describe("writePodcastScript", () => {
       expect(prompt).toContain("One figure per sentence");
       expect(prompt).toContain("Round, unless the precision IS the point");
       expect(prompt).toContain("WHAT IT IS before WHAT IT IS CALLED");
-      expect(prompt).toContain("Open questions stay open");
+      expect(prompt).toContain("A genuine evidence gap is never admitted in the body of the episode");
       // Roles come from the brief, never from a hardcoded host description.
       expect(prompt).not.toContain("the curious co-host");
       expect(prompt).toContain("comes from the EPISODE BRIEF below");

@@ -14,6 +14,7 @@ process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
 
 const { askCoverage, assignAsks } = await import("./podcast-asks");
 const { lintNotes, lintSegments } = await import("./podcast-lint");
+const { EMPTY_DOSSIER } = await import("./podcast-types");
 const script = await import("./podcast-script");
 type ScriptSegment = import("./podcast-script").ScriptSegment;
 
@@ -116,7 +117,7 @@ describe("outline and prompts", () => {
   });
 
   test("segment prompt: the owning segment lists its asks; the first segment frames the question", () => {
-    const req = { episodeBrief: brief, hosts: [{ id: "A", name: "Jonas", voice: "x", speed: 1 }, { id: "B", name: "Lena", voice: "y", speed: 1 }], language: "de" } as unknown as import("./podcast-script").PodcastScriptRequest;
+    const req = { episodeBrief: brief, hosts: [{ id: "A", name: "Jonas", voice: "x", speed: 1 }, { id: "B", name: "Lena", voice: "y", speed: 1 }], language: "de", dossier: EMPTY_DOSSIER } as unknown as import("./podcast-script").PodcastScriptRequest;
     const seg = { title: "Karotte", goal: "g", keyFacts: ["f"], targetWords: 300, tension: "t", answers: [RAW_CARROT] };
     const outline = { title: "T", description: "", coverPrompt: "", genres: [], motif: "", throughLine: "", hook: "", reveals: [], digressions: [], segments: [seg, { ...seg, answers: [] }] };
     const first = script.segmentPrompt({ req, outline, segment: seg, index: 0, total: 2, showBible: "" });
@@ -128,7 +129,7 @@ describe("outline and prompts", () => {
   });
 
   test("outline prompt carries the asks and the 'answers' field; the dramaturge checks verdicts", () => {
-    const req = { episodeBrief: brief, hosts: [{ id: "A", name: "Jonas", voice: "x", speed: 1 }, { id: "B", name: "Lena", voice: "y", speed: 1 }], language: "de", source: "s", dossier: { glossary: [], additions: [], toolCalls: [] } } as unknown as import("./podcast-script").PodcastScriptRequest;
+    const req = { episodeBrief: brief, hosts: [{ id: "A", name: "Jonas", voice: "x", speed: 1 }, { id: "B", name: "Lena", voice: "y", speed: 1 }], language: "de", source: "s", dossier: { ...EMPTY_DOSSIER } } as unknown as import("./podcast-script").PodcastScriptRequest;
     const prompt = script.outlinePrompt(req, 4, 1500, "");
     expect(prompt).toContain("LISTENER ASKS");
     expect(prompt).toContain(RAW_CARROT);
