@@ -455,12 +455,13 @@ describe("runLoadBearingResearch", () => {
       { source: "research: fact one", text: "answer one" },
       { source: "research: fact two", text: "answer two" },
     ]);
+    expect(result.answeredFacts).toEqual(["fact one", "fact two"]);
     expect(result.usdSpent).toBeCloseTo(0.5);
   });
 
   test("no research configured or no facts named → no calls, empty result", async () => {
-    expect(await runLoadBearingResearch(["fact"], {})).toEqual({ additions: [], toolCalls: [], usdSpent: 0 });
-    expect(await runLoadBearingResearch([], { research: { url: "https://research.example.com", apiKey: "key" } })).toEqual({ additions: [], toolCalls: [], usdSpent: 0 });
+    expect(await runLoadBearingResearch(["fact"], {})).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] });
+    expect(await runLoadBearingResearch([], { research: { url: "https://research.example.com", apiKey: "key" } })).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] });
   });
 
   test("a failed fact is skipped, not thrown — the rest still run", async () => {
@@ -474,22 +475,25 @@ describe("runLoadBearingResearch", () => {
       pollIntervalMs: 0,
     });
     expect(result.additions).toEqual([{ source: "research: good fact", text: "answer two" }]);
+    expect(result.answeredFacts).toEqual(["good fact"]);
     expect(result.toolCalls.map((c) => c.ok)).toEqual([false, true]);
   });
 
-  test("more facts than the cap are ignored, not researched", async () => {
+  test("no cap — every editor-named fact is researched, however many there are", async () => {
     const { fetchImpl, count } = scriptedFetch([
       rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "a" } }),
       rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "b" } }),
       rawRes(200, { jobId: "c" }), rawRes(200, { status: "done", result: { report: "c" } }),
+      rawRes(200, { jobId: "d" }), rawRes(200, { status: "done", result: { report: "d" } }),
+      rawRes(200, { jobId: "e" }), rawRes(200, { status: "done", result: { report: "e" } }),
     ]);
     const result = await runLoadBearingResearch(["f1", "f2", "f3", "f4", "f5"], {
       research: { url: "https://research.example.com", apiKey: "key" },
       fetchImpl,
       pollIntervalMs: 0,
     });
-    expect(result.additions).toHaveLength(3);
-    expect(count()).toBe(6);
+    expect(result.additions).toHaveLength(5);
+    expect(count()).toBe(10);
   });
 });
 

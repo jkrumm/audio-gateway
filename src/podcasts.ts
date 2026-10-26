@@ -556,6 +556,13 @@ function buildEpisodeHistory(store: PodcastStore, series: string): EpisodeHistor
   };
 }
 
+/** Drops answered load-bearing facts from `openQuestions` so the outro (podcast-script.ts) can't reopen a gap the follow-up research just closed. */
+function dropAnsweredOpenQuestions(openQuestions: string[], answeredFacts: string[]): string[] {
+  if (answeredFacts.length === 0) return openQuestions;
+  const answered = new Set(answeredFacts);
+  return openQuestions.filter((q) => !answered.has(q));
+}
+
 /**
  * Run one job's full pipeline end to end, persisting status/progress to the
  * store as it goes so a concurrent GET sees live progress. Wraps the whole
@@ -673,13 +680,17 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
     try {
       const followUp = await withSpan("audio.podcast.research_follow_up", { "audio.podcast.stage": "research_follow_up" }, () =>
         // No `maxCalls` here: the budget-sized gate already happened in the editorial
-        // prompt + MAX_LOAD_BEARING_FACTS (podcast-research.ts), not a per-call counter.
+        // prompt's own "0 to 3" instruction, not a per-call counter.
         runLoadBearingResearch(brief.loadBearingFacts, { research: { url: config.researchGatewayUrl, apiKey: config.researchApiKey } }),
       );
       dossier = {
         ...dossier,
         additions: [...dossier.additions, ...followUp.additions],
         toolCalls: [...dossier.toolCalls, ...followUp.toolCalls],
+        // A fact answered at standard depth must not survive in openQuestions — the editor (podcast-editorial.ts)
+        // and the writer's outro question (podcast-script.ts) both draw from it, and an episode must not ask
+        // the listener about a gap it just closed.
+        openQuestions: dropAnsweredOpenQuestions(dossier.openQuestions, followUp.answeredFacts),
         researchUsd: (dossier.researchUsd ?? 0) + followUp.usdSpent,
       };
       await writeFile(files.dossier, JSON.stringify(dossier, null, 2), "utf8");
@@ -1517,4 +1528,4 @@ export async function handlePodcasts(req: Request, path: string, tokenCaller?: s
 // directly (mirrors otel.ts's `_test` export) without racing the real
 // generation pipeline that a POST enqueues.
 // ---------------------------------------------------------------------------
-export const _test = { getStore, claimJob, releaseJob, asciiHeaderSafe, publishEpisode };
+export const _test = { getStore, claimJob, releaseJob, asciiHeaderSafe, publishEpisode, dropAnsweredOpenQuestions };
