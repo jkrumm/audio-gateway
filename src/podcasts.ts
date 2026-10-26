@@ -368,7 +368,7 @@ function getStore(): PodcastStore {
 /** A turn this short is an interjection ("Echt?", "Mhm.") — it gets a shorter lead-in gap. */
 const SHORT_INTERJECTION_MAX_WORDS = 6;
 /** Per-host level before mastering; loudnorm lifts the programme to -16 LUFS afterwards. */
-const PRE_MASTER_HOST_LUFS = -20;
+export const PRE_MASTER_HOST_LUFS = -20;
 const countWords = (text: string): number => (text.match(/\S+/g) ?? []).length;
 
 /**

@@ -602,7 +602,7 @@ ${renderEpisodeBrief(req)}
 8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
 }
 
-function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string, voice = ""): string {
+export function outlinePrompt(req: PodcastScriptRequest, segmentCount: number, targetWords: number, showBible: string, voice = ""): string {
   const languageLabel = LANGUAGE_LABEL[req.language];
   const brief = req.episodeBrief;
   return `${baseSystemPrompt(req, showBible, voice)}
@@ -624,7 +624,7 @@ Return STRICT JSON only, no markdown, no commentary:
 {"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"motif":"<motif, or \\"\\" when the brief did not ask for one>","through_line":"<the one question the episode answers, or \\"\\">","hook":"<the opening beat, or \\"\\" when the brief did not ask for one>","reveals":[{"text":"<what gets revealed>","segment":<0-based segment index>}],"digressions":[{"beat":"<the side-trip>","segment":<0-based segment index>,"return_hook":"<the line that returns to the thread>"}],"segments":[{"title":"<segment title>","goal":"<what this segment accomplishes>","key_facts":["<verbatim fact from the source>"],"target_words":<number>,"tension":"<the question or disagreement this segment turns on>"}]}`;
 }
 
-function segmentPrompt(params: {
+export function segmentPrompt(params: {
   req: PodcastScriptRequest;
   outline: Outline;
   segment: OutlineSegmentSpec;
@@ -699,7 +699,7 @@ function dossierSections(dossier: Dossier): string[] {
   return parts;
 }
 
-function buildOutlineUserContent(req: PodcastScriptRequest): string {
+export function buildOutlineUserContent(req: PodcastScriptRequest): string {
   const parts = [
     `SOURCE (verbatim; every fact must come from here):\n${req.source}`,
     ...dossierSections(req.dossier),
@@ -709,7 +709,7 @@ function buildOutlineUserContent(req: PodcastScriptRequest): string {
   return parts.join("\n\n");
 }
 
-function buildSegmentUserContent(params: { req: PodcastScriptRequest; outline: Outline; index: number }): string {
+export function buildSegmentUserContent(params: { req: PodcastScriptRequest; outline: Outline; index: number }): string {
   const { req, outline, index } = params;
   const segment = outline.segments[index];
   if (!segment) throw new Error(`segment index ${index} out of range`);
@@ -900,7 +900,7 @@ export function lengthNotes(segments: ScriptSegment[], outline: Outline): Review
   return notes;
 }
 
-function segmentNotesFor(notes: ReviewNote[], index: number): ReviewNote[] {
+export function segmentNotesFor(notes: ReviewNote[], index: number): ReviewNote[] {
   const own = notes.filter((n) => n.segmentIndex === index);
   if (own.length === 0) return [];
   return [...own, ...notes.filter((n) => n.segmentIndex === null)];
@@ -1131,7 +1131,7 @@ export async function callPodcastLlm(params: {
  * and a retry gets double. The same headroom is reused for the outline/review/
  * metadata calls (deepseek-v4.1-flash, gemini-3.8-flash), which reason too.
  */
-function writerBudget(visibleTokens: number, attempt: number): number {
+export function writerBudget(visibleTokens: number, attempt: number): number {
   const reasoningHeadroom = 16000;
   return Math.min(64000, (visibleTokens + reasoningHeadroom) * attempt);
 }
@@ -1162,7 +1162,7 @@ export async function callAndParse<T>(stage: string, call: (attempt: number) => 
  * `reviewer` (`<role>@<model>`). Each reviewer's one-line verdict is logged
  * for visibility even though it isn't otherwise consumed.
  */
-async function reviewEpisode(params: {
+export async function reviewEpisode(params: {
   req: PodcastScriptRequest;
   outline: Outline;
   segments: ScriptSegment[];
@@ -1217,7 +1217,7 @@ async function reviewEpisode(params: {
  * {@link segmentNotesFor}), in parallel, bounded by `concurrency`. A segment
  * with no notes keeps its original turns and makes no LLM call.
  */
-async function reviseSegments(params: {
+export async function reviseSegments(params: {
   req: PodcastScriptRequest;
   outline: Outline;
   segments: ScriptSegment[];
