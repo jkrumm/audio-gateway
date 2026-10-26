@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ChunkLimits } from "./gemini-tts-core";
-import { BRIEFING_TAGS, detectLanguage, enforceChunkLimits, looksGerman, normalizeForSpeech, parsePrepResponse, SPEECH_TAGS, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
+import { DELIVERY_STYLES, detectLanguage, enforceChunkLimits, looksGerman, normalizeForSpeech, parsePrepResponse, resolveDelivery, SPEECH_TAGS, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
 
 // pcmToWav now lives in audio.test.ts alongside the rest of the ffmpeg/ffprobe
 // process boundary module it moved into.
@@ -200,14 +200,26 @@ describe("stripDisallowedTags", () => {
   test("drops invented tags with digits, underscores or punctuation", () => {
     expect(stripDisallowedTags("a <pause 2s> b <sigh_softly> c <emphasis!> d")).toBe("a  b  c  d");
   });
-  test("every briefing tag is in the shared vocabulary", () => {
-    for (const t of BRIEFING_TAGS) expect(SPEECH_TAGS).toContain(t);
-  });
   test("leaves comparisons and arrows alone", () => {
     expect(stripDisallowedTags("wenn a < 5 und b > 3")).toBe("wenn a < 5 und b > 3");
   });
-  test("the briefing subset rejects tags only podcasts may use", () => {
+  test("an explicit allowlist narrows the vocabulary", () => {
     expect(SPEECH_TAGS).toContain("<chuckle>");
-    expect(stripDisallowedTags("Ja <chuckle> klar <sigh>", BRIEFING_TAGS)).toBe("Ja  klar <sigh>");
+    expect(stripDisallowedTags("Ja <chuckle> klar <sigh>", ["<sigh>"])).toBe("Ja  klar <sigh>");
+  });
+});
+
+describe("shared delivery vocabulary", () => {
+  test("resolveDelivery maps keys case-insensitively and falls back for anything else", () => {
+    expect(resolveDelivery("Curious")).toBe(DELIVERY_STYLES.curious);
+    expect(resolveDelivery("furious", "base")).toBe("base");
+    expect(resolveDelivery(undefined)).toBe("");
+  });
+  test("parsePrepResponse turns a delivery key into its style string", () => {
+    const parsed = parsePrepResponse(JSON.stringify({ lang: "de", chunks: [{ delivery: "serious", text: "Ernst." }, { text: "Normal." }] }));
+    expect(parsed.chunks.map((c) => c.style)).toEqual([DELIVERY_STYLES.serious, ""]);
+  });
+  test("normalizeForSpeech keeps allowlisted inline tags and still strips markdown", () => {
+    expect(normalizeForSpeech("Das ist **wichtig** <short pause> und <Laugh> echt ok.", "de")).toBe("Das ist wichtig <short pause> und <laugh> echt ok.");
   });
 });

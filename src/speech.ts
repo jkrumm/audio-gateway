@@ -1,5 +1,6 @@
 import { parseOutputFormat } from "./audio";
 import { config } from "./config";
+import { DELIVERY_KEYS, isDeliveryKey } from "./gemini-tts-core";
 import { handleGeminiSpeech, streamSettled } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
@@ -78,6 +79,7 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
   let stability: number | undefined;
   let style: number | undefined;
   let similarityBoost: number | undefined;
+  let deliveryRaw: string | undefined;
 
   try {
     const json = JSON.parse(body) as Record<string, unknown>;
@@ -95,6 +97,9 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
     stability = typeof json["stability"] === "number" ? json["stability"] : undefined;
     style = typeof json["style"] === "number" ? json["style"] : undefined;
     similarityBoost = typeof json["similarity_boost"] === "number" ? json["similarity_boost"] : undefined;
+    // Gemini lane: a key of the shared delivery vocabulary. `style` is a NUMBER for ElevenLabs, so a string there is read as the same thing.
+    const delivery = json["delivery"] ?? (typeof json["style"] === "string" ? json["style"] : undefined);
+    deliveryRaw = typeof delivery === "string" && delivery.trim() ? delivery : undefined;
   } catch {
     // Bug fix: non-JSON body → 400 JSON, no blank-model usage row.
     return Response.json(
@@ -109,6 +114,13 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
   if (responseFormat === null) {
     return Response.json(
       { error: { message: `unsupported response_format: ${responseFormatRaw}`, type: "invalid_request_error" } },
+      { status: 400 },
+    );
+  }
+
+  if (deliveryRaw !== undefined && !isDeliveryKey(deliveryRaw.trim().toLowerCase())) {
+    return Response.json(
+      { error: { message: `unsupported delivery "${deliveryRaw}" — expected one of: ${DELIVERY_KEYS.join(", ")}`, type: "invalid_request_error" } },
       { status: 400 },
     );
   }
@@ -219,7 +231,7 @@ async function dispatchSpeech(req: Request, caller: string, inflight: number): P
     try {
       const response =
         route.provider === "gemini"
-          ? await handleGeminiSpeech({ model: route.model, input, voice, responseFormat, summarize })
+          ? await handleGeminiSpeech({ model: route.model, input, voice, responseFormat, summarize, delivery: deliveryRaw })
           : await handleReplicateSpeech({
               model: route.model,
               input,

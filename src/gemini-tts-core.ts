@@ -89,7 +89,7 @@ export async function synthConcurrent<I, O>(
 /**
  * Parse the prep LLM's reply into a PrepResult. Tolerates markdown code fences
  * and leading/trailing prose by extracting the first balanced JSON object.
- * Throws if no usable `{lang, chunks:[{style,text}]}` shape is present.
+ * Throws if no usable `{lang, chunks:[{delivery?,text}]}` shape is present.
  */
 export function parsePrepResponse(raw: string): PrepResult {
   const fenced = raw.replace(/```(?:json)?/gi, "").trim();
@@ -107,10 +107,12 @@ export function parsePrepResponse(raw: string): PrepResult {
     throw new Error(`prep returned no chunks: ${raw.slice(0, 200)}`);
   }
   const chunks: PrepChunk[] = parsed.chunks.map((c) => {
-    const obj = (c ?? {}) as { style?: unknown; text?: unknown };
+    const obj = (c ?? {}) as { style?: unknown; delivery?: unknown; text?: unknown };
     const text = typeof obj.text === "string" ? obj.text.trim() : "";
     if (!text) throw new Error("prep chunk missing text");
-    return { style: typeof obj.style === "string" ? obj.style.trim() : "", text };
+    // A vocabulary `delivery` key wins; a legacy free-form `style` is kept verbatim for the caller to vet.
+    const style = resolveDelivery(obj.delivery) || (typeof obj.style === "string" ? obj.style.trim() : "");
+    return { style, text };
   });
   const lang = typeof parsed.lang === "string" ? parsed.lang : "";
   const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
@@ -120,7 +122,8 @@ export function parsePrepResponse(raw: string): PrepResult {
 /**
  * Allowed Gemini 3.8 inline tags (docs/gemini-tts.md §Tag vocabulary) — angle brackets, English,
  * never spoken. Pauses plus a handful of human vocalisations; mood is the style string, not a tag.
- * One allowlist for both lanes: podcasts use all of it, briefing prep a subset ({@link BRIEFING_TAGS}).
+ * One allowlist for every lane — podcast, briefing prep and the chat lane's input pass-through — and one
+ * delivery vocabulary ({@link DELIVERY_STYLES}), so all of them use the same words.
  */
 export const SPEECH_TAGS = [
   "<short pause>", "<long pause>", "<laugh>", "<chuckle>", "<sigh>", "<exhales>", "<breath>", "<whispers>",
@@ -145,13 +148,15 @@ export const DELIVERY_STYLES = {
 
 export type DeliveryKey = keyof typeof DELIVERY_STYLES;
 export const DELIVERY_KEYS = Object.keys(DELIVERY_STYLES) as DeliveryKey[];
+/** The style string for a vocabulary key (case-insensitive), or `fallback` for anything else — nothing outside the vocabulary reaches a TTS request. */
+export function resolveDelivery(key: unknown, fallback = ""): string {
+  const k = typeof key === "string" ? key.trim().toLowerCase() : "";
+  return isDeliveryKey(k) ? DELIVERY_STYLES[k] : fallback;
+}
 export const isDeliveryKey = (value: string): value is DeliveryKey => Object.hasOwn(DELIVERY_STYLES, value);
 
 /** True when a turn's last sentence is a question (a trailing tag aside) — its answer belongs in the same synth request. */
 export const endsOnQuestion = (text: string): boolean => /\?["»“”')\]]*\s*$/.test(text.replace(/<[^<>\n]{1,24}>\s*$/, "").trim());
-
-/** The subset the briefing prep prompt offers the LLM. */
-export const BRIEFING_TAGS = ["<short pause>", "<long pause>", "<laugh>", "<sigh>"] as const;
 
 /** Any `<angle tag>` (no space after `<`, so `a < 5 und b > 3` survives) or `[square]` tag-shaped span. */
 export const TAG_PATTERN = /<[^\s<>][^<>\n]{0,40}>|\[[^\]\n]+\]/g;
@@ -288,7 +293,14 @@ export function normalizeForSpeech(text: string, lang: "de" | "en"): string {
   const de = lang === "de";
   const months = de ? DE_MONTHS : EN_MONTHS;
   const weekdays = de ? DE_WEEKDAYS : EN_WEEKDAYS;
-  let out = text
+  // Allowed inline tags survive: the markdown strip below would eat their closing `>`.
+  const tags: string[] = [];
+  const protectedText = text.replace(TAG_PATTERN, (m) => {
+    if (!SPEECH_TAGS.some((t) => t === m.toLowerCase())) return m;
+    tags.push(m.toLowerCase());
+    return `\uE000${tags.length - 1}\uE001`;
+  });
+  let out = protectedText
     .replace(/[*_`#>]+/g, "")
     .replace(/[★☆•▪●◦✓✔➜→]+/g, " ")
     .replace(/\p{Extended_Pictographic}\uFE0F?/gu, " ")
@@ -305,5 +317,9 @@ export function normalizeForSpeech(text: string, lang: "de" | "en"): string {
   // "Do, 27. Aug.:" → "Donnerstag, 27. August:" — only abbreviated forms with a trailing dot/comma
   out = out.replace(/\b([A-Za-zÄÖÜäöü]{2,4})\.(?=\s|,|:|$)/g, (m, abbr: string) => months[abbr.toLowerCase()] ?? m);
   out = out.replace(/\b([A-Za-z]{2,3})(?=,\s*\d)/g, (m, abbr: string) => weekdays[abbr.toLowerCase()] ?? m);
-  return out.replace(/[ \t]{2,}/g, " ").replace(/\s+([,.;:!?])/g, "$1").trim();
+  return out
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim()
+    .replace(/\uE000(\d+)\uE001/g, (_, i: string) => tags[Number(i)] ?? "");
 }

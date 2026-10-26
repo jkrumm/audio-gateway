@@ -73,6 +73,18 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
 - [ ] modelpick `docs/decisions/podcast-writer.md`: dated rematch section with the table and a **ranked
       recommendation** (quality evidence, cost/episode); verdict pending the owner's ears. Record the expression
       findings in `docs/gemini-tts.md` if new facts were measured.
+- [ ] **(8) Expression in every lane.** Delivery vocabulary + tag allowlist as one shared module in `gemini-tts-core`
+      (podcast, briefing, chat use the same words). Briefing prep: per-chunk style from the vocabulary (stable baseline,
+      deviations where the content turns) and a tag band instead of "sparse" (`PREP_STYLE` / `BRIEFING_TAGS` in
+      `gemini-tts.ts`). Chat lane (flash-lite, prep off): no extra LLM call — allowlisted inline tags in the INPUT pass
+      through, invalid ones are stripped, optional request `style` the caller can set (Hermes writes tags itself; the
+      hermes-agent side is the owner's). Listening proof per lane inside the "Expressiveness" question on `/tts`
+      (briefing: baseline vs expressive; chat: plain vs tagged), synth-only.
+- [ ] **(9) Research stage looks up external names.** The research-gateway tool is wired (max 2 calls) but was used once
+      in ~10 episodes ("only for a fact the episode hinges on … sparingly"). The listener problem is unexplained
+      third-party names (Cortex, engrams, DBOS): make the stage look up external names/projects/tools that neither
+      source nor brain explains (batched into one query), feed the result into the glossary. Measure on `8ee3a4df`
+      with research on: glossary size and first-mention names introduced. `PODCAST_RESEARCH_MAX_CALLS` stays bounded.
 - [ ] Ship proven code (delivery field, synth wiring, lint, prompt/tag policy, Sonnet fix) with tests, `/review`, gates;
       commit per concern; push; `make deploy` on the mini only when no podcast job runs; modelpick deployed + verified
       (`/tts` 200, every new audio file resolves). Report actual IU spend.

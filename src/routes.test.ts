@@ -189,6 +189,17 @@ describe("Bug fix: non-JSON speech body → 400, no usage row", () => {
     expect((json["error"] as Record<string, unknown>)?.["type"]).toBe("invalid_request_error");
   });
 
+  test("an unknown delivery key is a 400 naming the vocabulary, before any upstream call", async () => {
+    const req = authed(new Request("http://localhost/v1/audio/speech", {
+      method: "POST",
+      body: JSON.stringify({ model: "gemini-3.8-flash-lite-tts", input: "Hallo.", delivery: "furious" }),
+      headers: { "content-type": "application/json" },
+    }));
+    const res = await handleRequest(req);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain("curious");
+  });
+
   test("writes NO usage row", async () => {
     const req = authed(new Request("http://localhost/v1/audio/speech", {
       method: "POST",

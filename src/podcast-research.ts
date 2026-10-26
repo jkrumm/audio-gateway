@@ -297,7 +297,7 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
   return {
     name: "research",
     description:
-      "Run a web research query through the research gateway, only for a fact the episode hinges on that the listener's material and brain don't answer. Budgeted — use sparingly.",
+      "Run a web research query through the research gateway: (1) look up the external third-party names, projects, tools, companies or standards the SOURCE uses that neither the SOURCE nor the brain explains — ONE batched query naming all of them (\"what are X, Y and Z: one plain sentence each, and what each is for\"), and (2) a fact the episode hinges on that the listener's material and brain don't answer. Budgeted (a few calls per episode) — batch, never one call per name.",
     parameters: {
       type: "object",
       properties: {
@@ -447,7 +447,7 @@ function buildSystemPrompt(input: ResearchInput, deps: ResearchDeps): string {
 
   return `You are the researcher of "${input.series}", a two-host podcast in ${languageName} that turns the listener's own notes into an episode.
 
-The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and — only when a fact the episode hinges on is missing or unclear — one or two research runs. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle. Be economical: few, well-chosen tool calls.
+The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). A second run is for a fact the episode hinges on that is still missing. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. Be economical: few, well-chosen tool calls — batch, never one call per name.
 
 Finish with STRICT JSON and nothing else, matching exactly this shape:
 {"summary":"…","additions":[{"source":"brain: <path>"|"research: <query>"|"episode: <id>","text":"…"}],"glossary":[{"term":"…","plain":"…"}],"priorCoverage":[{"episodeId":"…","title":"…","covered":"…"}],"openQuestions":["…"]}${availability}`;

@@ -2,7 +2,7 @@ import type { AudioOutputFormat, ChunkAudio } from "./audio";
 import { concatPcm, SAMPLE_RATE_DEFAULT, silencePcm, transcode } from "./audio";
 import { config } from "./config";
 import type { ChunkLimits, PrepChunk, PrepResult } from "./gemini-tts-core";
-import { BRIEFING_TAGS, TAG_PATTERN, detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
+import { DELIVERY_KEYS, DELIVERY_STYLES, SPEECH_TAGS, TAG_PATTERN, detectLanguage, enforceChunkLimits, normalizeForSpeech, parsePrepResponse, resolveDelivery, stripDisallowedTags, synthConcurrent } from "./gemini-tts-core";
 import { iuGeminiUrl, iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import { resolveReasoningEffort } from "./model-resolution";
@@ -40,6 +40,8 @@ export interface GeminiSpeechRequest {
   voice: string;
   responseFormat: AudioOutputFormat;
   summarize: boolean;
+  /** A key of the shared delivery vocabulary the caller wants for the whole request (the chat lane has no prep to choose one); wins over a prep-chosen style. */
+  delivery?: string;
 }
 
 /**
@@ -48,8 +50,9 @@ export interface GeminiSpeechRequest {
  * across chunks so the voice does not drift between requests (docs/gemini-tts.md §Style control).
  */
 export const PREP_STYLE = "calm, warm, conversational";
-/** A prep-supplied style longer than this is a sentence of direction, not a style string — replaced by {@link PREP_STYLE}. */
-const MAX_STYLE_CHARS = 60;
+const VOCABULARY_STYLES = new Set<string>([PREP_STYLE, ...Object.values(DELIVERY_STYLES)]);
+const DELIVERY_LIST = DELIVERY_KEYS.join(", ");
+const TAG_LIST = SPEECH_TAGS.join(" ");
 
 export const SUMMARY_SYSTEM_PROMPT = `You turn an assistant reply into what should be SPOKEN aloud, in the persona of Hermes — a calm, warm, concise "sharp older friend". The user reads the written reply on screen; the spoken rendering is for the ear. There is no length limit: decide from the text how much deserves to be heard.
 
@@ -74,11 +77,11 @@ Your job, in order:
 2. Write a short title (3–6 words) summarizing the content, IN the transcript's language, suitable as a filename/label: plain words, no quotes, no trailing punctuation, no emoji.
 3. Rewrite numbers, times, dates, units, symbols and abbreviations into the spoken form IN that language (German: "Viertel nach neun", "neunzig Kilo", "achtzehn Uhr dreißig", "zum Beispiel", "Millionen Euro"; English: "quarter past nine", "ninety kilos"). Do not translate the text — keep its language. Times, dates, prices and versions stay exact. For statistics and large counts where the exact digits do not matter, round to the figure a person would say ("gut viertausend Nutzer", "rund dreizehnhundert Euro") and keep to about one figure per sentence. Round only into forms people actually say: small decimals stay decimals ("null Komma drei Sekunden"), never unusual fractions ("eine drittel Sekunde"); "halb" and "Viertel" only where they are idiomatic. No markdown, bullet characters or emoji.
 4. Split the text into chunks of about 110 words each (never more than 150, roughly 1,000 characters), so each chunk is only about 50 seconds of speech — Gemini TTS drifts and drops words on longer generations. Break at paragraph boundaries first, then at sentence boundaries; never split in the middle of a sentence. Short text stays a single chunk.
-5. Set every chunk's "style" to exactly "${PREP_STYLE}" — identical across chunks. Never put direction, emotion words or "Style:" prefixes inside "text"; they would be read aloud.
-6. Embed SPARSE inline tags inside "text" at natural beats, in angle brackets, always in English even inside German text: <short pause> (about a quarter second), <long pause> (about a second), and — only where it genuinely fits — <laugh> or <sigh>. At most one or two tags per chunk, never two tags next to each other, none at all in most chunks. No square-bracket tags, no emotion tags, no other tag names.
+5. Delivery: every chunk has a stable baseline (the voice's calm, warm, conversational default) and carries NO "delivery" field. Set "delivery" ONLY on a chunk where the content turns — bad news, a warning, good news, a dry aside, something to think about — to exactly one of: ${DELIVERY_LIST}. Never the same non-baseline delivery on three chunks in a row. Never put direction, emotion words or "Style:" prefixes inside "text"; they would be read aloud.
+6. Embed inline tags inside "text" where a real speaker would pause or react, in angle brackets, always in English even inside German text. The only tags: ${TAG_LIST}. Use a few well-placed ones: a <short pause> before the figure or turn that matters, a <long pause> once for weight, a reaction (<laugh>, <chuckle>, <sigh>) only where the content truly calls for it — roughly one to three tags per chunk of about a hundred words, between two sentences, never as the first word of the chunk, never two tags side by side. No square-bracket tags, no emotion tags, no other tag names.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"lang":"de"|"en","title":"<short title>","chunks":[{"style":"${PREP_STYLE}","text":"<transcript with sparse <tags>>"}]}`;
+{"lang":"de"|"en","title":"<short title>","chunks":[{"delivery":"<optional: one of ${DELIVERY_LIST} — omit on a baseline chunk>","text":"<transcript with <tags>>"}]}`;
 
 /** First few words of the input as a fallback title for the no-LLM path. */
 function fallbackTitle(input: string, de: boolean): string {
@@ -92,7 +95,9 @@ function defaultPrep(input: string): PrepResult {
   const de = (detectLanguage(input) ?? config.ttsDefaultLanguage) === "de";
   const lang = de ? "de" : "en";
   // Deterministic cleanup only (markdown, emoji, °C, "z. B.") — the model speaks what it is given.
-  return { lang, title: fallbackTitle(input, de), chunks: [{ style: "", text: normalizeForSpeech(input, lang) }] };
+  // Chat lane: no extra LLM call, so the caller's own inline tags are the only expression — allowlisted ones pass through, anything else tag-shaped is dropped.
+  const text = normalizeForSpeech(stripDisallowedTags(input), lang);
+  return { lang, title: fallbackTitle(input, de), chunks: [{ style: "", text }] };
 }
 
 /** Whether `model` is configured to run the prep LLM (`TTS_GEMINI_PREP_MODELS`, id or prefix). */
@@ -377,8 +382,9 @@ async function runPrep(model: string, input: string, summarize: boolean): Promis
       const parsed = parsePrepResponse(content);
       const chunks = parsed.chunks
         .map((c) => ({
-          style: c.style && c.style.length <= MAX_STYLE_CHARS ? c.style : PREP_STYLE,
-          text: stripDisallowedTags(c.text, BRIEFING_TAGS).replace(/[ \t]{2,}/g, " ").trim(),
+          // Vocabulary strings only: a prep-invented style ("speak slowly, like a friend at the fireside") never reaches the request.
+          style: VOCABULARY_STYLES.has(c.style) ? c.style : PREP_STYLE,
+          text: stripDisallowedTags(c.text).replace(/[ \t]{2,}/g, " ").trim(),
         }))
         .filter((c) => c.text.replace(TAG_PATTERN, "").trim());
       if (chunks.length === 0) {
@@ -807,7 +813,7 @@ async function streamGeminiSpeech(params: {
 }
 
 export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<Response> {
-  const { model, input, voice, responseFormat, summarize } = reqBody;
+  const { model, input, voice, responseFormat, summarize, delivery } = reqBody;
   if (!config.iuGeminiBaseUrl) {
     throw new Error("IU_GEMINI_BASE_URL is not configured — required for Gemini TTS");
   }
@@ -820,7 +826,8 @@ export async function handleGeminiSpeech(reqBody: GeminiSpeechRequest): Promise<
   // Enforce the per-chunk ceiling regardless of how the prep LLM split things —
   // long chunks are the cause of mid-audio voice drift. Re-splits at natural
   // boundaries; short inputs and well-behaved chunks pass through untouched.
-  const chunks = enforceChunkLimits(prep.chunks, CHUNK_LIMITS);
+  const callerStyle = resolveDelivery(delivery);
+  const chunks = enforceChunkLimits(callerStyle ? prep.chunks.map((c) => ({ ...c, style: callerStyle })) : prep.chunks, CHUNK_LIMITS);
 
   // Surface as much of the request-level summary meta as is known before synth
   // even starts, so a later synth failure still leaves lane/mode/chunks visible

@@ -23,6 +23,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
+const { DELIVERY_STYLES } = await import("./gemini-tts-core");
 const { synthChunksConcurrent, handleGeminiSpeech, synthBody, stripWavHeader, multiSpeakerBody, synthMultiSpeaker, sseAudio, geminiWantsPrep, streamSettled, PREP_STYLE, retryHintMs, readBodyHint, RETRY_HINT_BODY_MAX_BYTES } = await import("./gemini-tts");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
@@ -642,5 +643,67 @@ describe("multiSpeakerBody — 3.8 two-speaker request", () => {
     expect(out.pcm.byteLength).toBe(480);
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("/models/gemini-3.8-flash-tts:generateContent");
+  });
+});
+
+describe("expression in every lane", () => {
+  const sentBody = async (input: string, extra: Record<string, unknown> = {}, summarize = false) => {
+    let sent: { contents: Array<{ parts: Array<{ text: string; speechMetadata?: { style: string } }> }> } | undefined;
+    setFetch(async (url, init) => {
+      if (String(url).includes("/chat/completions")) {
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify({ lang: "de", title: "T", chunks: [{ delivery: "serious", text: "Ernst <short pause> weiter <sniff> so." }, { text: "Normal." }] }) } }] }),
+          { status: 200 },
+        );
+      }
+      sent = JSON.parse(String(init?.body));
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+    await handleGeminiSpeech({ model: "gemini-3.8-flash-lite-tts", input, voice: "Charon", responseFormat: "mp3", summarize, ...extra });
+    return sent!;
+  };
+
+  test("chat lane: allowlisted inline tags in the input pass through, invented ones are stripped", async () => {
+    const body = await sentBody("Das ist **wichtig** <short pause> und <laugh> echt <excited> gut [sigh].");
+    expect(body.contents[0]?.parts[0]?.text).toBe("Das ist wichtig <short pause> und <laugh> echt gut.");
+    expect(body.contents[0]?.parts[0]?.speechMetadata).toBeUndefined();
+  });
+
+  test("chat lane: a caller delivery key becomes the request style, no LLM call", async () => {
+    const body = await sentBody("Kurz und knapp.", { delivery: "curious" });
+    expect(body.contents[0]?.parts[0]?.speechMetadata).toEqual({ style: DELIVERY_STYLES.curious });
+  });
+
+  test("briefing prep: a chunk's delivery key maps to its style, the rest keep the baseline, invented tags go", async () => {
+    const styles: Array<string | undefined> = [];
+    const texts: string[] = [];
+    setFetch(async (url, init) => {
+      if (String(url).includes("/chat/completions")) {
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: JSON.stringify({ lang: "de", title: "T", chunks: [{ delivery: "serious", text: "Ernst <short pause> weiter <sniff> so." }, { text: "Normal." }] }) } }] }),
+          { status: 200 },
+        );
+      }
+      const body = JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ text: string; speechMetadata?: { style: string } }> }> };
+      styles.push(body.contents[0]?.parts[0]?.speechMetadata?.style);
+      texts.push(body.contents[0]?.parts[0]?.text ?? "");
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+    await handleGeminiSpeech({ model: "gemini-3.8-flash-tts", input: "Ein Briefing.", voice: "Charon", responseFormat: "mp3", summarize: true });
+    expect(styles).toEqual([DELIVERY_STYLES.serious, PREP_STYLE]);
+    expect(texts[0]).toBe("Ernst <short pause> weiter so.");
+  });
+
+  test("a caller delivery overrides what prep chose", async () => {
+    const styles: Array<string | undefined> = [];
+    setFetch(async (url, init) => {
+      if (String(url).includes("/chat/completions")) {
+        return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ lang: "de", title: "T", chunks: [{ delivery: "serious", text: "Ernst." }] }) } }] }), { status: 200 });
+      }
+      styles.push((JSON.parse(String(init?.body)) as { contents: Array<{ parts: Array<{ speechMetadata?: { style: string } }> }> }).contents[0]?.parts[0]?.speechMetadata?.style);
+      return geminiAudio(Uint8Array.from([1, 0]));
+    });
+    await handleGeminiSpeech({ model: "gemini-3.8-flash-tts", input: "Ein Briefing.", voice: "Charon", responseFormat: "mp3", summarize: true, delivery: "warm" });
+    expect(styles).toEqual([DELIVERY_STYLES.warm]);
   });
 });
