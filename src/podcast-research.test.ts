@@ -261,6 +261,12 @@ describe("research tool", () => {
     expect(spend.usd).toBeCloseTo(0.03);
   });
 
+  test("maxCalls 0 means unlimited, not exhausted", async () => {
+    const { fetchImpl } = scriptedFetch([rawRes(200, { jobId: "j" }), rawRes(200, { status: "done", result: { report: "ok" } })]);
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 0 }, fetchImpl, pollIntervalMs: 0 });
+    expect(await findTool(tools, "research").execute({ query: "q" })).toContain("ok");
+  });
+
   test("no spend ceiling: reported spend accumulates for the profile but never blocks a run", async () => {
     const { fetchImpl, count } = scriptedFetch([
       rawRes(200, { jobId: "job-1" }),

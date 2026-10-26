@@ -321,7 +321,7 @@ function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { 
       const key = normalize(args.query);
       const earlier = answered.get(key);
       if (earlier !== undefined) return `(this exact query was already run — same result)\n${earlier}`;
-      if (research.maxCalls !== undefined && used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
+      if (research.maxCalls !== undefined && research.maxCalls > 0 && used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
 
       const submitRes = await fetchImpl(`${research.url}/research/`, {
         method: "POST",

@@ -62,13 +62,13 @@ const history = {
   },
 };
 
-console.log(`research (brain ${config.brainDir ? "on" : "OFF"}, gateway ${config.researchApiKey ? "on" : "OFF"}, max ${config.podcastResearchMaxCalls} calls)`);
+console.log(`research (brain ${config.brainDir ? "on" : "OFF"}, gateway ${config.researchApiKey ? "on" : "OFF"}, max ${config.podcastResearchMaxCalls || "unlimited"} calls)`);
 ledger.guard(0.3);
 const dossier = await runPodcastResearch(
   { source: base.source, brief: base.brief, title: base.title, language: base.language, series: base.series },
   {
     brainDir: config.brainDir || undefined,
-    research: config.researchApiKey ? { url: config.researchGatewayUrl, apiKey: config.researchApiKey, maxCalls: config.podcastResearchMaxCalls } : undefined,
+    research: config.researchApiKey ? { url: config.researchGatewayUrl, apiKey: config.researchApiKey, ...(config.podcastResearchMaxCalls > 0 && { maxCalls: config.podcastResearchMaxCalls }) } : undefined,
     history,
     model: config.podcastResearchModel,
     reasoningEffort: resolveReasoningEffort(config.podcastResearchModel, config.podcastResearchEffort),
