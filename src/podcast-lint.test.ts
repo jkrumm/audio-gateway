@@ -208,4 +208,10 @@ describe("regression: episode 503c28f0 (the real 'Mit Schale, mit Erde' script)"
     expect(rules([seg([["A", "Wir haben dazu keine Informationen gefunden."]])])).toContain("research-gap");
     expect(rules([seg([["A", "Wir haben dazu einen guten Artikel gefunden."]])])).not.toContain("research-gap");
   });
+
+  test("subject-first word order and an umlaut word in the gap are also caught", () => {
+    expect(rules([seg([["A", "Wir haben dazu nichts gefunden."]])])).toContain("research-gap");
+    expect(rules([seg([["A", "Wir konnten dazu nichts finden."]])])).toContain("research-gap");
+    expect(rules([seg([["A", "Dazu haben wir tatsächlich nichts gefunden."]])])).toContain("research-gap");
+  });
 });

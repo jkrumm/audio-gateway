@@ -47,6 +47,8 @@ const RESEARCH_REPORT_MAX_CHARS = 20_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_PAST_EPISODES_LIMIT = 10;
 const DEFAULT_POLL_INTERVAL_MS = 10_000;
+/** Research runs before the editorial pass, so no load-bearing-fact list exists yet to check `depth` against (see `researchTool`) — the model's own choice of `standard` is enforced in code, not just asked for in the prompt. */
+const MAX_STANDARD_DEPTH_CALLS_PER_RUN = 1;
 
 // ---------------------------------------------------------------------------
 // Vault access — path containment, frontmatter, search
@@ -296,6 +298,8 @@ interface ResearchGatewayPollResponse {
 
 function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { usd: number }, fetchImpl: ToolLoopFetch, pollIntervalMs: number): ToolDef {
   let used = 0;
+  /** `standard` calls actually honored so far this run — see `MAX_STANDARD_DEPTH_CALLS_PER_RUN`. */
+  let standardUsed = 0;
   /** An identical query returns what it returned the first time — no second run, no second charge. */
   const answered = new Map<string, string>();
   const normalize = (q: string): string => q.toLowerCase().replace(/\s+/g, " ").trim();
@@ -311,8 +315,7 @@ function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { 
         depth: {
           type: "string",
           enum: ["quick", "standard"],
-          description:
-            "Default quick — a name or term that only needs one plain sentence. Use standard only for a fact the episode's listener asks or through-line directly hinges on, where quick's answer would be too thin to stand behind on air.",
+          description: `Default quick — a name or term that only needs one plain sentence. Use standard only for a fact the episode's listener asks or through-line directly hinges on, where quick's answer would be too thin to stand behind on air. Enforced in code: at most ${MAX_STANDARD_DEPTH_CALLS_PER_RUN} standard call(s) per episode — pick the one fact that most needs it, every other request runs at quick.`,
         },
       },
       required: ["query"],
@@ -322,8 +325,13 @@ function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { 
       if (args.depth !== undefined && args.depth !== "quick" && args.depth !== "standard") {
         return `error: invalid depth "${args.depth}", expected "quick" or "standard"`;
       }
-      const depth = args.depth ?? "quick";
-      const key = `${args.depth ?? "quick"}\u0000${normalize(args.query)}`;
+      // The model picks `depth` before any load-bearing-fact list exists (research runs
+      // before the editorial pass) — code, not the prompt, caps how many calls actually
+      // run at `standard` per episode; the rest are downgraded to `quick` regardless of
+      // what was requested.
+      const depth = args.depth === "standard" && standardUsed < MAX_STANDARD_DEPTH_CALLS_PER_RUN ? "standard" : "quick";
+      if (depth === "standard") standardUsed++;
+      const key = `${depth}\u0000${normalize(args.query)}`;
       const earlier = answered.get(key);
       if (earlier !== undefined) return `(this exact query was already run — same result)\n${earlier}`;
       if (research.maxCalls !== undefined && research.maxCalls > 0 && used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
@@ -464,7 +472,7 @@ function buildSystemPrompt(input: ResearchInput, deps: ResearchDeps): string {
 
   return `You are the researcher of "${input.series}", a two-host podcast in ${languageName} that turns the listener's own notes into an episode.
 
-The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). Web research is expected, not a last resort: follow with further, distinct runs for every fact the episode hinges on, every claim the notes make about the outside world that you cannot confirm from the brain, and every name the first run left unclear. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. There is no research budget to ration — quality first — but batch the names, never one call per name, never the same query twice. Depth defaults to quick; reach for standard only on a fact the listener's asks or the episode's through-line directly hinges on, where a quick answer would be too thin to put on air.
+The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). Web research is expected, not a last resort: follow with further, distinct runs for every fact the episode hinges on, every claim the notes make about the outside world that you cannot confirm from the brain, and every name the first run left unclear. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. There is no research budget to ration — quality first — but batch the names, never one call per name, never the same query twice. Depth defaults to quick; reach for standard only on the one fact the listener's asks or the episode's through-line most directly hinges on, where a quick answer would be too thin to put on air — code enforces at most ${MAX_STANDARD_DEPTH_CALLS_PER_RUN} standard call(s) per episode, every other request runs at quick regardless of the depth you pass.
 
 Finish with STRICT JSON and nothing else, matching exactly this shape:
 {"summary":"…","additions":[{"source":"brain: <path>"|"research: <query>"|"episode: <id>","text":"…"}],"glossary":[{"term":"…","plain":"…"}],"priorCoverage":[{"episodeId":"…","title":"…","covered":"…"}],"openQuestions":["…"]}${availability}`;
