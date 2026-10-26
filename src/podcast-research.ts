@@ -25,7 +25,9 @@ export interface ResearchDeps {
   /** Empty/undefined → no brain tools. */
   brainDir?: string;
   /** Undefined → no research tool. */
-  research?: { url: string; apiKey: string; maxCalls: number };
+  research?: { url: string; apiKey: string; maxCalls: number; /** Runaway guard: no new run once the reported spend reaches this (USD). Undefined = no guard. */ maxUsd?: number };
+  /** Running research-gateway spend of this job; the caller reads it after the run (profile). Created by `runPodcastResearch` when absent. */
+  spend?: { usd: number };
   history: EpisodeHistory;
   model: string;
   /** Top-level `reasoning_effort` for `model`, already resolved via `resolveReasoningEffort`; omitted entirely when unset. */
@@ -287,17 +289,20 @@ interface ResearchGatewaySubmitResponse {
 
 interface ResearchGatewayPollResponse {
   status: string;
-  result?: { report?: string; sources?: string[] };
+  result?: { report?: string; sources?: string[]; cost?: { totalUsd?: number } };
   error?: string;
 }
 
-function researchTool(research: { url: string; apiKey: string; maxCalls: number }, fetchImpl: ToolLoopFetch, pollIntervalMs: number): ToolDef {
+function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { usd: number }, fetchImpl: ToolLoopFetch, pollIntervalMs: number): ToolDef {
   let used = 0;
+  /** An identical query returns what it returned the first time — no second run, no second charge. */
+  const answered = new Map<string, string>();
+  const normalize = (q: string): string => q.toLowerCase().replace(/\s+/g, " ").trim();
   const headers = { Authorization: `Bearer ${research.apiKey}`, "content-type": "application/json" };
   return {
     name: "research",
     description:
-      "Run a web research query through the research gateway: (1) look up the external third-party names, projects, tools, companies or standards the SOURCE uses that neither the SOURCE nor the brain explains — ONE batched query naming all of them (\"what are X, Y and Z: one plain sentence each, and what each is for\"), and (2) a fact the episode hinges on that the listener's material and brain don't answer. Budgeted (a few calls per episode) — batch, never one call per name.",
+      "Web research through the research gateway — EXPECTED, not a last resort, for anything the listener needs that the SOURCE and the brain do not explain: the external third-party names, projects, tools, companies and standards the notes take for granted (batch them in ONE query asking for one plain sentence each: what it is and what it is for here), facts the episode hinges on, current numbers, and the claims the notes make about the outside world. Several runs per episode are normal; keep each query specific and distinct (an identical query is not run twice). Bounded by a call and a spend budget.",
     parameters: {
       type: "object",
       properties: {
@@ -312,7 +317,11 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
         return `error: invalid depth "${args.depth}", expected "quick" or "standard"`;
       }
       const depth = args.depth ?? "quick";
+      const key = normalize(args.query);
+      const earlier = answered.get(key);
+      if (earlier !== undefined) return `(this exact query was already run — same result)\n${earlier}`;
       if (used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
+      if (research.maxUsd !== undefined && spend.usd >= research.maxUsd) return `research spend guard reached ($${spend.usd.toFixed(2)} of $${research.maxUsd.toFixed(2)})`;
 
       const submitRes = await fetchImpl(`${research.url}/research/`, {
         method: "POST",
@@ -346,7 +355,10 @@ function researchTool(research: { url: string; apiKey: string; maxCalls: number 
           const report = (parsed.result?.report ?? "").slice(0, RESEARCH_REPORT_MAX_CHARS);
           const sources = parsed.result?.sources ?? [];
           const sourcesBlock = sources.length > 0 ? `\n\nSources:\n${sources.map((s) => `- ${s}`).join("\n")}` : "";
-          return `${report}${sourcesBlock}`;
+          spend.usd += parsed.result?.cost?.totalUsd ?? 0;
+          const answer = `${report}${sourcesBlock}`;
+          answered.set(key, answer);
+          return answer;
         }
         if (parsed.status === "failed" || parsed.status === "error") {
           return `error: research failed: ${parsed.error ?? "unknown error"}`;
@@ -372,7 +384,7 @@ export function buildResearchTools(deps: ResearchDeps): ToolDef[] {
   tools.push(pastEpisodesTool(deps.history));
   tools.push(pastTranscriptTool(deps.history));
   if (deps.research) {
-    tools.push(researchTool(deps.research, deps.fetchImpl ?? rawFetch, deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
+    tools.push(researchTool(deps.research, (deps.spend ??= { usd: 0 }), deps.fetchImpl ?? rawFetch, deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
   }
   return tools;
 }
@@ -447,7 +459,7 @@ function buildSystemPrompt(input: ResearchInput, deps: ResearchDeps): string {
 
   return `You are the researcher of "${input.series}", a two-host podcast in ${languageName} that turns the listener's own notes into an episode.
 
-The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). A second run is for a fact the episode hinges on that is still missing. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. Be economical: few, well-chosen tool calls — batch, never one call per name.
+The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). Web research is expected, not a last resort: follow with further, distinct runs for every fact the episode hinges on, every claim the notes make about the outside world that you cannot confirm from the brain, and every name the first run left unclear. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. The budget is generous but real: batch the names, never one call per name, never the same query twice.
 
 Finish with STRICT JSON and nothing else, matching exactly this shape:
 {"summary":"…","additions":[{"source":"brain: <path>"|"research: <query>"|"episode: <id>","text":"…"}],"glossary":[{"term":"…","plain":"…"}],"priorCoverage":[{"episodeId":"…","title":"…","covered":"…"}],"openQuestions":["…"]}${availability}`;
@@ -462,6 +474,7 @@ function buildUserContent(input: ResearchInput): string {
 
 /** Run the research stage; rethrows on failure — the caller decides to proceed without a dossier. */
 export async function runPodcastResearch(input: ResearchInput, deps: ResearchDeps): Promise<Dossier> {
+  const spend = (deps.spend ??= { usd: 0 });
   const tools = buildResearchTools(deps);
   const result = await runToolLoop({
     model: deps.model,
@@ -480,5 +493,5 @@ export async function runPodcastResearch(input: ResearchInput, deps: ResearchDep
     fetchImpl: deps.fetchImpl,
   });
   const dossier = parseDossier(result.content);
-  return { ...dossier, toolCalls: result.calls };
+  return { ...dossier, toolCalls: result.calls, researchUsd: spend.usd };
 }

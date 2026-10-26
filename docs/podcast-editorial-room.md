@@ -54,7 +54,7 @@ to make the writers' room *understand* it — not to rewrite it. Tools:
 | `brain_read` | `{ path: string }` | `{ path, frontmatter, body }` (body capped at 60k chars) | Path must resolve inside `BRAIN_DIR` (reject `..` and symlink escapes) |
 | `past_episodes` | `{ limit?: number }` | `[{ id, date, title, description, profile }]` for `done` jobs of the same series | `PodcastStore.recentEpisodes` |
 | `past_transcript` | `{ id: string }` | markdown transcript (capped at 40k chars) | `renderTranscriptMarkdown` over the persisted script |
-| `research` | `{ query: string, depth?: "quick" \| "standard" }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error` — unbounded (research-gateway itself has no time cap), with a heartbeat log line once a minute so a human tailing logs sees it's alive. Budget `config.podcastResearchMaxCalls` (default 2, a spend cap on real research-gateway calls, not a step cap); the tool returns an error string once exhausted |
+| `research` | `{ query: string, depth?: "quick" \| "standard" }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error` — unbounded (research-gateway itself has no time cap), with a heartbeat log line once a minute so a human tailing logs sees it's alive. Budget `config.podcastResearchMaxCalls` (default 12) plus the `PODCAST_RESEARCH_MAX_USD` guard (default $3, read from each report's `cost.totalUsd`); identical queries are answered from the first run; the tool returns an error string once exhausted |
 
 The loop ends when the model returns a final JSON object (no tool call) — no round
 cap (agent workers have no turn ceiling). Each round's model call is idle-guarded
@@ -225,7 +225,7 @@ The CLI (`scripts/podcast.ts`) gets `--path <brain path>` (repeatable), `--no-re
 | `RESEARCH_API_KEY` | `""` | `op://vps/research-gateway/API_SECRET`; empty disables the `research` tool |
 | `PODCAST_RESEARCH_MODEL` / `PODCAST_RESEARCH_EFFORT` | `deepseek-v4.1-flash` / `high` | tool-calling researcher (2026-09-13 rollout; Luna until 2026-09-07, then Terra, now deepseek-v4.1-flash — see `docs/podcast.md`) |
 | `PODCAST_EDITORIAL_MODEL` / `PODCAST_EDITORIAL_EFFORT` | `deepseek-v4.1-flash` / `high` | the editor |
-| `PODCAST_RESEARCH_MAX_CALLS` | `2` | research-gateway calls per job (spend cap, not a step cap) |
+| `PODCAST_RESEARCH_MAX_CALLS` | `12` | research-gateway runs per job; `PODCAST_RESEARCH_MAX_USD` (`3`) is the per-job spend guard |
 | `PODCAST_HISTORY_DEPTH` | `8` | episodes shown to the editor |
 | `PODCAST_DENSE_TURN_THRESHOLD` | `0.12` | number-word density that triggers the slowdown |
 | `PODCAST_DENSE_TURN_SLOWDOWN` | `0.06` | speed delta for dense turns |

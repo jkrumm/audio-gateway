@@ -73,6 +73,19 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
 - [ ] modelpick `docs/decisions/podcast-writer.md`: dated rematch section with the table and a **ranked
       recommendation** (quality evidence, cost/episode); verdict pending the owner's ears. Record the expression
       findings in `docs/gemini-tts.md` if new facts were measured.
+- [ ] **(10) Research without the starvation budget (architecture, BEFORE the rematch).** Brain AND web, whatever it
+      takes: `PODCAST_RESEARCH_MAX_CALLS` default ~12 plus a per-episode USD runaway guard (`PODCAST_RESEARCH_MAX_USD`,
+      default $3), identical queries deduped, tool description says web research is EXPECTED for anything the listener
+      needs that notes/brain do not explain; research spend in the job profile.
+- [ ] **(11) Agentic writer (architecture, BEFORE the rematch).** The single-shot draft cannot measure its own text.
+      Per-segment draft + revision become a tool loop on the existing `src/llm-tools.ts` `runToolLoop` (no new
+      framework): `lint_segment` (lint + expression/segmentation, metrics: words vs target, turn lengths, questions,
+      tags/delivery), `glossary_lookup` / `brain_search` / `brain_read`, `submit_segment` (validates JSON + lint, rejects
+      with findings until clean or the model accepts remaining advisory findings with a reason). Claude: native
+      Anthropic tool use in the loop (keep caching) or prove IU serves Claude tools on the OpenAI route — pick the
+      cleaner. Reviewer panel stays after the loop. Measure one segment vs single-shot (lint, words/target, cost, wall);
+      then the rematch runs with this writer for every candidate. Single-shot rematch partials (Opus, Haiku, Luna) kept
+      in `data/wave3/singleshot/` as the "before" ($2.1 of the $4 cap spent there).
 - [ ] **(8) Expression in every lane.** Delivery vocabulary + tag allowlist as one shared module in `gemini-tts-core`
       (podcast, briefing, chat use the same words). Briefing prep: per-chunk style from the vocabulary (stable baseline,
       deviations where the content turns) and a tag band instead of "sparse" (`PREP_STYLE` / `BRIEFING_TAGS` in

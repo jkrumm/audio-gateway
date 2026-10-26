@@ -239,6 +239,41 @@ describe("research tool", () => {
     expect(count()).toBe(2); // second call made no network requests
   });
 
+  test("an identical query is answered from the first run — no second job, no second charge", async () => {
+    const { fetchImpl, count } = scriptedFetch([
+      rawRes(200, { jobId: "job-1" }),
+      rawRes(200, { status: "done", result: { report: "the report", cost: { totalUsd: 0.03 } } }),
+    ]);
+    const spend = { usd: 0 };
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 5 }, spend, fetchImpl, pollIntervalMs: 0 });
+    const tool = findTool(tools, "research");
+    await tool.execute({ query: "Was ist  DBOS?" });
+    const again = await tool.execute({ query: "was ist dbos?" });
+    expect(again).toContain("the report");
+    expect(count()).toBe(2);
+    expect(spend.usd).toBeCloseTo(0.03);
+  });
+
+  test("the USD guard stops new runs once the reported spend reaches it", async () => {
+    const { fetchImpl, count } = scriptedFetch([
+      rawRes(200, { jobId: "job-1" }),
+      rawRes(200, { status: "done", result: { report: "r1", cost: { totalUsd: 1.5 } } }),
+    ]);
+    const spend = { usd: 0 };
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 12, maxUsd: 1 }, spend, fetchImpl, pollIntervalMs: 0 });
+    const tool = findTool(tools, "research");
+    await tool.execute({ query: "q1" });
+    expect(await tool.execute({ query: "q2" })).toContain("spend guard reached");
+    expect(count()).toBe(2);
+  });
+
+  test("the tool description expects web research for what notes and brain do not explain", () => {
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://r.example.com", apiKey: "k", maxCalls: 12 } });
+    const description = findTool(tools, "research").description;
+    expect(description).toContain("EXPECTED");
+    expect(description).not.toContain("sparingly");
+  });
+
   test("polls queued → running → done", async () => {
     const { fetchImpl } = scriptedFetch([
       rawRes(200, { jobId: "job-1" }),
