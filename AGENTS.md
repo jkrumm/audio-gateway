@@ -107,7 +107,14 @@ pipeline (both retired 2026-06-17).
   `output_config: {effort: "high"}` (claude-opus-5-5 rejects `thinking.type.enabled` with a 400),
   `max_tokens` floor 32000, `text` blocks only, 500/502/504 + retryable stream errors + empty/unparseable
   2xx bodies (incl. an SSE body with no valid event) + a 15-min per-attempt timeout retried (429/503 by `rawFetch`). `callPodcastLlm` dispatches on the `claude-` prefix; every other model
-  stays on chat/completions.
+  stays on chat/completions. `callAnthropicMessages` takes a `cacheablePrefix` (the episode-stable leading part of
+  `system`: house rules, voice, show bible, brief) and sends it as its own `cache_control: ephemeral` block; the
+  segment and revision calls pass `baseSystemPrompt(...)`. A prefix that does not lead the system prompt logs a warning
+  and calls uncached. Measured 2026-10-26: ~10k tokens per call, second call −52% input cost.
+- `src/podcast-lint.ts` — deterministic script lint (stock phrases, >130-word turns, echoed reactions, segments with no
+  question, metronomic turn lengths, acronyms/glossary terms used before an introducing clause; an all-caps token is an
+  acronym only if the source spells it that way). `writePodcastScript` renders its report into every reviewer's input and
+  turns stock-phrase / unintroduced-term findings into revision notes.
 - `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
   dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,
   roles, tone, humor, opening, closing and rhythm; devices (hook/motif/reveals/digressions) are
@@ -132,6 +139,9 @@ pipeline (both retired 2026-06-17).
   `stripWavHeader` parses RIFF chunks — 3.8 WAVs carry a trailing C2PA chunk that is noise if kept.
 - `src/podcast-mux.ts` — the podcast ffmpeg boundary: gapped PCM concat + chapter offsets
   (`concatWithGaps`) and loudness-normalised, chaptered, cover-embedding MP3 mastering (`masterPodcastMp3`).
+- `scripts/writer-lab.ts` — measurements behind the writer prompts (own ledger `data/writer-lab/`, `LAB_CAP_USD` per-call
+  guard, default $3): `cache` (prompt-cache effect), `editor` (replay the editorial call on a finished episode with the
+  real preceding history), `prove` (new brief → outline → one segment per writer → lint → reviewers → revision → voiced).
 - `scripts/writer-bakeoff.ts` — one-off, spend-capped harness comparing voice-owner models: freezes one outline for a
   finished episode (`data/writer-bakeoff/`, own usage ledger — never the production sink), runs the production
   draft → reviewer panel → revision flow per candidate for two segments and voices them with the production Gemini

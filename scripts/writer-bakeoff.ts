@@ -28,9 +28,8 @@ process.env["USAGE_SINK"] = "sqlite";
 const { config } = await import("../src/config");
 const { SPEECH_TAGS, TAG_PATTERN } = await import("../src/gemini-tts-core");
 const script = await import("../src/podcast-script");
-const synth = await import("../src/podcast-synth");
-const mux = await import("../src/podcast-mux");
-const podcasts = await import("../src/podcasts");
+import * as inputs from "./lib/bakeoff-inputs";
+import { synthesizeSegment } from "./lib/bakeoff-synth";
 const { resolveReasoningEffort } = await import("../src/model-resolution");
 type Outline = import("../src/podcast-script").Outline;
 type ScriptSegment = import("../src/podcast-script").ScriptSegment;
@@ -81,7 +80,7 @@ const flag = (name: string): string | undefined => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 };
-const EPISODE_ID = flag("--episode") ?? "8ee3a4df-445a-4e57-ae37-d151aea362a5";
+const EPISODE_ID = flag("--episode") ?? inputs.DEFAULT_EPISODE_ID;
 const ONLY = flag("--only")?.split(",");
 const SKIP_SYNTH = argv.includes("--no-synth");
 
@@ -148,29 +147,14 @@ async function onRoute<T>(route: Candidate["route"], fn: () => Promise<T>): Prom
 // Episode inputs and the frozen outline
 // ---------------------------------------------------------------------------
 
-async function loadRequest(): Promise<PodcastScriptRequest> {
-  const ledger = new Database("./data/podcasts.db", { readonly: true });
-  const row = ledger.query("SELECT request_json FROM podcast_job WHERE id = ?").get(EPISODE_ID) as { request_json: string } | null;
-  ledger.close();
-  if (!row) throw new Error(`episode ${EPISODE_ID} not in data/podcasts.db`);
-  const request = JSON.parse(row.request_json) as { source: string; brief?: string; title?: string; language: "de" | "en"; minutes: number; series: string };
-  const dir = join("./data/podcasts", EPISODE_ID);
-  const hosts: PodcastScriptRequest["hosts"] = [
-    { id: "A", name: config.podcastHostNames[0], voice: config.podcastVoices[0], speed: config.podcastSpeeds[0] },
-    { id: "B", name: config.podcastHostNames[1], voice: config.podcastVoices[1], speed: config.podcastSpeeds[1] },
-  ];
-  return {
-    source: request.source,
-    brief: request.brief,
-    title: request.title,
-    language: request.language,
-    minutes: request.minutes,
-    hosts,
-    series: request.series,
-    dossier: await readJson(join(dir, "dossier.json")),
-    episodeBrief: await readJson(join(dir, "brief.json")),
-  };
-}
+const loadRequest = (): Promise<PodcastScriptRequest> =>
+  inputs.loadRequest({
+    episodeId: EPISODE_ID,
+    hosts: [
+      { id: "A", name: config.podcastHostNames[0], voice: config.podcastVoices[0], speed: config.podcastSpeeds[0] },
+      { id: "B", name: config.podcastHostNames[1], voice: config.podcastVoices[1], speed: config.podcastSpeeds[1] },
+    ],
+  });
 
 async function frozenOutline(req: PodcastScriptRequest, showBible: string, voice: string): Promise<Outline> {
   const path = join(DATA_DIR, "outline.json");
@@ -380,42 +364,6 @@ const rawViolations = new Map<number, number>();
 // ---------------------------------------------------------------------------
 // Synthesis — the production Gemini multi-speaker path, one mp3 per segment
 // ---------------------------------------------------------------------------
-
-async function synthesizeSegment(req: PodcastScriptRequest, segment: ScriptSegment, outPath: string): Promise<void> {
-  const turns = synth.turnsForSynthesis([segment], req.hosts, req.language, {
-    denseThreshold: config.podcastDenseTurnThreshold,
-    denseSlowdown: config.podcastDenseTurnSlowdown,
-  });
-  const units = synth.unitsForMultiSpeaker(turns, [segment.turns.length], config.podcastMultiSpeakerMaxChars);
-  const outputs = await synth.synthesizeGeminiUnits(turns, units, {
-    model: config.podcastTtsModel,
-    concurrency: config.ttsConcurrency,
-    hostStyles: config.podcastHostStyles,
-  });
-  const levelled = await mux.matchHostLoudness(
-    outputs.map((o, u) => {
-      const speakers = new Set((units[u]?.turnIndexes ?? []).map((t) => turns[t]?.speaker));
-      return { ...o, speaker: speakers.size === 1 ? [...speakers][0] ?? "AB" : "AB" };
-    }),
-    podcasts.PRE_MASTER_HOST_LUFS,
-  );
-  const muxTurns = podcasts.buildMuxTurns({
-    synthOutputs: levelled.turns,
-    turnTexts: units.map((unit) => turns[unit.turnIndexes[0] ?? 0]?.text ?? ""),
-    gapMs: config.podcastGapMs,
-    shortGapMs: config.podcastShortGapMs,
-  });
-  const joined = mux.concatWithGaps(muxTurns);
-  const mp3 = await mux.masterPodcastMp3(joined.pcm, joined.sampleRate, {
-    chapters: [{ title: segment.title, startMs: 0 }],
-    tags: {
-      title: segment.title, album: "writer bake-off", artist: "bake-off", albumArtist: "bake-off", comment: "",
-      date: new Date().toISOString().slice(0, 10), genre: "Podcast", language: "deu", track: 1,
-    },
-    bitrateKbps: config.podcastBitrateKbps,
-  });
-  await writeFile(outPath, mp3);
-}
 
 // ---------------------------------------------------------------------------
 // Main
