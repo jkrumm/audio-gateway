@@ -97,7 +97,7 @@ export interface EpisodeProfile {
   lengthVsRequested?: number;
   lengthShort?: boolean;
   /** Listener asks (editor-extracted): how many, how many have no verdict turn in their segment, and whether the opening frames the question. */
-  asks?: { total: number; uncovered: number; openingFramed: boolean };
+  asks?: { total: number; uncovered: number | null; openingFramed: boolean | null };
   /** Multi-speaker request segmentation of the synth stage (lintSegmentation); absent on the ElevenLabs lane and older episodes. */
   segmentation?: { units: number; minChars: number; meanChars: number; maxChars: number; findings: string[] };
 }

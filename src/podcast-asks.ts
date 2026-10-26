@@ -46,8 +46,10 @@ export function assignAsks<T extends AskSegmentSpec>(segments: T[], asks: string
   if (segments.length === 0 || asks.length === 0) return segments.map((s) => ({ ...s, answers: [] }));
   const answers: string[][] = segments.map(() => []);
   for (const ask of asks) {
-    const claimed = segments.findIndex((s) => (s.answers ?? []).some((a) => askCoverage(ask, a) >= ASK_COVERAGE_MIN && askCoverage(a, ask) >= ASK_COVERAGE_MIN));
-    let target = claimed;
+    // The segment whose own answer matches best claims the ask — not the first one that loosely overlaps ("schälen" vs "waschen" share most words).
+    const claims = segments.map((s) => Math.max(0, ...(s.answers ?? []).map((a) => Math.min(askCoverage(ask, a), askCoverage(a, ask)))));
+    const best = Math.max(...claims);
+    let target = best >= ASK_COVERAGE_MIN ? claims.indexOf(best) : -1;
     if (target < 0) {
       const scores = segments.map((s) => askCoverage(ask, `${s.title} ${s.goal} ${s.keyFacts.join(" ")}`));
       target = scores.indexOf(Math.max(...scores));

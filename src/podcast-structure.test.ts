@@ -21,6 +21,7 @@ const fixture = <T>(name: string): T => JSON.parse(readFileSync(join(import.meta
 const V1 = fixture<{ segments: ScriptSegment[] }>("episode-503c28f0.script.json");
 const V2 = fixture<{ segments: ScriptSegment[] }>("episode-b78cb035.script.json");
 
+const brief0 = fixture<Record<string, unknown>>("episode-b78cb035.brief.json");
 const RAW_CARROT = "Karotten roh, ungewaschen und ungeschält direkt aus der Tüte essen — ist das okay?";
 const KIWI = "Kiwi mit Schale essen?";
 
@@ -43,6 +44,25 @@ describe("askCoverage / assignAsks", () => {
   });
 });
 
+describe("assignAsks — regressions from review", () => {
+  test("two asks that share most words stay with the segment that named them (best match, not first match)", () => {
+    const peel = "Soll ich Karotten schälen?";
+    const wash = "Soll ich Karotten waschen?";
+    const segments = [
+      { title: "a", goal: "", keyFacts: [], answers: [peel] },
+      { title: "b", goal: "", keyFacts: [], answers: [wash] },
+    ];
+    expect(assignAsks(segments, [peel, wash]).map((s) => s.answers)).toEqual([[peel], [wash]]);
+  });
+
+  test("an ask nobody names goes to the best textual fit; all-zero overlap falls to segment 0; no segments drops nothing silently", () => {
+    const none: string[] = [];
+    const out = assignAsks([{ title: "x", goal: "y", keyFacts: none, answers: none }, { title: "z", goal: "w", keyFacts: none, answers: none }], ["Etwas völlig anderes?"]);
+    expect(out.map((s) => s.answers)).toEqual([["Etwas völlig anderes?"], []]);
+    expect(assignAsks([], ["Frage?"])).toEqual([]);
+  });
+});
+
 describe("ask lint on the real fixtures", () => {
   test("v2 never answers the raw-carrot ask in its carrot segment; v1 does in its washing segment", () => {
     const v2 = lintSegments(V2.segments, { asks: [{ ask: RAW_CARROT, segmentIndex: 0 }] });
@@ -60,6 +80,18 @@ describe("ask lint on the real fixtures", () => {
 
   test("no asks and no frame configured → no ask findings at all (older episodes lint as before)", () => {
     expect(lintSegments(V2.segments, {}).findings.filter((f) => f.rule === "ask-uncovered" || f.rule === "opening-unframed")).toEqual([]);
+  });
+
+  test("an ask whose segment is missing from the script is a finding, not a silent pass", () => {
+    const report = lintSegments(V2.segments, { asks: [{ ask: RAW_CARROT, segmentIndex: 9 }] });
+    expect(report.findings.map((f) => f.rule)).toContain("ask-uncovered");
+  });
+
+  test("openingFrameOf is empty when the brief has no asks, even with a through-line", () => {
+    const noAsks = { ...brief0, asks: [] } as unknown as import("./podcast-types").EpisodeBrief;
+    const outline = { throughLine: "Was ist mit der Schale?" } as unknown as import("./podcast-script").Outline;
+    expect(script.openingFrameOf(noAsks, outline)).toEqual([]);
+    expect(script.openingFrameOf({ ...noAsks, asks: [RAW_CARROT] }, outline)).toEqual([RAW_CARROT, "Was ist mit der Schale?"]);
   });
 
   test("both findings are sent to the writer as revision notes", () => {
@@ -90,7 +122,7 @@ describe("outline and prompts", () => {
     const first = script.segmentPrompt({ req, outline, segment: seg, index: 0, total: 2, showBible: "" });
     expect(first).toContain("The listener ASKED these");
     expect(first).toContain(RAW_CARROT);
-    expect(first).toContain("Within the first three turns the hosts say plainly what this episode answers");
+    expect(first).toContain("Within the first 3 turns the hosts say plainly what this episode answers");
     const second = script.segmentPrompt({ req, outline, segment: outline.segments[1]!, index: 1, total: 2, previous: seg, showBible: "" });
     expect(second).not.toContain("The listener ASKED these");
   });
@@ -121,6 +153,11 @@ describe("length in the profile", () => {
   test("the profile counts uncovered asks and whether the opening framed the question", () => {
     const p = script.buildEpisodeProfile({ brief, script: toScript(V2.segments, { asks: [{ ask: RAW_CARROT, segmentIndex: 0 }] }), dossier, requestedMinutes: 15 });
     expect(p.asks).toEqual({ total: 1, uncovered: 1, openingFramed: false });
+  });
+
+  test("a script without ask assignments is reported unchecked, not clean", () => {
+    const p = script.buildEpisodeProfile({ brief, script: toScript(V2.segments), dossier, requestedMinutes: 15 });
+    expect(p.asks).toEqual({ total: 1, uncovered: null, openingFramed: null });
   });
 
   test("no requested minutes and no asks → neither field is invented", () => {

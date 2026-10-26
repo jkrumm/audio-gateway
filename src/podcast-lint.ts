@@ -396,7 +396,7 @@ export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}):
 }
 
 /** Turns at the head of the first segment that must frame what the episode answers. */
-const OPENING_FRAME_TURNS = 4;
+export const OPENING_FRAME_TURNS = 3;
 const OPENING_FRAME_MIN = 0.4;
 /** A verdict can span a question and its answer: up to this many consecutive turns are read together. */
 const VERDICT_WINDOW_TURNS = 3;
@@ -406,7 +406,10 @@ function askFindings(segments: ScriptSegment[], opts: LintOptions): LintFinding[
   const findings: LintFinding[] = [];
   for (const { ask, segmentIndex } of opts.asks ?? []) {
     const turns = segments[segmentIndex]?.turns;
-    if (!turns) continue;
+    if (!turns) {
+      findings.push({ segmentIndex, turnIndex: null, rule: "ask-uncovered", message: `The listener asked "${ask}" but its segment does not exist in this script.` });
+      continue;
+    }
     const texts = turns.map((t) => stripTags(t.text));
     const best = texts.reduce((n, _, i) => Math.max(n, askCoverage(ask, texts.slice(i, i + VERDICT_WINDOW_TURNS).join(" "))), 0);
     if (best < ASK_COVERAGE_MIN) {

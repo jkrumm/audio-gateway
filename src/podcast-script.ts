@@ -5,7 +5,7 @@ import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
 import type { SegmentAgent } from "./podcast-agent";
-import { expressionSummary, lintNotes, lintSegments, renderLintReport } from "./podcast-lint";
+import { expressionSummary, lintNotes, lintSegments, OPENING_FRAME_TURNS, renderLintReport } from "./podcast-lint";
 import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, withSpan } from "./otel";
 import type { Dossier, EpisodeBrief, EpisodeProfile } from "./podcast-types";
@@ -644,7 +644,7 @@ ${renderEpisodeBrief(req)}
 }
 
 /** What the first lines may frame: the listener's asks, or the question the outline says the episode answers. Empty when neither exists. */
-export const openingFrameOf = (brief: EpisodeBrief, outline: Outline): string[] => [...(brief.asks ?? []), ...(outline.throughLine ? [outline.throughLine] : [])];
+export const openingFrameOf = (brief: EpisodeBrief, outline: Outline): string[] => ((brief.asks ?? []).length > 0 ? [...(brief.asks ?? []), ...(outline.throughLine ? [outline.throughLine] : [])] : []);
 
 /** The outline's ask assignments in the shape lint wants. */
 export const outlineAsks = (outline: Outline): Array<{ ask: string; segmentIndex: number }> =>
@@ -691,7 +691,7 @@ export function segmentPrompt(params: {
   const brief = req.episodeBrief;
   const [hostA, hostB] = req.hosts;
   const bridgeInstruction = index === 0
-    ? `This is the FIRST segment — it opens the episode, and the brief's OPENING is binding: ${brief.opening}. Do not add a cold open, a station intro or a hook the brief did not ask for. Within the first three turns the hosts say plainly what this episode answers — the listener's question, in one or two lines (playful is fine) — so nobody starts on a detail without a frame.`
+    ? `This is the FIRST segment — it opens the episode, and the brief's OPENING is binding: ${brief.opening}. Do not add a cold open, a station intro or a hook the brief did not ask for. Within the first ${OPENING_FRAME_TURNS} turns the hosts say plainly what this episode answers — the listener's question, in one or two lines (playful is fine) — so nobody starts on a detail without a frame.`
     : `The previous segment ended aiming at: "${previous?.goal ?? ""}". Open with a natural bridge from that into this segment — never re-introduce the show.`;
   const wrapInstruction = index === total - 1
     ? `This is the LAST segment — it closes the episode, and the brief's CLOSING is binding: ${brief.closing}. Do not add takeaways, an outlook or a sign-off the brief did not ask for.`
@@ -1505,7 +1505,9 @@ function asksProfile(params: { brief: EpisodeBrief; script: PodcastScript; hostN
   const { brief, script, hostNames } = params;
   const asks = brief.asks ?? [];
   if (asks.length === 0) return {};
-  const findings = lintSegments(script.segments, { hostNames, asks: script.asks ?? [], openingFrame: script.openingFrame ?? asks }).findings;
+  // A script without assignments (older, or the outline writer dropped them) was never checked — say so instead of reporting a clean pass.
+  if (!script.asks) return { asks: { total: asks.length, uncovered: null, openingFramed: null } };
+  const findings = lintSegments(script.segments, { hostNames, asks: script.asks, openingFrame: script.openingFrame ?? asks }).findings;
   return { asks: { total: asks.length, uncovered: findings.filter((f) => f.rule === "ask-uncovered").length, openingFramed: !findings.some((f) => f.rule === "opening-unframed") } };
 }
 
