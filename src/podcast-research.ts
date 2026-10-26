@@ -399,36 +399,38 @@ function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { 
   };
 }
 
-/** Editor-named facts the quick pass couldn't put on air; defense-in-depth cap on top of the prompt's own "0 to 3" instruction (podcast-editorial.ts) so a chatty editor can't reopen the spend this routing rule closes. */
-const MAX_LOAD_BEARING_FACTS = 3;
-
 export interface LoadBearingResearchResult {
   additions: Dossier["additions"];
   toolCalls: ToolCallRecord[];
   usdSpent: number;
+  /** The facts (verbatim from `brief.loadBearingFacts`) that resolved — the caller drops these from `dossier.openQuestions` so a closed gap doesn't reopen in the outro. */
+  answeredFacts: string[];
 }
 
 /**
- * Standard-depth research for the handful of facts the editorial pass named
- * as load-bearing (`EpisodeBrief.loadBearingFacts`) — the only place
- * `standard` depth runs. Code decides the query (the fact itself), not the
- * model, so there is no prompt to misread. Best-effort per fact: a submit or
- * poll failure is logged and skipped, never thrown — same contract as the
- * research stage itself (docs/podcast-editorial-room.md Decision 7).
+ * Standard-depth research for the facts the editorial pass named as
+ * load-bearing (`EpisodeBrief.loadBearingFacts`) — the only place `standard`
+ * depth runs. Code decides the query (the fact itself), not the model, so
+ * there is no prompt to misread. No cap here: the editorial prompt's own
+ * "0 to 3" guidance is the routing rule (docs/podcast-editorial-room.md);
+ * this stage honors however many the editor actually names. Best-effort per
+ * fact: a submit or poll failure is logged and skipped, never thrown — same
+ * contract as the research stage itself (Decision 7).
  */
 export async function runLoadBearingResearch(
   facts: string[],
   deps: { research?: ResearchDeps["research"]; fetchImpl?: ToolLoopFetch; pollIntervalMs?: number },
 ): Promise<LoadBearingResearchResult> {
   const research = deps.research;
-  if (!research || facts.length === 0) return { additions: [], toolCalls: [], usdSpent: 0 };
+  if (!research || facts.length === 0) return { additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] };
   const fetchImpl = deps.fetchImpl ?? rawFetch;
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const additions: Dossier["additions"] = [];
   const toolCalls: ToolCallRecord[] = [];
+  const answeredFacts: string[] = [];
   let usdSpent = 0;
-  for (const fact of facts.slice(0, MAX_LOAD_BEARING_FACTS)) {
+  for (const fact of facts) {
     const startedAt = Date.now();
     try {
       const submitted = await submitResearchJob(research, fact, "standard", fetchImpl);
@@ -437,13 +439,14 @@ export async function runLoadBearingResearch(
       if (!polled.ok) throw new Error(polled.error);
       usdSpent += polled.usdSpent;
       additions.push({ source: `research: ${fact}`, text: polled.answer });
+      answeredFacts.push(fact);
       toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: true, ms: Date.now() - startedAt });
     } catch (err) {
       log.warn("podcast load-bearing research failed, skipping this fact", { fact, error: err instanceof Error ? err.message : String(err) });
       toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: false, ms: Date.now() - startedAt });
     }
   }
-  return { additions, toolCalls, usdSpent };
+  return { additions, toolCalls, usdSpent, answeredFacts };
 }
 
 /** Exported for tests. */

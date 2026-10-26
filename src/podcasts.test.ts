@@ -850,6 +850,19 @@ describe("asciiHeaderSafe", () => {
   });
 });
 
+describe("dropAnsweredOpenQuestions", () => {
+  test("removes answered facts, keeps unanswered ones", () => {
+    const openQuestions = ["is it safe long-term?", "what is the half-life?", "who funded the trial?"];
+    const result = _test.dropAnsweredOpenQuestions(openQuestions, ["what is the half-life?"]);
+    expect(result).toEqual(["is it safe long-term?", "who funded the trial?"]);
+  });
+
+  test("no answered facts → returns the same openQuestions", () => {
+    const openQuestions = ["is it safe long-term?"];
+    expect(_test.dropAnsweredOpenQuestions(openQuestions, [])).toEqual(openQuestions);
+  });
+});
+
 describe("episodeFilename", () => {
   test("is unique per job and stable for the same job", async () => {
     const { episodeFilename } = await import("./podcasts");
