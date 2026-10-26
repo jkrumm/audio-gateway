@@ -65,7 +65,7 @@ const draft = (fetchImpl: ToolLoopFetch, onRun?: (run: AgentRun) => void) =>
   createSegmentAgent({ model: "writer", maxUnitChars: 3000, fetchImpl, onRun }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" });
 
 describe("agentReasoningEffort", () => {
-  test("Claude gets high, gpt-6 "none" (tools reject any other effort), deepseek its family value", () => {
+  test("Claude gets high, gpt-6 none (tools reject any other effort), deepseek its family value", () => {
     expect(agentReasoningEffort("claude-opus-5-5")).toBe("high");
     expect(agentReasoningEffort("gpt-6.1-sol")).toBe("none");
     expect(agentReasoningEffort("gpt-6-luna")).toBe("none");
