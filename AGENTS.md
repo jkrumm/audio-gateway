@@ -138,7 +138,7 @@ pipeline (both retired 2026-06-17).
   show bible is injected verbatim into the writer/reviewer prompts, and the owner's general voice
   guide (`brain/voice.md`, `PODCAST_VOICE_PATH`, optional) precedes it in the outline/segment/revision
   prompts only — the show bible overrides it for spoken audio. The write model defaults to
-  `claude-opus-5-5` (`PODCAST_WRITE_MODEL`; `claude-opus-4-6` is the one-line rollback). Only tag vocabulary, turn
+  `gpt-6.1-sol` (`PODCAST_WRITE_MODEL`, owner decision 2026-10-26; `claude-opus-5-5` is the one-line rollback). Only tag vocabulary, turn
   ceilings and segment bounds are enforced in code (`sanitizeTurns`). A turn may carry a `delivery` (a key of
   `DELIVERY_STYLES`, set only where the moment changes; the baseline carries none): the Gemini synth sends its style
   string for that turn (`SynthTurnInput.style`; dense turns keep the slow style, an unknown key is ignored, the

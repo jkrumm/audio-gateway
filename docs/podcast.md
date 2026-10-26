@@ -213,7 +213,7 @@ row.
 | Env var | Default | Effect |
 |-|-|-|
 | `PODCAST_OUTLINE_MODEL` / `PODCAST_OUTLINE_EFFORT` | `deepseek-v4.1-flash` / `high` | Story pass only — see [Writer roles](#writer-roles-2026-09-02) below. |
-| `PODCAST_WRITE_MODEL` | `claude-opus-5-5` | The voice owner — segment writers and every revision/tightening pass. A `claude-*` id is called on the native Anthropic Messages wire with adaptive thinking (see [Writer budgets and reasoning](#writer-budgets-and-reasoning-2026-09-02)); rollback is `PODCAST_WRITE_MODEL=claude-opus-4-6`. |
+| `PODCAST_WRITE_MODEL` | `gpt-6.1-sol` | The voice owner — segment writers and every revision/tightening pass (owner decision 2026-10-26, blind writer rematch; Sol runs the agentic loop on IU `/v1/responses`). A `claude-*` id is called on the native Anthropic Messages wire with adaptive thinking (see [Writer budgets and reasoning](#writer-budgets-and-reasoning-2026-09-02)); rollback is `PODCAST_WRITE_MODEL=claude-opus-5-5`. |
 | `PODCAST_REVIEW_MODELS` / `PODCAST_REVIEW_EFFORT` | `gemini-3.8-flash,deepseek-v4.1-flash` / `high` | Comma list; every reviewer role runs on every listed model. Effort is resolved per-model — gemini-3.8-flash omits it regardless. |
 | `PODCAST_METADATA_MODEL` / `PODCAST_METADATA_EFFORT` | `deepseek-v4.1-flash` / `high` | Final title/description/cover-prompt/genres/chapter-titles pass. |
 | `PODCAST_SHOW_BIBLE` | `./docs/show-bible.md` | House-style rules injected verbatim into the writer/reviewer prompts; missing file → no section, logged once. |
@@ -274,7 +274,7 @@ docs and a research pass on production practice:
 
 ## Writer budgets and reasoning (2026-09-02)
 
-A `claude-*` writer (the voice owner, `claude-opus-5-5` by default) does not use
+A `claude-*` writer (e.g. `claude-opus-5-5`, the rollback; the default is `gpt-6.1-sol`) does not use
 chat/completions: `src/anthropic-messages.ts` POSTs to the IU Anthropic route
 (`/v1/messages`, streamed) with `thinking: {type: "adaptive"}` and
 `output_config: {effort: "high"}` (claude-opus-5-5 rejects
@@ -316,7 +316,7 @@ polishes the metadata:
 | Role | Env var | Default | Why |
 |-|-|-|-|
 | Outline | `PODCAST_OUTLINE_MODEL` | `deepseek-v4.1-flash` | Story pass only (through-line, hook, reveals, digressions, segments) — reasons long before answering (`PODCAST_OUTLINE_EFFORT`, default `high`), which the outline pays for and nothing downstream needs to match. |
-| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `claude-opus-5-5` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue. Moved from `claude-opus-4-6` (2026-10-19) onto the native Anthropic wire with adaptive thinking; `claude-opus-4-6` stays a one-line env rollback. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. Never gets `reasoning_effort` — the Anthropic wire carries `output_config.effort` instead. |
+| Writer (voice owner) | `PODCAST_WRITE_MODEL` | `gpt-6.1-sol` | Segment writers AND every revision/tightening pass. No other model ever writes or rewrites dialogue. Moved to `gpt-6.1-sol` on 2026-10-26 (owner decision after the blind rematch; previously `claude-opus-5-5`, one-line rollback). Earlier: moved from `claude-opus-4-6` (2026-10-19) onto the native Anthropic wire with adaptive thinking; `claude-opus-4-6` stays a one-line env rollback. Rationale and evidence in modelpick `docs/decisions/podcast-writer.md`. Never gets `reasoning_effort` — the Anthropic wire carries `output_config.effort` instead. |
 | Reviewers | `PODCAST_REVIEW_MODELS` | `gemini-3.8-flash,deepseek-v4.1-flash` | Comma list, ≥1 entry. Every reviewer role (dramaturge, conversation coach, fact & speech editor) runs on EVERY listed model, in parallel — cross-model notes surface what a single model's blind spots miss. Reviewers are advisory: they point, they never draft. `PODCAST_REVIEW_EFFORT` (default `high`) applies only to models that accept it. |
 | Metadata | `PODCAST_METADATA_MODEL` | `deepseek-v4.1-flash` | One final pass over the LOCKED script — title, show-notes description, cover prompt, genres, and one chapter title per segment (replacing the outline's working titles). Metadata is polish: on failure it falls back to the outline's own drafts and the job still succeeds. `PODCAST_METADATA_EFFORT` defaults to `high`. |
 

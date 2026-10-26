@@ -438,12 +438,14 @@ export const config = {
   podcastOutlineEffort: process.env["PODCAST_OUTLINE_EFFORT"] ?? "high",
   /**
    * The VOICE OWNER: segment writers and every revision/tightening pass. No
-   * other model ever writes or rewrites dialogue. A `claude-*` id is called on
-   * the native Anthropic Messages wire with adaptive thinking (see
-   * `callPodcastLlm`). Rollback to the previous writer is one env line:
-   * PODCAST_WRITE_MODEL=claude-opus-4-6.
+   * other model ever writes or rewrites dialogue. Default `gpt-6.1-sol` (owner
+   * decision 2026-10-26 after the blind writer rematch; it runs the agentic
+   * loop on IU's /v1/responses). A `claude-*` id is called on the native
+   * Anthropic Messages wire with adaptive thinking (see `callPodcastLlm`).
+   * Rollback to the previous writer is one env line:
+   * PODCAST_WRITE_MODEL=claude-opus-5-5.
    */
-  podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "claude-opus-5-5",
+  podcastWriteModel: process.env["PODCAST_WRITE_MODEL"] ?? "gpt-6.1-sol",
   /** Segment drafts and revisions as a tool loop that lints its own text (podcast-agent.ts); off → the single-shot calls. */
   podcastAgenticWriter: oneOf("PODCAST_AGENTIC_WRITER", ["on", "off"] as const, "on") === "on",
   /**

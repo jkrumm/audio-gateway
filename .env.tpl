@@ -71,7 +71,7 @@ ARGO_API_SECRET=op://common/api/SECRET
 # override the writer-role models, TTS model, voices, host names, timing, or storage paths.
 # PODCAST_OUTLINE_MODEL=deepseek-v4.1-flash  # story pass only
 # PODCAST_OUTLINE_EFFORT=high                 # reasoning_effort for the outline call
-# PODCAST_WRITE_MODEL=claude-opus-5-5        # the voice owner: segments + every revision. claude-* ids use the native Anthropic wire with adaptive thinking; rollback = claude-opus-4-6
+# PODCAST_WRITE_MODEL=gpt-6.1-sol            # the voice owner: segments + every revision (owner decision 2026-10-26). claude-* ids use the native Anthropic wire with adaptive thinking; rollback = claude-opus-5-5
 # PODCAST_REVIEW_MODELS=gemini-3.8-flash,deepseek-v4.1-flash   # every role runs on every listed model
 # PODCAST_REVIEW_EFFORT=high                  # resolved per-model; gemini-3.8-flash omits it regardless
 # PODCAST_METADATA_MODEL=deepseek-v4.1-flash # final title/description/cover/genres/chapters pass
