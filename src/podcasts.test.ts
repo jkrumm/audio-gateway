@@ -861,6 +861,21 @@ describe("dropAnsweredOpenQuestions", () => {
     const openQuestions = ["is it safe long-term?"];
     expect(_test.dropAnsweredOpenQuestions(openQuestions, [])).toEqual(openQuestions);
   });
+
+  test("matches case/whitespace/punctuation drift between the editor's copy and the original entry (b78cb035-class finding)", () => {
+    const openQuestions = ["is it safe long-term?", "what is the half-life?"];
+    const result = _test.dropAnsweredOpenQuestions(openQuestions, ["  WHAT Is the   half-life ?"]);
+    expect(result).toEqual(["is it safe long-term?"]);
+  });
+
+  test("a real paraphrase of the fact text (not the openQuestion copy) does not accidentally match a different entry", () => {
+    const openQuestions = ["is it safe long-term?", "who funded the trial?"];
+    // The research QUESTION ("any long-term safety concerns raised?") is a paraphrase of the first entry, but
+    // dropAnsweredOpenQuestions only ever sees `answeredOpenQuestions` (the editor's verbatim copy) — never the
+    // research question — so this asserts the function's contract, not the paraphrase itself.
+    const result = _test.dropAnsweredOpenQuestions(openQuestions, ["is it safe long-term?"]);
+    expect(result).toEqual(["who funded the trial?"]);
+  });
 });
 
 describe("episodeFilename", () => {

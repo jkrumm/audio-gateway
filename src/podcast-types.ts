@@ -39,6 +39,14 @@ export const EMPTY_DOSSIER: Dossier = Object.freeze({
 
 export type HumorLevel = "none" | "sparse" | "natural";
 
+/** One editor-named fact worth a standard-depth research follow-up. */
+export interface LoadBearingFact {
+  /** The specific question to research again, at `standard` depth. */
+  question: string;
+  /** The OPEN QUESTIONS entry this answers, copied word-for-word — never reworded — so the pipeline can drop exactly that entry from `Dossier.openQuestions` without text-matching a paraphrase. Empty when the fact instead comes from the glossary and closes no open-question gap. */
+  openQuestion: string;
+}
+
 /** The editor's decision for ONE episode — free-form where it matters, bounded in code where it must be. */
 export interface EpisodeBrief {
   /** Free-text format name in the episode language ("Erklärstück", "Streitgespräch", "Kurzbriefing", "Interview", …). */
@@ -67,7 +75,7 @@ export interface EpisodeBrief {
   /** The listener's concrete questions and habits from the brief/source ("raw carrots, unwashed, from the bag"), each owed an explicit verdict. */
   asks?: string[];
   /** Facts from the dossier (glossary/openQuestions) the editor judges load-bearing enough for a standard-depth research follow-up; normally empty. The only source of `standard` depth (`runLoadBearingResearch` in podcast-research.ts) — the researcher itself cannot request it. */
-  loadBearingFacts: string[];
+  loadBearingFacts: LoadBearingFact[];
 }
 
 /** What the ledger remembers about a finished episode — the editor's history and the `past_episodes` tool read this. */
