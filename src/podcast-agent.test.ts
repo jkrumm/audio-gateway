@@ -26,7 +26,7 @@ const REQ: import("./podcast-script").PodcastScriptRequest = {
   hosts: HOSTS,
   series: "Test",
   dossier: { ...EMPTY_DOSSIER, glossary: [{ term: "Warden", plain: "ein Dienst, der Arbeitszustand hält" }] },
-  episodeBrief: { format: "Gespräch", rationale: "r", roles: { A: "erklärt", B: "fragt" }, tone: "ruhig", humor: "none", opening: "direkt", closing: "offen", rhythm: "gemischt", minutes: 10, segments: 1, devices: [], avoid: [], glossaryPolicy: "" },
+  episodeBrief: { format: "Gespräch", rationale: "r", roles: { A: "erklärt", B: "fragt" }, tone: "ruhig", humor: "none", opening: "direkt", closing: "offen", rhythm: "gemischt", minutes: 10, segments: 1, devices: [], avoid: [], glossaryPolicy: "", loadBearingFacts: [] },
 };
 const SPEC = { title: "Seg", goal: "g", keyFacts: ["Warden läuft auf dem Mini."], targetWords: 30, tension: "t" };
 const OUTLINE: import("./podcast-script").Outline = { title: "T", description: "d", coverPrompt: "c", genres: [], motif: "", throughLine: "", hook: "", reveals: [], digressions: [], segments: [SPEC] };

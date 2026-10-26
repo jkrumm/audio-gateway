@@ -24,7 +24,7 @@ import {
 import { type Chapter, concatWithGaps, masterPodcastMp3, type MuxTurn, matchHostLoudness } from "./podcast-mux";
 import { coverConfigured, generateCover } from "./cover";
 import { absConfigured, publishToAudiobookshelf } from "./audiobookshelf";
-import { readBrainNotes, runPodcastResearch } from "./podcast-research";
+import { readBrainNotes, runLoadBearingResearch, runPodcastResearch } from "./podcast-research";
 import { decideEpisodeBrief } from "./podcast-editorial";
 import { writeEpisodeBrainNote } from "./brain-note";
 import { EMPTY_DOSSIER, type Dossier, type EpisodeBrief, type EpisodeHistory, type EpisodeProfile, type EpisodeSummary } from "./podcast-types";
@@ -665,6 +665,28 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   files.brief = join(dir, "brief.json");
   await writeFile(files.brief, JSON.stringify(brief, null, 2), "utf8");
   store.update(job.id, { brief, files: { ...files } });
+
+  // 2b. load-bearing research follow-up — best-effort, same contract as step 1: the
+  // editor (now holding the quick-only dossier) named the few facts that are worth
+  // standard depth; this is the only place standard depth runs (docs/podcast-editorial-room.md).
+  if (request.research && config.researchApiKey && brief.loadBearingFacts.length > 0) {
+    try {
+      const followUp = await withSpan("audio.podcast.research_follow_up", { "audio.podcast.stage": "research_follow_up" }, () =>
+        // No `maxCalls` here: the budget-sized gate already happened in the editorial
+        // prompt + MAX_LOAD_BEARING_FACTS (podcast-research.ts), not a per-call counter.
+        runLoadBearingResearch(brief.loadBearingFacts, { research: { url: config.researchGatewayUrl, apiKey: config.researchApiKey } }),
+      );
+      dossier = {
+        ...dossier,
+        additions: [...dossier.additions, ...followUp.additions],
+        toolCalls: [...dossier.toolCalls, ...followUp.toolCalls],
+        researchUsd: (dossier.researchUsd ?? 0) + followUp.usdSpent,
+      };
+      await writeFile(files.dossier, JSON.stringify(dossier, null, 2), "utf8");
+    } catch (err) {
+      log.warn("podcast load-bearing research follow-up failed, proceeding with the quick-only dossier", { id: job.id, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
 
   const agentRuns: AgentRun[] = [];
   // 3. scripting (outline → segment → review → revise → metadata; progress reported by writePodcastScript's onProgress)

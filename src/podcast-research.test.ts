@@ -15,7 +15,7 @@ process.env["IU_GEMINI_BASE_URL"] ??= "https://iu.example.com/gemini/v1beta";
 process.env["IU_REPLICATE_BASE_URL"] ??= "https://iu.example.com/replicate/v1";
 process.env["USAGE_DB"] ??= ":memory:";
 
-const { buildResearchTools, parseDossier, readBrainNotes, runPodcastResearch } = await import("./podcast-research");
+const { buildResearchTools, parseDossier, readBrainNotes, runLoadBearingResearch, runPodcastResearch } = await import("./podcast-research");
 type ToolLoopFetch = import("./llm-tools").ToolLoopFetch;
 type EpisodeHistory = import("./podcast-types").EpisodeHistory;
 
@@ -213,17 +213,18 @@ describe("dossier parsing resilience", () => {
   });
 });
 
+function scriptedFetch(responses: Array<{ status: number; body: string }>): { fetchImpl: ToolLoopFetch; count: () => number } {
+  let i = 0;
+  const fetchImpl: ToolLoopFetch = (async () => {
+    const res = responses[i];
+    i++;
+    if (!res) throw new Error(`no response scripted for call ${i}`);
+    return res;
+  }) as ToolLoopFetch;
+  return { fetchImpl, count: () => i };
+}
+
 describe("research tool", () => {
-  function scriptedFetch(responses: Array<{ status: number; body: string }>): { fetchImpl: ToolLoopFetch; count: () => number } {
-    let i = 0;
-    const fetchImpl: ToolLoopFetch = (async () => {
-      const res = responses[i];
-      i++;
-      if (!res) throw new Error(`no response scripted for call ${i}`);
-      return res;
-    }) as ToolLoopFetch;
-    return { fetchImpl, count: () => i };
-  }
 
   test("enforces the per-run budget without calling fetch again once exhausted", async () => {
     const { fetchImpl, count } = scriptedFetch([
@@ -261,34 +262,27 @@ describe("research tool", () => {
     expect(spend.usd).toBeCloseTo(0.03);
   });
 
-  test("the same query at a different depth is a new run", async () => {
-    const { fetchImpl, count } = scriptedFetch([
-      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "quick" } }),
-      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "standard" } }),
-    ]);
-    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl, pollIntervalMs: 0 });
-    const tool = findTool(tools, "research");
-    await tool.execute({ query: "q", depth: "quick" });
-    expect(await tool.execute({ query: "q", depth: "standard" })).toContain("standard");
-    expect(count()).toBe(4);
-  });
-
-  test("standard depth is routing, not a cap: every request for it is honored", async () => {
+  test("a glossary-style query requesting standard depth is downgraded to quick when no load-bearing flag is set (reproduces b78cb035)", async () => {
     const submitted: string[] = [];
-    const { fetchImpl } = scriptedFetch([
-      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "r1" } }),
-      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "r2" } }),
-    ]);
+    const { fetchImpl } = scriptedFetch([rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "r1" } })]);
     const trackingFetch: ToolLoopFetch = async (url, init) => {
       if (typeof init?.body === "string") submitted.push(init.body);
       return fetchImpl(url, init);
     };
     const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl: trackingFetch, pollIntervalMs: 0 });
     const tool = findTool(tools, "research");
-    await tool.execute({ query: "q1", depth: "standard" });
-    await tool.execute({ query: "q2", depth: "standard" });
+    await tool.execute({ query: "explain BVL, BfR, CVUA in one plain sentence each", depth: "standard" });
     const depths = submitted.filter((b) => b.includes('"query"')).map((b) => (JSON.parse(b) as { depth: string }).depth);
-    expect(depths).toEqual(["standard", "standard"]);
+    expect(depths).toEqual(["quick"]);
+  });
+
+  test("the depth the model passes is not part of the cache key — the same query dedupes regardless", async () => {
+    const { fetchImpl, count } = scriptedFetch([rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "the report" } })]);
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl, pollIntervalMs: 0 });
+    const tool = findTool(tools, "research");
+    await tool.execute({ query: "q", depth: "quick" });
+    expect(await tool.execute({ query: "q", depth: "standard" })).toContain("this exact query was already run");
+    expect(count()).toBe(2);
   });
 
   test("maxCalls 0 means unlimited, not exhausted", async () => {
@@ -432,6 +426,70 @@ describe("research tool", () => {
     const tool = findTool(tools, "research");
     await expect(tool.execute({ query: "q1" })).rejects.toThrow("network down");
     expect(await tool.execute({ query: "q2" })).toContain("recovered after transport error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runLoadBearingResearch — the only place standard depth runs
+// ---------------------------------------------------------------------------
+
+describe("runLoadBearingResearch", () => {
+  test("runs each editor-named fact at standard depth and folds the answers into additions", async () => {
+    const submitted: string[] = [];
+    const { fetchImpl } = scriptedFetch([
+      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "answer one", cost: { totalUsd: 0.4 } } }),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "answer two", cost: { totalUsd: 0.1 } } }),
+    ]);
+    const trackingFetch: ToolLoopFetch = async (url, init) => {
+      if (typeof init?.body === "string") submitted.push(init.body);
+      return fetchImpl(url, init);
+    };
+    const result = await runLoadBearingResearch(["fact one", "fact two"], {
+      research: { url: "https://research.example.com", apiKey: "key" },
+      fetchImpl: trackingFetch,
+      pollIntervalMs: 0,
+    });
+    const depths = submitted.filter((b) => b.includes('"query"')).map((b) => (JSON.parse(b) as { depth: string }).depth);
+    expect(depths).toEqual(["standard", "standard"]);
+    expect(result.additions).toEqual([
+      { source: "research: fact one", text: "answer one" },
+      { source: "research: fact two", text: "answer two" },
+    ]);
+    expect(result.usdSpent).toBeCloseTo(0.5);
+  });
+
+  test("no research configured or no facts named → no calls, empty result", async () => {
+    expect(await runLoadBearingResearch(["fact"], {})).toEqual({ additions: [], toolCalls: [], usdSpent: 0 });
+    expect(await runLoadBearingResearch([], { research: { url: "https://research.example.com", apiKey: "key" } })).toEqual({ additions: [], toolCalls: [], usdSpent: 0 });
+  });
+
+  test("a failed fact is skipped, not thrown — the rest still run", async () => {
+    const { fetchImpl } = scriptedFetch([
+      rawRes(500, "upstream error"),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "answer two" } }),
+    ]);
+    const result = await runLoadBearingResearch(["bad fact", "good fact"], {
+      research: { url: "https://research.example.com", apiKey: "key" },
+      fetchImpl,
+      pollIntervalMs: 0,
+    });
+    expect(result.additions).toEqual([{ source: "research: good fact", text: "answer two" }]);
+    expect(result.toolCalls.map((c) => c.ok)).toEqual([false, true]);
+  });
+
+  test("more facts than the cap are ignored, not researched", async () => {
+    const { fetchImpl, count } = scriptedFetch([
+      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "a" } }),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "b" } }),
+      rawRes(200, { jobId: "c" }), rawRes(200, { status: "done", result: { report: "c" } }),
+    ]);
+    const result = await runLoadBearingResearch(["f1", "f2", "f3", "f4", "f5"], {
+      research: { url: "https://research.example.com", apiKey: "key" },
+      fetchImpl,
+      pollIntervalMs: 0,
+    });
+    expect(result.additions).toHaveLength(3);
+    expect(count()).toBe(6);
   });
 });
 

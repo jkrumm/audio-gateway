@@ -120,6 +120,7 @@ export function defaultEpisodeBrief(input: Pick<EditorialInput, "minutes" | "lan
     avoid: [],
     glossaryPolicy: "Introduce an unfamiliar name or term as what it IS before what it is CALLED, then reuse one short handle for it.",
     asks: [],
+    loadBearingFacts: [],
   };
 }
 
@@ -193,6 +194,7 @@ export function parseEpisodeBrief(
     avoid: strList(parsed["avoid"]),
     glossaryPolicy: str(parsed["glossary_policy"] ?? parsed["glossaryPolicy"], fallback.glossaryPolicy),
     asks: strList(parsed["asks"]),
+    loadBearingFacts: strList(parsed["load_bearing_facts"] ?? parsed["loadBearingFacts"]),
   };
 }
 
@@ -238,11 +240,12 @@ Decide, and return as JSON:
 - devices: dramaturgy devices that genuinely fit THIS material — a motif, a withheld reveal, a planned digression. A live disagreement belongs here only if the source is genuinely contested; "two hosts, two sides" is not a device to reach for. An empty array is the normal answer; only list what earns its place.
 - avoid: concrete patterns from the recent episodes that this one must not repeat.
 - glossary_policy: how unfamiliar names and terms from the glossary get introduced in this episode.
+- load_bearing_facts: facts from the OPEN QUESTIONS or GLOSSARY above that the episode genuinely cannot be honest without — something an ask or the through-line directly hinges on, where the research stage's quick pass was too thin to put on air. 0 to 3 entries, each a short, specific question to look up again in more depth. Almost always empty; this is NOT a place to re-request research on names that are merely unexplained — the glossary already covers those. Each one named here is researched once more at real depth before writing starts, so name only what actually matters.
 
 Write "format" in ${languageLabel}; write every other field in English — it is instruction for the writers' room, not a line anyone says on air.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"format":"","rationale":"","minutes":0,"segments":0,"roles":{"A":"","B":""},"tone":"","humor":"none|sparse|natural","opening":"","closing":"","rhythm":"","devices":[],"avoid":[],"glossary_policy":"","asks":[]}`;
+{"format":"","rationale":"","minutes":0,"segments":0,"roles":{"A":"","B":""},"tone":"","humor":"none|sparse|natural","opening":"","closing":"","rhythm":"","devices":[],"avoid":[],"glossary_policy":"","asks":[],"load_bearing_facts":[]}`;
 }
 
 function buildEditorialUserContent(input: EditorialInput): string {

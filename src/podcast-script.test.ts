@@ -86,6 +86,7 @@ const BASE_BRIEF: EpisodeBrief = {
   devices: [],
   avoid: [],
   glossaryPolicy: "Namen erst als das einführen, was sie sind.",
+  loadBearingFacts: [],
 };
 
 const briefWith = (overrides: Partial<EpisodeBrief>): EpisodeBrief => ({ ...BASE_BRIEF, ...overrides });

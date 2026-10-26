@@ -66,6 +66,8 @@ export interface EpisodeBrief {
   glossaryPolicy: string;
   /** The listener's concrete questions and habits from the brief/source ("raw carrots, unwashed, from the bag"), each owed an explicit verdict. */
   asks?: string[];
+  /** Facts from the dossier (glossary/openQuestions) the editor judges load-bearing enough for a standard-depth research follow-up; normally empty. The only source of `standard` depth (`runLoadBearingResearch` in podcast-research.ts) — the researcher itself cannot request it. */
+  loadBearingFacts: string[];
 }
 
 /** What the ledger remembers about a finished episode — the editor's history and the `past_episodes` tool read this. */

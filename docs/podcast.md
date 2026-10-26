@@ -19,11 +19,16 @@ writers' room:
   open questions). Best-effort — a throw here never fails the job, it just leaves the dossier empty.
 - **Editorial** (`src/podcast-editorial.ts`, `PODCAST_EDITORIAL_MODEL`) — one call that reads the
   dossier, the listener brief and the last `PODCAST_HISTORY_DEPTH` episode profiles, and decides
-  THIS episode's format, roles, tone, humor, opening/closing, rhythm and length (an `EpisodeBrief`).
-  A parse/LLM failure falls back to a neutral default brief, never the old formula.
+  THIS episode's format, roles, tone, humor, opening/closing, rhythm, length and up to 3
+  `loadBearingFacts` (an `EpisodeBrief`). A parse/LLM failure falls back to a neutral default brief,
+  never the old formula.
 
-Stage order inside `scripting`: `research → editorial → outline → segment → review → revise →
-metadata`. Memory lives in the job ledger (`EpisodeProfile`, persisted once the script locks,
+The research stage's own `research` tool is quick-depth only; `loadBearingFacts` is the only route
+to a standard-depth lookup, run as a follow-up after editorial, before the writers' room — see
+"Load-bearing follow-up" in `docs/podcast-editorial-room.md`.
+
+Stage order inside `scripting`: `research → editorial → research follow-up → outline → segment →
+review → revise → metadata`. Memory lives in the job ledger (`EpisodeProfile`, persisted once the script locks,
 `durationSeconds` filled after mastering) and `PodcastStore.recentEpisodes` feeds it back to the
 next episode's editor and to the research tools' `past_episodes`/`past_transcript`. A copy goes into
 the second brain as a transcript note (`src/brain-note.ts`, `Areas/Podcasts/`, best-effort git

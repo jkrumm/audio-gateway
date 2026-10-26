@@ -127,6 +127,7 @@ describe("defaultEpisodeBrief", () => {
     expect(brief.humor).toBe("sparse");
     expect(brief.devices).toEqual([]);
     expect(brief.avoid).toEqual([]);
+    expect(brief.loadBearingFacts).toEqual([]);
     expect(brief.opening).toContain("Straight in with the topic");
     expect(brief.roles.A).toContain("Jonas");
     expect(brief.roles.B).toContain("Lena");
@@ -156,6 +157,18 @@ describe("parseEpisodeBrief — length floor and asks", () => {
     expect(prompt).toContain("the first lines must still tell the listener what this episode answers");
     expect(prompt).toContain("- asks:");
     expect(prompt).toContain("never shorten by dropping something the listener asked about");
+  });
+
+  test("load-bearing facts are read as a string list, absent means none", () => {
+    const withFacts = parseEpisodeBrief(JSON.stringify({ minutes: 20, load_bearing_facts: ["Gilt der Rückruf auch für Chargen vor 2025?", "  ", 3] }), INPUT);
+    expect(withFacts.loadBearingFacts).toEqual(["Gilt der Rückruf auch für Chargen vor 2025?"]);
+    expect(parseEpisodeBrief(JSON.stringify({ minutes: 20 }), INPUT).loadBearingFacts).toEqual([]);
+  });
+
+  test("the editor prompt names load-bearing facts as the only route to standard-depth research", () => {
+    const prompt = editorialSystemPrompt(INPUT);
+    expect(prompt).toContain("- load_bearing_facts:");
+    expect(prompt).toContain("Almost always empty");
   });
 });
 

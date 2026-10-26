@@ -54,7 +54,7 @@ to make the writers' room *understand* it — not to rewrite it. Tools:
 | `brain_read` | `{ path: string }` | `{ path, frontmatter, body }` (body capped at 60k chars) | Path must resolve inside `BRAIN_DIR` (reject `..` and symlink escapes) |
 | `past_episodes` | `{ limit?: number }` | `[{ id, date, title, description, profile }]` for `done` jobs of the same series | `PodcastStore.recentEpisodes` |
 | `past_transcript` | `{ id: string }` | markdown transcript (capped at 40k chars) | `renderTranscriptMarkdown` over the persisted script |
-| `research` | `{ query: string, depth?: "quick" \| "standard" }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error` — unbounded (research-gateway itself has no time cap), with a heartbeat log line once a minute so a human tailing logs sees it's alive. No budget by default (`config.podcastResearchMaxCalls` 0 = unlimited; the gateway-reported `cost.totalUsd` is only recorded in the profile); identical queries are answered from the first run |
+| `research` | `{ query: string }` | `{ report, citations, sources }` | research-gateway REST: `POST {RESEARCH_GATEWAY_URL}/research/` → `{jobId}`, poll `GET /research/{jobId}` every 10 s until `done`/`failed`/`error` — unbounded (research-gateway itself has no time cap), with a heartbeat log line once a minute so a human tailing logs sees it's alive. Always `depth: "quick"` — any `depth` the model passes is ignored (standard depth is not this stage's to request; see "Load-bearing follow-up" below). No budget by default (`config.podcastResearchMaxCalls` 0 = unlimited; the gateway-reported `cost.totalUsd` is only recorded in the profile); identical queries are answered from the first run |
 
 The loop ends when the model returns a final JSON object (no tool call) — no round
 cap (agent workers have no turn ceiling). Each round's model call is idle-guarded
@@ -115,8 +115,22 @@ interface EpisodeBrief {
   glossaryPolicy: string;
   /** The listener's concrete questions/habits (0–8), each owed an explicit verdict. Optional: older briefs have none. */
   asks?: string[];
+  /** Facts from the dossier's glossary/openQuestions the editor judges load-bearing enough for a standard-depth follow-up (0–3, almost always empty). The only source of `standard` depth. */
+  loadBearingFacts: string[];
 }
 ```
+
+**Load-bearing follow-up (`runLoadBearingResearch` in `src/podcast-research.ts`).** The research
+stage's own `research` tool always runs `depth: "quick"` — a glossary one-liner requesting
+`standard` reproduced the overspend finding (`b78cb035`: ~240s, $2.29 against a <$0.50 target) when
+depth routing was only a prompt instruction honored by the model's own judgement. Pipeline order
+(research runs before editorial, so no load-bearing signal exists yet) rules out gating depth
+inside the research loop itself; instead, the editor — reading the quick-only dossier, the
+listener's `asks` and the through-line — names up to 3 facts in `loadBearingFacts`, and a follow-up
+step between editorial and scripting (`podcasts.ts` step 2b) runs exactly those at
+`depth: "standard"` via direct submit/poll (no model loop — the query is already named), folding
+the answers into `dossier.additions` before the writers' room sees it. Best-effort per fact: a
+failed lookup is logged and skipped, never thrown.
 
 **Asks, opening, length (Wave 5).** The editor extracts `asks` from the listener brief and source. The outline assigns each to
 exactly one segment (`answers`; `withAssignedAsks` places any it missed by textual fit). The segment writer and the agent
