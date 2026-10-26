@@ -58,7 +58,12 @@ pipeline (both retired 2026-06-17).
   Style rides in `parts[].speechMetadata.style` (a `"Style: text"` prefix is read aloud;
   `systemInstruction`/`speechConfig.speechMetadata` 400). Prep runs only for models in
   `TTS_GEMINI_PREP_MODELS` (briefing `gemini-3.8-flash-tts`); the chat default
-  `gemini-3.8-flash-lite-tts` is one raw call. `response_format: pcm` streams via
+  `gemini-3.8-flash-lite-tts` is one raw call. Expression is ONE vocabulary in every lane
+  (`gemini-tts-core`: `SPEECH_TAGS`, `DELIVERY_STYLES`): briefing prep picks a per-chunk `delivery` key (omitted =
+  the `PREP_STYLE` baseline; a prep-invented style string is replaced) and a tag band; the chat lane makes no extra
+  LLM call — allowlisted inline tags in the INPUT pass through (`normalizeForSpeech` protects them), invalid ones are
+  stripped, and the caller may set `delivery` (or a string `style`) in the request body — a key outside the
+  vocabulary is a 400 (`style` as a NUMBER is still ElevenLabs'). `runPrep` is exported for the harnesses. `response_format: pcm` streams via
   `streamGenerateContent?alt=sse` (sample-aligned passthrough, 400 ms zero join between chunks,
   billed from duration × 25 tokens/s because streamed `usageMetadata` is wrong; the
   `speech-request` row is recorded when the body ends — see `streamSettled`). mp3/opus/wav stay
@@ -110,11 +115,18 @@ pipeline (both retired 2026-06-17).
   stays on chat/completions. `callAnthropicMessages` takes a `cacheablePrefix` (the episode-stable leading part of
   `system`: house rules, voice, show bible, brief) and sends it as its own `cache_control: ephemeral` block; the
   segment and revision calls pass `baseSystemPrompt(...)`. A prefix that does not lead the system prompt logs a warning
-  and calls uncached. Measured 2026-10-26: ~10k tokens per call, second call −52% input cost.
+  and calls uncached. `jsonSchema` rides in `output_config.format` (GA structured outputs; forced `tool_choice` is
+  rejected by Opus/Sonnet 5.5; a changed schema invalidates the cache, so a stage sends one constant schema).
+  Measured 2026-10-26: ~10k tokens per call, second call −52% input cost.
 - `src/podcast-lint.ts` — deterministic script lint (stock phrases, >130-word turns, echoed reactions, segments with no
   question, metronomic turn lengths, acronyms/glossary terms used before an introducing clause; an all-caps token is an
-  acronym only if the source spells it that way). `writePodcastScript` renders its report into every reviewer's input and
-  turns stock-phrase / unintroduced-term findings into revision notes.
+  acronym only if the source spells it that way) plus the expression rules (tag outside the allowlist, tag leading a
+  short turn, adjacent tags, tags per ten turns outside `TAG_BAND_PER_TEN_TURNS`, delivery outside the vocabulary,
+  the same delivery on 3+ turns, delivery on a line under eight words, >1 CAPS emphasis per turn).
+  `writePodcastScript` renders its report into every reviewer's input and turns stock-phrase / unintroduced-term
+  findings into revision notes; `buildEpisodeProfile` records `expression` counts and `podcasts.ts` records
+  `profile.segmentation` (`lintSegmentation`: unit count/size spread, units over `PODCAST_MULTISPEAKER_MAX_CHARS`,
+  cross-segment units, a unit ending on a question whose answer opens the next).
 - `src/podcast-script.ts` — the writers' room: a role split with one voice owner. There is no fixed
   dramaturgy left in these prompts — the `EpisodeBrief` (from `podcast-editorial.ts`) decides shape,
   roles, tone, humor, opening, closing and rhythm; devices (hook/motif/reveals/digressions) are
@@ -127,7 +139,13 @@ pipeline (both retired 2026-06-17).
   guide (`brain/voice.md`, `PODCAST_VOICE_PATH`, optional) precedes it in the outline/segment/revision
   prompts only — the show bible overrides it for spoken audio. The write model defaults to
   `claude-opus-5-5` (`PODCAST_WRITE_MODEL`; `claude-opus-4-6` is the one-line rollback). Only tag vocabulary, turn
-  ceilings and segment bounds are enforced in code (`sanitizeTurns`).
+  ceilings and segment bounds are enforced in code (`sanitizeTurns`). A turn may carry a `delivery` (a key of
+  `DELIVERY_STYLES`, set only where the moment changes; the baseline carries none): the Gemini synth sends its style
+  string for that turn (`SynthTurnInput.style`; dense turns keep the slow style, an unknown key is ignored, the
+  ElevenLabs lane ignores it), `sanitizeTurns`/revision preserve it. Tag policy is a band, not "at most one every six
+  turns": a few well-placed pauses and real reactions per segment; the fact & speech editor flags MISUSE, not presence.
+  Segment/revision calls on `claude-*` send `SEGMENT_TURNS_SCHEMA` as `output_config.format` (Sonnet 5.5 otherwise
+  answers in `[A] …` screenplay text).
 - `src/podcast-synth.ts` — flattens a script into per-host-voiced turns and synthesizes them. Default
   lane (`PODCAST_TTS_MODEL=gemini-3.8-flash-tts`, voices Charon + Erinome): `unitsForMultiSpeaker` packs
   consecutive turns (≤ `PODCAST_MULTISPEAKER_MAX_CHARS`, never across a segment) into runs, each one

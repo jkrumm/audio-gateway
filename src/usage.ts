@@ -303,6 +303,9 @@ const RATES: Record<string, Rate> = {
   // claude-opus-5-5: agent-gateway server/lib/models.ts (modelpick metric_snapshot / OpenRouter, 2026-10-17).
   // Cache reads bill at $0.20/M, 5% of input (platform.claude.com pricing, read 2026-10-25); cache writes (1.25x) are not split out and bill at the input rate here.
   "claude-opus-5-5": { input: 4, cachedInput: 0.2, output: 20 },
+  // claude-sonnet-5-5 / claude-haiku-5-5: platform.claude.com pricing via research 2026-10-26; cache reads 5% of input, ≤100k prompt tier for Haiku.
+  "claude-sonnet-5-5": { input: 2, cachedInput: 0.1, output: 10 },
+  "claude-haiku-5-5": { input: 0.1, cachedInput: 0.01, output: 0.5 },
   "claude-opus-5": { input: 5, output: 25 },
   "claude-opus-4-8": { input: 5, output: 25 },
   "claude-opus-4-7": { input: 5, output: 25 },
@@ -316,6 +319,10 @@ const RATES: Record<string, Rate> = {
   "gpt-5.6-luna": { input: 0.2, cachedInput: 0.02, output: 1.2 },
   // OpenAI list price, short-context tier (developers.openai.com/api/docs/pricing, 2026-09-23).
   "gpt-6-luna": { input: 0.1, cachedInput: 0.01, output: 0.5 },
+  // gpt-6.1-sol: PROVISIONAL — search-snippet level only (research 2026-10-26), OpenAI's own table was not readable.
+  "gpt-6.1-sol": { input: 2, cachedInput: 0.1, output: 10 },
+  // gemini-4-argon: ai.google.dev/gemini-api/docs/pricing, Standard tier, no context tiers; introductory through 2026-11-30, then 4 / 0.2 / 20.
+  "gemini-4-argon": { input: 2, cachedInput: 0.1, output: 10 },
   "gpt-5.6-terra": { input: 2, output: 12 },
   "gpt-5.6-sol": { input: 4, output: 20 },
   "gpt-5.5": { input: 5, output: 30 },

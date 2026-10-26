@@ -53,9 +53,10 @@ The first segment opens cold + intros the show; the last wraps with three takeaw
 every other segment ends on a hand-off, never a conclusion.
 
 The system prompt is one shared contract (`baseSystemPrompt`): every fact must come from the source,
-numbers and abbreviations are spelled out for the ear, and 3.8 inline tags (`<short pause>`, `<laugh>`, …) are used sparingly
-from a fixed allow-list (`V3_PODCAST_TAGS`) — at most one every six turns, only inside turns of twelve
-words or more. Turn length and rhythm are NOT quota-driven — see "Writers' room" below for why.
+numbers and abbreviations are spelled out for the ear, and 3.8 inline tags (`<short pause>`, `<laugh>`, …) come from a
+fixed allow-list (`SPEECH_TAGS`) as a band — a few well-placed pauses and real reactions per segment, roughly one
+every four to eight turns, only inside turns of twelve words or more; per-turn `delivery` (a key of `DELIVERY_STYLES`)
+marks only the turns where the moment changes. Turn length and rhythm are NOT quota-driven — see "Writers' room" below for why.
 `sanitizeTurns` strips any tag outside the allow-list, strips markdown/emoji, splits any turn over
 ~1400 chars OR ~180 words at sentence boundaries (same speaker), and folds a short leading fragment
 ("Echt?") into its same-speaker predecessor.
