@@ -165,6 +165,9 @@ function measure(params: { turns: ScriptTurn[]; title: string; target: number; r
   return { turns, report, blocking: [...blocking, ...lengthFindings], advisory };
 }
 
+/** gpt-6.1-sol serves function tools only on /v1/responses (chat/completions: 503 for every effort, and "none" is unsupported) — the single-shot writer handles it (probed 2026-10-26). */
+const NO_CHAT_TOOLS = /^gpt-6\.1/;
+
 function glossaryTool(req: PodcastScriptRequest, hasBrain: boolean): ToolDef {
   return {
     name: "glossary_lookup",
@@ -187,6 +190,7 @@ function glossaryTool(req: PodcastScriptRequest, hasBrain: boolean): ToolDef {
 /** One loop: `mode` draft or revise. Throws when the loop ends with nothing usable; the caller falls back to the single-shot writer. */
 async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "revise"; req: PodcastScriptRequest; outline: Outline; index: number; total: number; systemPrompt: string; userContent: string }): Promise<ScriptTurn[]> {
   const { req, outline, index, mode } = params;
+  if (NO_CHAT_TOOLS.test(opts.model)) throw new Error(`${opts.model} serves function tools only on /v1/responses — single-shot writer instead`);
   const spec = outline.segments[index];
   if (!spec) throw new Error(`outline segment ${index} out of range`);
   const lintOpts: LintOptions = { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source };

@@ -166,6 +166,12 @@ describe("segment agent", () => {
     expect(bodies[0]!.messages[0]!.content).toContain("REVISING ONE SEGMENT");
   });
 
+  test("gpt-6.1 has no function tools on chat/completions: the agent throws before any request", async () => {
+    const { fetchImpl, bodies } = scripted([]);
+    await expect(createSegmentAgent({ model: "gpt-6.1-sol", maxUnitChars: 3000, fetchImpl }).draft({ req: REQ, outline: OUTLINE, index: 0, total: 1, showBible: "", voice: "" })).rejects.toThrow(/\/v1\/responses/);
+    expect(bodies).toHaveLength(0);
+  });
+
   test("a model that never measured anything throws, so the caller can fall back to the single-shot writer", async () => {
     const { fetchImpl } = scripted([plainReply("Hier ist kein Tool-Aufruf.")]);
     await expect(draft(fetchImpl)).rejects.toThrow(/without a measured draft/);
