@@ -556,11 +556,16 @@ function buildEpisodeHistory(store: PodcastStore, series: string): EpisodeHistor
   };
 }
 
-/** Drops answered load-bearing facts from `openQuestions` so the outro (podcast-script.ts) can't reopen a gap the follow-up research just closed. */
-function dropAnsweredOpenQuestions(openQuestions: string[], answeredFacts: string[]): string[] {
-  if (answeredFacts.length === 0) return openQuestions;
-  const answered = new Set(answeredFacts);
-  return openQuestions.filter((q) => !answered.has(q));
+/** Case/whitespace/punctuation-insensitive key so a trivial transcription slip in the editor's verbatim copy still matches its source entry. */
+function normalizeOpenQuestion(question: string): string {
+  return question.trim().toLowerCase().replace(/\s+/gu, " ").replace(/[.,;:!?]+$/u, "").trim();
+}
+
+/** Drops answered open questions from `openQuestions` so the outro (podcast-script.ts) can't reopen a gap the follow-up research just closed. Matches on `LoadBearingFact.openQuestion` — the editor's own copy of the entry — never on the (deliberately reworded) research question, so a paraphrase can't leave the original gap open. */
+function dropAnsweredOpenQuestions(openQuestions: string[], answeredOpenQuestions: string[]): string[] {
+  if (answeredOpenQuestions.length === 0) return openQuestions;
+  const answered = new Set(answeredOpenQuestions.map(normalizeOpenQuestion));
+  return openQuestions.filter((q) => !answered.has(normalizeOpenQuestion(q)));
 }
 
 /**
@@ -690,7 +695,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
         // A fact answered at standard depth must not survive in openQuestions — the editor (podcast-editorial.ts)
         // and the writer's outro question (podcast-script.ts) both draw from it, and an episode must not ask
         // the listener about a gap it just closed.
-        openQuestions: dropAnsweredOpenQuestions(dossier.openQuestions, followUp.answeredFacts),
+        openQuestions: dropAnsweredOpenQuestions(dossier.openQuestions, followUp.answeredOpenQuestions),
         researchUsd: (dossier.researchUsd ?? 0) + followUp.usdSpent,
       };
       await writeFile(files.dossier, JSON.stringify(dossier, null, 2), "utf8");

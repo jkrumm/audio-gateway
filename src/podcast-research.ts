@@ -12,7 +12,7 @@ import { rawFetch } from "./gemini-tts";
 import { runToolLoop, type ToolDef, type ToolLoopFetch } from "./llm-tools";
 import { log } from "./log";
 import { repairGermanQuotes } from "./podcast-script";
-import type { Dossier, EpisodeHistory, ToolCallRecord } from "./podcast-types";
+import type { Dossier, EpisodeHistory, LoadBearingFact, ToolCallRecord } from "./podcast-types";
 
 export interface ResearchInput {
   source: string;
@@ -403,50 +403,54 @@ export interface LoadBearingResearchResult {
   additions: Dossier["additions"];
   toolCalls: ToolCallRecord[];
   usdSpent: number;
-  /** The facts (verbatim from `brief.loadBearingFacts`) that resolved — the caller drops these from `dossier.openQuestions` so a closed gap doesn't reopen in the outro. */
-  answeredFacts: string[];
+  /** The `openQuestion` of each resolved fact that named one (verbatim, copied from `dossier.openQuestions` by the editor) — the caller drops exactly these from `dossier.openQuestions` so a closed gap doesn't reopen in the outro. A fact whose `openQuestion` was empty (glossary-sourced) contributes nothing here. */
+  answeredOpenQuestions: string[];
 }
 
 /**
  * Standard-depth research for the facts the editorial pass named as
  * load-bearing (`EpisodeBrief.loadBearingFacts`) — the only place `standard`
- * depth runs. Code decides the query (the fact itself), not the model, so
- * there is no prompt to misread. No cap here: the editorial prompt's own
- * "0 to 3" guidance is the routing rule (docs/podcast-editorial-room.md);
- * this stage honors however many the editor actually names. Best-effort per
- * fact: a submit or poll failure is logged and skipped, never thrown — same
- * contract as the research stage itself (Decision 7).
+ * depth runs. Code decides the query (`fact.question`), not the model, so
+ * there is no prompt to misread. Matching back to `dossier.openQuestions`
+ * uses `fact.openQuestion` — the editor's verbatim copy of the entry, not
+ * `fact.question` — because the research question is deliberately a reworded
+ * "look this up" phrasing and does not equal the original gap text. No cap
+ * here: the editorial prompt's own "0 to 3" guidance is the routing rule
+ * (docs/podcast-editorial-room.md); this stage honors however many the
+ * editor actually names. Best-effort per fact: a submit or poll failure is
+ * logged and skipped, never thrown — same contract as the research stage
+ * itself (Decision 7).
  */
 export async function runLoadBearingResearch(
-  facts: string[],
+  facts: LoadBearingFact[],
   deps: { research?: ResearchDeps["research"]; fetchImpl?: ToolLoopFetch; pollIntervalMs?: number },
 ): Promise<LoadBearingResearchResult> {
   const research = deps.research;
-  if (!research || facts.length === 0) return { additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] };
+  if (!research || facts.length === 0) return { additions: [], toolCalls: [], usdSpent: 0, answeredOpenQuestions: [] };
   const fetchImpl = deps.fetchImpl ?? rawFetch;
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const additions: Dossier["additions"] = [];
   const toolCalls: ToolCallRecord[] = [];
-  const answeredFacts: string[] = [];
+  const answeredOpenQuestions: string[] = [];
   let usdSpent = 0;
   for (const fact of facts) {
     const startedAt = Date.now();
     try {
-      const submitted = await submitResearchJob(research, fact, "standard", fetchImpl);
+      const submitted = await submitResearchJob(research, fact.question, "standard", fetchImpl);
       if (!submitted.ok) throw new Error(submitted.error);
       const polled = await pollResearchJob(research, submitted.jobId, fetchImpl, pollIntervalMs);
       if (!polled.ok) throw new Error(polled.error);
       usdSpent += polled.usdSpent;
-      additions.push({ source: `research: ${fact}`, text: polled.answer });
-      answeredFacts.push(fact);
-      toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: true, ms: Date.now() - startedAt });
+      additions.push({ source: `research: ${fact.question}`, text: polled.answer });
+      if (fact.openQuestion) answeredOpenQuestions.push(fact.openQuestion);
+      toolCalls.push({ tool: "research", args: { query: fact.question, depth: "standard" }, ok: true, ms: Date.now() - startedAt });
     } catch (err) {
-      log.warn("podcast load-bearing research failed, skipping this fact", { fact, error: err instanceof Error ? err.message : String(err) });
-      toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: false, ms: Date.now() - startedAt });
+      log.warn("podcast load-bearing research failed, skipping this fact", { fact: fact.question, error: err instanceof Error ? err.message : String(err) });
+      toolCalls.push({ tool: "research", args: { query: fact.question, depth: "standard" }, ok: false, ms: Date.now() - startedAt });
     }
   }
-  return { additions, toolCalls, usdSpent, answeredFacts };
+  return { additions, toolCalls, usdSpent, answeredOpenQuestions };
 }
 
 /** Exported for tests. */

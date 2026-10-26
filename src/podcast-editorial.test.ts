@@ -159,9 +159,19 @@ describe("parseEpisodeBrief — length floor and asks", () => {
     expect(prompt).toContain("never shorten by dropping something the listener asked about");
   });
 
-  test("load-bearing facts are read as a string list, absent means none", () => {
-    const withFacts = parseEpisodeBrief(JSON.stringify({ minutes: 20, load_bearing_facts: ["Gilt der Rückruf auch für Chargen vor 2025?", "  ", 3] }), INPUT);
-    expect(withFacts.loadBearingFacts).toEqual(["Gilt der Rückruf auch für Chargen vor 2025?"]);
+  test("load-bearing facts are read as {question, open_question} objects, absent means none", () => {
+    const withFacts = parseEpisodeBrief(
+      JSON.stringify({
+        minutes: 20,
+        load_bearing_facts: [
+          { question: "Gilt der Rückruf auch für Chargen vor 2025?", open_question: "Gilt der Rückruf für ältere Chargen?" },
+          { question: "  " },
+          3,
+        ],
+      }),
+      INPUT,
+    );
+    expect(withFacts.loadBearingFacts).toEqual([{ question: "Gilt der Rückruf auch für Chargen vor 2025?", openQuestion: "Gilt der Rückruf für ältere Chargen?" }]);
     expect(parseEpisodeBrief(JSON.stringify({ minutes: 20 }), INPUT).loadBearingFacts).toEqual([]);
   });
 

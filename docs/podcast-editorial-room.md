@@ -116,7 +116,7 @@ interface EpisodeBrief {
   /** The listener's concrete questions/habits (0–8), each owed an explicit verdict. Optional: older briefs have none. */
   asks?: string[];
   /** Facts from the dossier's glossary/openQuestions the editor judges load-bearing enough for a standard-depth follow-up (0–3, almost always empty). The only source of `standard` depth. */
-  loadBearingFacts: string[];
+  loadBearingFacts: Array<{ question: string; openQuestion: string }>;
 }
 ```
 
@@ -131,6 +131,17 @@ step between editorial and scripting (`podcasts.ts` step 2b) runs exactly those 
 `depth: "standard"` via direct submit/poll (no model loop — the query is already named), folding
 the answers into `dossier.additions` before the writers' room sees it. Best-effort per fact: a
 failed lookup is logged and skipped, never thrown.
+
+Each `loadBearingFacts` entry carries both the research `question` (deliberately reworded — "a
+short, specific question to look up again") and `openQuestion`, the editor's word-for-word copy of
+the `openQuestions` entry it answers (empty when the fact is glossary-sourced instead). Dropping a
+closed gap from `dossier.openQuestions` (`dropAnsweredOpenQuestions` in `podcasts.ts`) matches on
+`openQuestion`, never on `question` — matching on the reworded research question against the
+original openQuestions text let a paraphrase leave its source gap open while the answer was already
+in `additions` (the outro then asked about a gap that had just been closed). The match itself
+normalises case/whitespace/trailing punctuation as a safety net against incidental transcription
+drift, not as the paraphrase fix — the paraphrase fix is the editor returning the verbatim source
+entry, not code guessing at a reworded match.
 
 **Asks, opening, length (Wave 5).** The editor extracts `asks` from the listener brief and source. The outline assigns each to
 exactly one segment (`answers`; `withAssignedAsks` places any it missed by textual fit). The segment writer and the agent

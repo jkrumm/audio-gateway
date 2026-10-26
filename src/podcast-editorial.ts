@@ -1,6 +1,6 @@
 import { log } from "./log";
 import { callAndParse, callPodcastLlm, extractJsonObject, planSegmentCount, type PodcastHost } from "./podcast-script";
-import type { Dossier, EpisodeBrief, EpisodeSummary, HumorLevel } from "./podcast-types";
+import type { Dossier, EpisodeBrief, EpisodeSummary, HumorLevel, LoadBearingFact } from "./podcast-types";
 
 // The editorial room: one model call between research and the writers' room
 // that decides what KIND of episode this material deserves — format, roles,
@@ -129,6 +129,15 @@ const str = (value: unknown, fallback: string): string => (typeof value === "str
 const strList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((v): v is string => typeof v === "string" && v.trim().length > 0).map((v) => v.trim()) : [];
 
+/** Tolerant parse of `load_bearing_facts`: an entry without a non-empty `question` is dropped; `open_question` defaults to "" (glossary-sourced, no gap to close). */
+const loadBearingFactList = (value: unknown): LoadBearingFact[] =>
+  Array.isArray(value)
+    ? value
+        .filter((v): v is Record<string, unknown> => typeof v === "object" && v !== null)
+        .map((v) => ({ question: str(v["question"], ""), openQuestion: str(v["open_question"] ?? v["openQuestion"], "") }))
+        .filter((f) => f.question.length > 0)
+    : [];
+
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 /** Words in the LISTENER BRIEF that ask for a playful, funny episode. Matched case-insensitively. */
@@ -194,7 +203,7 @@ export function parseEpisodeBrief(
     avoid: strList(parsed["avoid"]),
     glossaryPolicy: str(parsed["glossary_policy"] ?? parsed["glossaryPolicy"], fallback.glossaryPolicy),
     asks: strList(parsed["asks"]),
-    loadBearingFacts: strList(parsed["load_bearing_facts"] ?? parsed["loadBearingFacts"]),
+    loadBearingFacts: loadBearingFactList(parsed["load_bearing_facts"] ?? parsed["loadBearingFacts"]),
   };
 }
 
@@ -240,7 +249,7 @@ Decide, and return as JSON:
 - devices: dramaturgy devices that genuinely fit THIS material — a motif, a withheld reveal, a planned digression. A live disagreement belongs here only if the source is genuinely contested; "two hosts, two sides" is not a device to reach for. An empty array is the normal answer; only list what earns its place.
 - avoid: concrete patterns from the recent episodes that this one must not repeat.
 - glossary_policy: how unfamiliar names and terms from the glossary get introduced in this episode.
-- load_bearing_facts: facts from the OPEN QUESTIONS or GLOSSARY above that the episode genuinely cannot be honest without — something an ask or the through-line directly hinges on, where the research stage's quick pass was too thin to put on air. 0 to 3 entries, each a short, specific question to look up again in more depth. Almost always empty; this is NOT a place to re-request research on names that are merely unexplained — the glossary already covers those. Each one named here is researched once more at real depth before writing starts, so name only what actually matters.
+- load_bearing_facts: facts from the OPEN QUESTIONS or GLOSSARY above that the episode genuinely cannot be honest without — something an ask or the through-line directly hinges on, where the research stage's quick pass was too thin to put on air. 0 to 3 entries, each an object: {"question": "<a short, specific question to look up again in more depth>", "open_question": "<the OPEN QUESTIONS entry above this answers, copied word-for-word, exactly as listed — never reworded; leave this empty if the fact comes from the GLOSSARY instead>"}. Almost always empty; this is NOT a place to re-request research on names that are merely unexplained — the glossary already covers those. Each one named here is researched once more at real depth before writing starts, so name only what actually matters.
 
 Write "format" in ${languageLabel}; write every other field in English — it is instruction for the writers' room, not a line anyone says on air.
 

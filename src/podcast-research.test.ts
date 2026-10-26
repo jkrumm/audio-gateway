@@ -433,6 +433,11 @@ describe("research tool", () => {
 // runLoadBearingResearch — the only place standard depth runs
 // ---------------------------------------------------------------------------
 
+/** `openQuestion: ""` by default — most call sites in these tests don't care about the drop-mapping, only `answeredOpenQuestions` tests do. */
+function fact(question: string, openQuestion = ""): import("./podcast-types").LoadBearingFact {
+  return { question, openQuestion };
+}
+
 describe("runLoadBearingResearch", () => {
   test("runs each editor-named fact at standard depth and folds the answers into additions", async () => {
     const submitted: string[] = [];
@@ -444,7 +449,7 @@ describe("runLoadBearingResearch", () => {
       if (typeof init?.body === "string") submitted.push(init.body);
       return fetchImpl(url, init);
     };
-    const result = await runLoadBearingResearch(["fact one", "fact two"], {
+    const result = await runLoadBearingResearch([fact("fact one"), fact("fact two")], {
       research: { url: "https://research.example.com", apiKey: "key" },
       fetchImpl: trackingFetch,
       pollIntervalMs: 0,
@@ -455,13 +460,12 @@ describe("runLoadBearingResearch", () => {
       { source: "research: fact one", text: "answer one" },
       { source: "research: fact two", text: "answer two" },
     ]);
-    expect(result.answeredFacts).toEqual(["fact one", "fact two"]);
     expect(result.usdSpent).toBeCloseTo(0.5);
   });
 
   test("no research configured or no facts named → no calls, empty result", async () => {
-    expect(await runLoadBearingResearch(["fact"], {})).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] });
-    expect(await runLoadBearingResearch([], { research: { url: "https://research.example.com", apiKey: "key" } })).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredFacts: [] });
+    expect(await runLoadBearingResearch([fact("fact")], {})).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredOpenQuestions: [] });
+    expect(await runLoadBearingResearch([], { research: { url: "https://research.example.com", apiKey: "key" } })).toEqual({ additions: [], toolCalls: [], usdSpent: 0, answeredOpenQuestions: [] });
   });
 
   test("a failed fact is skipped, not thrown — the rest still run", async () => {
@@ -469,13 +473,12 @@ describe("runLoadBearingResearch", () => {
       rawRes(500, "upstream error"),
       rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "answer two" } }),
     ]);
-    const result = await runLoadBearingResearch(["bad fact", "good fact"], {
+    const result = await runLoadBearingResearch([fact("bad fact"), fact("good fact")], {
       research: { url: "https://research.example.com", apiKey: "key" },
       fetchImpl,
       pollIntervalMs: 0,
     });
     expect(result.additions).toEqual([{ source: "research: good fact", text: "answer two" }]);
-    expect(result.answeredFacts).toEqual(["good fact"]);
     expect(result.toolCalls.map((c) => c.ok)).toEqual([false, true]);
   });
 
@@ -487,13 +490,28 @@ describe("runLoadBearingResearch", () => {
       rawRes(200, { jobId: "d" }), rawRes(200, { status: "done", result: { report: "d" } }),
       rawRes(200, { jobId: "e" }), rawRes(200, { status: "done", result: { report: "e" } }),
     ]);
-    const result = await runLoadBearingResearch(["f1", "f2", "f3", "f4", "f5"], {
+    const result = await runLoadBearingResearch([fact("f1"), fact("f2"), fact("f3"), fact("f4"), fact("f5")], {
       research: { url: "https://research.example.com", apiKey: "key" },
       fetchImpl,
       pollIntervalMs: 0,
     });
     expect(result.additions).toHaveLength(5);
     expect(count()).toBe(10);
+  });
+
+  test("answeredOpenQuestions carries the editor's openQuestion, not the (deliberately reworded) research question — a real paraphrase still maps back to its source", async () => {
+    const { fetchImpl } = scriptedFetch([
+      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "answer" } }),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "answer" } }),
+    ]);
+    const result = await runLoadBearingResearch(
+      [
+        fact("How recent is the official stance on long-term safety?", "is it safe long-term?"),
+        fact("glossary lookup, no open question behind it"),
+      ],
+      { research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl, pollIntervalMs: 0 },
+    );
+    expect(result.answeredOpenQuestions).toEqual(["is it safe long-term?"]);
   });
 });
 
