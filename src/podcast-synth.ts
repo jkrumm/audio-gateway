@@ -1,5 +1,5 @@
 import { SAMPLE_RATE_DEFAULT } from "./audio";
-import { synthConcurrent } from "./gemini-tts-core";
+import { DELIVERY_STYLES, endsOnQuestion, isDeliveryKey, synthConcurrent } from "./gemini-tts-core";
 import { type MultiSpeakerPart, synthMultiSpeaker } from "./gemini-tts";
 import type { PodcastHost, ScriptSegment } from "./podcast-script";
 import { log } from "./log";
@@ -91,6 +91,8 @@ export interface SynthTurnInput {
   speed?: number;
   /** Dense (number-heavy) turn: the 3.8 lane has no speed parameter, so it slows the turn through its style string. */
   dense?: boolean;
+  /** The 3.8 style string for this turn's writer-set delivery; absent = the host baseline. Unknown keys never get here. */
+  style?: string;
   languageCode: string;
   previousText?: string;
   nextText?: string;
@@ -159,6 +161,7 @@ export function turnsForSynthesis(
       speakerName: host.name,
       voice: host.voice,
       ...(dense && { dense }),
+      ...(turn.delivery && isDeliveryKey(turn.delivery) && { style: DELIVERY_STYLES[turn.delivery] }),
       ...(speed !== undefined && { speed }),
       languageCode,
       previousText: cap(previousTextByIndex[i]),
@@ -218,7 +221,8 @@ export async function synthesizeTurns(turns: SynthTurnInput[], opts: SynthTurnsO
 // One request carries a run of consecutive turns by both hosts (docs/gemini-tts.md
 // §Multi-speaker), so the audio comes back per RUN, not per turn. Runs never span a
 // segment, which keeps chapter starts exact. Pacing has no speed parameter: each host
-// gets a constant short style string, number-dense turns a slower one.
+// gets a constant short style string, a turn the writer gave a `delivery` its mapped style
+// (DELIVERY_STYLES), number-dense turns a slower one. The ElevenLabs lane ignores delivery.
 
 /** A run of consecutive turns synthesized in one request (an ElevenLabs "unit" is always one turn). */
 export interface SynthUnit {
@@ -237,6 +241,9 @@ export const unitsPerTurn = (turnCount: number): SynthUnit[] =>
 /**
  * Pack consecutive turns into runs of at most `maxChars` characters, never across a segment
  * boundary (`segmentLengths` = turns per segment). A single over-long turn is its own run.
+ * A cut never lands between a question and its answer: when a run would end on a question,
+ * the question moves to the next run (the cut goes after the previous answer) — unless that
+ * leaves the run empty.
  */
 export function unitsForMultiSpeaker(turns: SynthTurnInput[], segmentLengths: number[], maxChars: number): SynthUnit[] {
   const units: SynthUnit[] = [];
@@ -247,9 +254,11 @@ export function unitsForMultiSpeaker(turns: SynthTurnInput[], segmentLengths: nu
     for (let i = start; i < start + length; i++) {
       const size = turns[i]?.text.length ?? 0;
       if (current.length > 0 && chars + size > maxChars) {
+        const last = current[current.length - 1];
+        const carried = current.length > 1 && last !== undefined && endsOnQuestion(turns[last]?.text ?? "") ? [current.pop() as number] : [];
         units.push({ turnIndexes: current });
-        current = [];
-        chars = 0;
+        current = carried;
+        chars = carried.reduce((n, t) => n + (turns[t]?.text.length ?? 0), 0);
       }
       current.push(i);
       chars += size;
@@ -300,7 +309,7 @@ export async function synthesizeGeminiUnits(
       return {
         speaker: label(turn),
         text: turn.text,
-        style: turn.dense ? DENSE_TURN_STYLE : opts.hostStyles[turn.speaker === "A" ? 0 : 1],
+        style: turn.dense ? DENSE_TURN_STYLE : (turn.style ?? opts.hostStyles[turn.speaker === "A" ? 0 : 1]),
       };
     });
     let result: Awaited<ReturnType<typeof synthMultiSpeaker>>;

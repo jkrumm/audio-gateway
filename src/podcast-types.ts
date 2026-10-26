@@ -80,6 +80,10 @@ export interface EpisodeProfile {
   segmentCount: number;
   toolCalls: number;
   researchCalls: number;
+  /** Deterministic expression lint of the final script (podcast-lint.ts): allowed tags, writer-set deliveries, findings per rule. Absent on episodes before 2026-10-26. */
+  expression?: { tags: number; deliveries: number; findings: Record<string, number> };
+  /** Multi-speaker request segmentation of the synth stage (lintSegmentation); absent on the ElevenLabs lane and older episodes. */
+  segmentation?: { units: number; minChars: number; meanChars: number; maxChars: number; findings: string[] };
 }
 
 /** A past episode as the editor and the researcher see it. */

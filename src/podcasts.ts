@@ -9,6 +9,7 @@ import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, startSpan, traceIdFromRequestId, withRootSpan, withSpan } from "./otel";
 import { getRequestMeta, recordUsage, runWithRequestContext } from "./usage";
 import { buildEpisodeProfile, loadShowBible, type PodcastHost, type PodcastScript, type ScriptSegment, writePodcastScript } from "./podcast-script";
+import { lintSegmentation } from "./podcast-lint";
 import {
   isGeminiModel,
   type SynthTurnOutput,
@@ -699,7 +700,7 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
   files.script = join(dir, "script.json");
   const persistedScript: PersistedPodcastScript = { ...script, hosts };
   await writeFile(files.script, JSON.stringify(persistedScript, null, 2), "utf8");
-  const profile = buildEpisodeProfile({ brief, script, dossier });
+  const profile = buildEpisodeProfile({ brief, script, dossier, hosts });
   store.update(job.id, { title: script.title, description: script.description, files: { ...files }, profile });
 
   // 4. synthesizing
@@ -716,6 +717,16 @@ async function runPodcastPipeline(job: PodcastJob, store: PodcastStore, span: Sp
         config.podcastMultiSpeakerMaxChars,
       )
     : unitsPerTurn(turns.length);
+  if (gemini) {
+    profile.segmentation = lintSegmentation({
+      texts: turns.map((t) => t.text),
+      segmentLengths: script.segments.map((segment) => segment.turns.length),
+      units,
+      maxChars: config.podcastMultiSpeakerMaxChars,
+    });
+    log.info("podcast segmentation", { id: job.id, ...profile.segmentation });
+    store.update(job.id, { profile });
+  }
   const onSynthProgress = (done: number, total: number): void => {
     store.update(job.id, { progress: { stage: "synth", done, total } });
   };

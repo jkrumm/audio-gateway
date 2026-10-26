@@ -1,3 +1,4 @@
+import { DELIVERY_STYLES, endsOnQuestion, isDeliveryKey, SPEECH_TAGS, TAG_PATTERN } from "./gemini-tts-core";
 import type { ReviewNote, ScriptSegment } from "./podcast-script";
 
 /**
@@ -8,10 +9,22 @@ import type { ReviewNote, ScriptSegment } from "./podcast-script";
  * (stock phrases, unintroduced terms) become revision notes on their own.
  */
 
+/** The deterministic expression rules (tags, per-turn delivery, CAPS emphasis); the findings are advisory facts for the reviewers. */
+export type ExpressionRule =
+  | "tag-not-allowed"
+  | "tag-leads-short-turn"
+  | "tags-adjacent"
+  | "tags-below-band"
+  | "tags-above-band"
+  | "delivery-unknown"
+  | "delivery-streak"
+  | "delivery-short-turn"
+  | "caps-emphasis";
+
 export interface LintFinding {
   segmentIndex: number;
   turnIndex: number | null;
-  rule: "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term";
+  rule: ExpressionRule | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term";
   message: string;
 }
 
@@ -27,6 +40,10 @@ export interface SegmentMetrics {
   /** Turns that contain a question mark, per host id. */
   questionTurns: { A: number; B: number };
   echoReactions: number;
+  /** Allowed inline tags in the segment. */
+  tags: number;
+  /** Turns carrying a writer-set `delivery`. */
+  deliveries: number;
 }
 
 export interface LintReport {
@@ -44,6 +61,17 @@ export interface LintOptions {
 }
 
 const SHORT_TURN_WORDS = 8;
+/** Below this many words a tag is the whole delivery of the line (mirrors the sanitizer's floor in podcast-script.ts). */
+const TAG_MIN_TURN_WORDS = 12;
+/** A segment this long is measured against the tag band; a shorter one is too small to judge. */
+const MIN_TURNS_FOR_TAG_BAND = 10;
+/** Inline tags per ten turns: the band the writer prompt asks for ("one every four to eight turns" = 1.25–2.5; the lint is looser). Set from the 2026-10-26 listening proof. */
+export const TAG_BAND_PER_TEN_TURNS = { min: 1, max: 3.5 } as const;
+/** A non-baseline delivery on this many consecutive turns is a habit, not a moment. */
+const DELIVERY_STREAK = 3;
+/** A delivery on a line shorter than this has no time to land. */
+const DELIVERY_MIN_WORDS = 8;
+const ALLOWED_TAGS = new Set<string>(SPEECH_TAGS.map((t) => t.toLowerCase()));
 /** Above this a turn is a lecture: the fast, interactive pace the owner wants breaks down. */
 const MONOLOGUE_WORDS = 130;
 const MIN_TURNS_FOR_RHYTHM = 8;
@@ -67,6 +95,7 @@ const STOCK_PHRASES: Array<{ pattern: RegExp; label: string }> = [
 const wordsOf = (text: string): string[] => (text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).filter((w) => w.length > 0);
 const countWords = (text: string): number => (text.match(/\S+/g) ?? []).length;
 const TAG = /<[^<>\n]{1,24}>/g;
+const tagsIn = (text: string): string[] => text.match(TAG_PATTERN) ?? [];
 const stripTags = (text: string): string => text.replace(TAG, " ").replace(/\s+/g, " ").trim();
 const firstSentence = (text: string): string => stripTags(text).split(/(?<=[.!?])\s+/)[0] ?? "";
 
@@ -90,7 +119,11 @@ function metricsFor(segment: ScriptSegment): SegmentMetrics {
   const variance = lengths.length > 0 ? lengths.reduce((a, l) => a + (l - mean) ** 2, 0) / lengths.length : 0;
   const questionTurns = { A: 0, B: 0 };
   let echoReactions = 0;
+  let tags = 0;
+  let deliveries = 0;
   segment.turns.forEach((turn, i) => {
+    tags += tagsIn(turn.text).filter((t) => ALLOWED_TAGS.has(t.toLowerCase())).length;
+    if (turn.delivery) deliveries++;
     if (turn.text.includes("?")) questionTurns[turn.speaker]++;
     if (isEcho(turn.text, segment.turns[i - 1]?.text)) echoReactions++;
   });
@@ -103,6 +136,8 @@ function metricsFor(segment: ScriptSegment): SegmentMetrics {
     shortTurnShare: lengths.length > 0 ? Math.round((lengths.filter((l) => l <= SHORT_TURN_WORDS).length / lengths.length) * 100) / 100 : 0,
     questionTurns,
     echoReactions,
+    tags,
+    deliveries,
   };
 }
 
@@ -165,6 +200,117 @@ function unintroducedTerms(segments: ScriptSegment[], opts: LintOptions): LintFi
   return findings;
 }
 
+
+/** Words of a turn with its tags removed. */
+const spokenWords = (text: string): number => countWords(stripTags(text.replace(TAG_PATTERN, " ")));
+
+/** CAPS emphasis: an all-caps token that is not an acronym the source spells that way or a host name. */
+function capsEmphasis(text: string, own: Set<string>, sourceAcronyms: Set<string> | undefined): number {
+  const stripped = text.replace(TAG_PATTERN, " ");
+  return (stripped.match(ACRONYM) ?? []).filter((w) => !own.has(w.toLowerCase()) && !(sourceAcronyms?.has(w) ?? false)).length;
+}
+
+/** Tags, per-turn delivery and CAPS emphasis — the measurable half of "expressiveness on purpose". */
+function expressionFindings(segments: ScriptSegment[], opts: LintOptions, metrics: SegmentMetrics[]): LintFinding[] {
+  const findings: LintFinding[] = [];
+  const own = new Set((opts.hostNames ?? []).map((n) => n.toLowerCase()));
+  const sourceAcronyms = opts.source === undefined ? undefined : new Set(opts.source.match(ACRONYM) ?? []);
+  segments.forEach((segment, segmentIndex) => {
+    let streak = 0;
+    let streakKey = "";
+    segment.turns.forEach((turn, turnIndex) => {
+      const found = tagsIn(turn.text);
+      for (const tag of found) {
+        if (!ALLOWED_TAGS.has(tag.toLowerCase())) {
+          findings.push({ segmentIndex, turnIndex, rule: "tag-not-allowed", message: `Tag ${tag} is not in the allowed list (${SPEECH_TAGS.join(" ")}). Remove it or use an allowed one.` });
+        }
+      }
+      if (found.length > 0 && /^\s*(<[^<>\n]{1,24}>|\[[^\]\n]+\])/.test(turn.text) && spokenWords(turn.text) < TAG_MIN_TURN_WORDS) {
+        findings.push({ segmentIndex, turnIndex, rule: "tag-leads-short-turn", message: `A tag is the first word of a short line (${spokenWords(turn.text)} words) — it sounds staged. Put the tag between two sentences of a longer turn, or drop it.` });
+      }
+      if (/<[^<>\n]{1,24}>\s*<[^<>\n]{1,24}>/.test(turn.text)) {
+        findings.push({ segmentIndex, turnIndex, rule: "tags-adjacent", message: "Two tags side by side — keep one." });
+      }
+      if (turn.delivery !== undefined) {
+        if (!isDeliveryKey(turn.delivery)) {
+          findings.push({ segmentIndex, turnIndex, rule: "delivery-unknown", message: `Delivery "${turn.delivery}" is not in the vocabulary (${Object.keys(DELIVERY_STYLES).join(", ")}); the voice ignores it. Use one of those or none.` });
+        } else if (spokenWords(turn.text) < DELIVERY_MIN_WORDS) {
+          findings.push({ segmentIndex, turnIndex, rule: "delivery-short-turn", message: `Delivery "${turn.delivery}" on a ${spokenWords(turn.text)}-word line — too short to land. Drop it.` });
+        }
+        streak = turn.delivery === streakKey ? streak + 1 : 1;
+        streakKey = turn.delivery;
+        if (streak === DELIVERY_STREAK) {
+          findings.push({ segmentIndex, turnIndex, rule: "delivery-streak", message: `Delivery "${turn.delivery}" on ${DELIVERY_STREAK} turns in a row — a habit, not a moment. Keep it where the moment changes, baseline elsewhere.` });
+        }
+      } else {
+        streak = 0;
+        streakKey = "";
+      }
+      const caps = capsEmphasis(turn.text, own, sourceAcronyms);
+      if (caps > 1) {
+        findings.push({ segmentIndex, turnIndex, rule: "caps-emphasis", message: `${caps} CAPS words in one turn — emphasis is one word, once.` });
+      }
+    });
+    const m = metrics[segmentIndex];
+    if (m && m.turns >= MIN_TURNS_FOR_TAG_BAND) {
+      const perTen = (m.tags / m.turns) * 10;
+      if (perTen < TAG_BAND_PER_TEN_TURNS.min) {
+        findings.push({ segmentIndex, turnIndex: null, rule: "tags-below-band", message: `${m.tags} tag(s) in ${m.turns} turns — flat. A few well-placed pauses and real reactions belong here (about one every four to eight turns).` });
+      } else if (perTen > TAG_BAND_PER_TEN_TURNS.max) {
+        findings.push({ segmentIndex, turnIndex: null, rule: "tags-above-band", message: `${m.tags} tags in ${m.turns} turns — a tic. Keep the pauses and reactions that earn their place.` });
+      }
+    }
+  });
+  return findings;
+}
+
+/** Counts per expression rule, for the job profile. */
+export function expressionSummary(report: LintReport): { tags: number; deliveries: number; findings: Partial<Record<ExpressionRule, number>> } {
+  const findings: Partial<Record<ExpressionRule, number>> = {};
+  for (const f of report.findings) {
+    if (EXPRESSION_RULES.has(f.rule)) findings[f.rule as ExpressionRule] = (findings[f.rule as ExpressionRule] ?? 0) + 1;
+  }
+  return { tags: report.metrics.reduce((n, m) => n + m.tags, 0), deliveries: report.metrics.reduce((n, m) => n + m.deliveries, 0), findings };
+}
+const EXPRESSION_RULES = new Set<string>(["tag-not-allowed", "tag-leads-short-turn", "tags-adjacent", "tags-below-band", "tags-above-band", "delivery-unknown", "delivery-streak", "delivery-short-turn", "caps-emphasis"]);
+
+export interface SegmentationReport {
+  units: number;
+  minChars: number;
+  meanChars: number;
+  maxChars: number;
+  findings: string[];
+}
+
+/**
+ * Segmentation of the multi-speaker requests: every unit within `maxChars` (a single over-long turn excepted),
+ * never across a segment, no unit ending on a question whose answer opens the next unit. Pure; takes the turn
+ * texts, the segment sizes and the planned units.
+ */
+export function lintSegmentation(params: {
+  texts: string[];
+  segmentLengths: number[];
+  units: Array<{ turnIndexes: number[] }>;
+  maxChars: number;
+}): SegmentationReport {
+  const { texts, segmentLengths, units, maxChars } = params;
+  const segmentOf: number[] = segmentLengths.flatMap((length, s) => Array.from({ length }, () => s));
+  const sizes = units.map((u) => u.turnIndexes.reduce((n, t) => n + (texts[t]?.length ?? 0), 0));
+  const findings: string[] = [];
+  units.forEach((unit, u) => {
+    if (unit.turnIndexes.length > 1 && (sizes[u] ?? 0) > maxChars) findings.push(`unit ${u}: ${sizes[u]} chars over the ${maxChars} limit`);
+    if (new Set(unit.turnIndexes.map((t) => segmentOf[t])).size > 1) findings.push(`unit ${u}: spans a segment boundary`);
+    const last = unit.turnIndexes[unit.turnIndexes.length - 1];
+    const next = units[u + 1]?.turnIndexes[0];
+    if (last !== undefined && next !== undefined && segmentOf[last] === segmentOf[next] && unit.turnIndexes.length > 1 && endsOnQuestion(texts[last] ?? "")) {
+      findings.push(`unit ${u}: ends on a question whose answer opens unit ${u + 1}`);
+    }
+  });
+  const total = sizes.reduce((a, b) => a + b, 0);
+  return { units: units.length, minChars: sizes.length > 0 ? Math.min(...sizes) : 0, meanChars: units.length > 0 ? Math.round(total / units.length) : 0, maxChars: sizes.length > 0 ? Math.max(...sizes) : 0, findings };
+}
+
+
 export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}): LintReport {
   const metrics = segments.map(metricsFor);
   const findings: LintFinding[] = [];
@@ -197,6 +343,7 @@ export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}):
   });
 
   findings.push(...unintroducedTerms(segments, opts));
+  findings.push(...expressionFindings(segments, opts, metrics));
   return { metrics, findings };
 }
 
@@ -204,7 +351,7 @@ export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}):
 export function renderLintReport(report: LintReport): string {
   const lines = report.metrics.map(
     (m, i) =>
-      `[${i}] ${m.words} words, ${m.turns} turns, mean ${m.meanTurnWords} words/turn, longest ${m.maxTurnWords}, turn-length CV ${m.turnLengthCv}, ${Math.round(m.shortTurnShare * 100)}% short turns, questions A/B ${m.questionTurns.A}/${m.questionTurns.B}, echoed reactions ${m.echoReactions}`,
+      `[${i}] ${m.words} words, ${m.turns} turns, mean ${m.meanTurnWords} words/turn, longest ${m.maxTurnWords}, turn-length CV ${m.turnLengthCv}, ${Math.round(m.shortTurnShare * 100)}% short turns, questions A/B ${m.questionTurns.A}/${m.questionTurns.B}, echoed reactions ${m.echoReactions}, tags ${m.tags}, deliveries ${m.deliveries}`,
   );
   const findings = report.findings.map((f) => `- segment ${f.segmentIndex}${f.turnIndex === null ? "" : `, turn ${f.turnIndex}`}: ${f.message}`);
   return `${lines.join("\n")}\n${findings.length > 0 ? findings.join("\n") : "- no findings"}`;

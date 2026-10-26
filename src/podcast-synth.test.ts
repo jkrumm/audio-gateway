@@ -22,6 +22,7 @@ process.env["TTS_CONCURRENCY"] ??= "4";
 const { turnsForSynthesis, synthesizeTurns, numberDensity, unitsForMultiSpeaker, unitsPerTurn, synthesizeGeminiUnits, isGeminiModel, DENSE_TURN_STYLE } =
   await import("./podcast-synth");
 const { chaptersFromSegments } = await import("./podcasts");
+const { DELIVERY_STYLES } = await import("./gemini-tts-core");
 
 type FetchImpl = (url: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
@@ -260,6 +261,15 @@ describe("multi-speaker units", () => {
     expect(units.map((u) => u.turnIndexes)).toEqual([[0], [1]]);
   });
 
+  test("a cut never lands between a question and its answer", () => {
+    const q = { ...turn("A", 400), text: `${"x".repeat(399)}?` };
+    const turns = [turn("A", 400), turn("B", 400), q, turn("B", 400), turn("A", 400)];
+    expect(unitsForMultiSpeaker(turns, [5], 1300).map((u) => u.turnIndexes)).toEqual([[0, 1], [2, 3, 4]]);
+    // a lone question that would leave an empty run stays put
+    const only = [{ ...turn("A", 900), text: `${"x".repeat(899)}?` }, turn("B", 900)];
+    expect(unitsForMultiSpeaker(only, [2], 1000).map((u) => u.turnIndexes)).toEqual([[0], [1]]);
+  });
+
   test("unitsPerTurn is the identity grouping", () => {
     expect(unitsPerTurn(3).map((u) => u.turnIndexes)).toEqual([[0], [1], [2]]);
   });
@@ -307,5 +317,30 @@ describe("synthesizeGeminiUnits", () => {
       { speaker: "Lena", style: DENSE_TURN_STYLE },
     ]);
     expect(out[0]?.sampleRate).toBe(24000);
+  });
+
+  test("a writer-set delivery becomes the turn style; unknown keys and dense turns keep baseline/slow", async () => {
+    const bodies: Array<{ contents: Array<{ parts: Array<{ speechMetadata: unknown }> }> }> = [];
+    setFetch(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return jsonRes({ candidates: [{ content: { parts: [{ inlineData: { mimeType: "audio/L16;rate=24000", data: Buffer.from(new Uint8Array(4800)).toString("base64") } }] } }], usageMetadata: {} });
+    });
+    const segments: ScriptSegment[] = [
+      {
+        title: "S",
+        turns: [
+          { speaker: "A", text: "Das ist neu für mich.", delivery: "curious" },
+          { speaker: "B", text: "Wirklich? Erzähl.", delivery: "furious" },
+          { speaker: "A", text: "Zwölf Euro fünfzig, drei Komma neun Prozent, hundert Euro.", delivery: "serious" },
+        ],
+      },
+    ];
+    const turns = turnsForSynthesis(segments, [{ id: "A", name: "Jonas", voice: "Charon" }, { id: "B", name: "Lena", voice: "Erinome" }], "de");
+    await synthesizeGeminiUnits(turns, unitsForMultiSpeaker(turns, [3], 3000), { model: "gemini-3.8-flash-tts", concurrency: 1, hostStyles: ["warm", "calm"] });
+    expect(bodies[0]?.contents[0]?.parts.map((p) => p.speechMetadata)).toEqual([
+      { speaker: "Jonas", style: DELIVERY_STYLES.curious },
+      { speaker: "Lena", style: "calm" },
+      { speaker: "Jonas", style: DENSE_TURN_STYLE },
+    ]);
   });
 });

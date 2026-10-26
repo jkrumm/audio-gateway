@@ -340,6 +340,21 @@ describe("parseSegmentTurns", () => {
   });
 });
 
+describe("delivery on script turns", () => {
+  test("parseSegmentTurns keeps a normalized delivery and omits an empty one", () => {
+    const turns = parseSegmentTurns(JSON.stringify({ turns: [{ speaker: "A", text: "Hallo.", delivery: " Curious " }, { speaker: "B", text: "Hi.", delivery: "" }] }));
+    expect(turns).toEqual([{ speaker: "A", text: "Hallo.", delivery: "curious" }, { speaker: "B", text: "Hi." }]);
+  });
+
+  test("sanitizeTurns keeps the delivery, and a split turn carries it on its first piece only", () => {
+    const long = Array.from({ length: 6 }, (_, i) => `Das ist Satz Nummer ${i} mit etwas Länge dabei.`).join(" ");
+    const out = sanitizeTurns([{ speaker: "A", text: long, delivery: "serious" }], 80);
+    expect(out.length).toBeGreaterThan(1);
+    expect(out[0]?.delivery).toBe("serious");
+    expect(out.slice(1).every((t) => t.delivery === undefined)).toBe(true);
+  });
+});
+
 describe("sanitizeTurns", () => {
   test("removes a disallowed tag but keeps an allowed one", () => {
     const [t1, t2] = sanitizeTurns([

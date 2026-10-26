@@ -1,9 +1,9 @@
 import { callAnthropicMessages } from "./anthropic-messages";
-import { SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_PATTERN } from "./gemini-tts-core";
+import { DELIVERY_KEYS, SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_PATTERN } from "./gemini-tts-core";
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
-import { lintNotes, lintSegments, renderLintReport } from "./podcast-lint";
+import { expressionSummary, lintNotes, lintSegments, renderLintReport } from "./podcast-lint";
 import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, withSpan } from "./otel";
 import type { Dossier, EpisodeBrief, EpisodeProfile } from "./podcast-types";
@@ -64,6 +64,8 @@ export interface PodcastScriptRequest {
 export interface ScriptTurn {
   speaker: "A" | "B";
   text: string;
+  /** A key of `DELIVERY_STYLES` where the moment changes; absent = the host's baseline. Unknown keys are kept so the lint can flag them — the synth ignores them. */
+  delivery?: string;
 }
 
 export interface ScriptSegment {
@@ -453,7 +455,8 @@ export function parseSegmentTurns(raw: string): ScriptTurn[] {
     const speaker: "A" | "B" | null = speakerRaw === "A" || speakerRaw === "B" ? speakerRaw : null;
     const text = typeof obj["text"] === "string" ? obj["text"].trim().replace(LEAKED_LABEL, "") : "";
     if (!speaker || !text) continue;
-    turns.push({ speaker, text });
+    const delivery = typeof obj["delivery"] === "string" ? obj["delivery"].trim().toLowerCase() : "";
+    turns.push({ speaker, text, ...(delivery && { delivery }) });
   }
   return turns;
 }
@@ -494,14 +497,15 @@ function splitLongTurn(turn: ScriptTurn, maxChars: number, maxWords: number): Sc
   for (const sentence of sentences) {
     const merged = buf ? `${buf} ${sentence}` : sentence;
     if (buf && (merged.length > maxChars || countWords(merged) > maxWords)) {
-      out.push({ speaker: turn.speaker, text: buf });
+      out.push({ ...turn, text: buf });
       buf = sentence;
     } else {
       buf = merged;
     }
   }
-  if (buf) out.push({ speaker: turn.speaker, text: buf });
-  return out.length > 0 ? out : [turn];
+  if (buf) out.push({ ...turn, text: buf });
+  // A delivery marks the moment the turn opens on; the continuation pieces fall back to the baseline.
+  return out.length > 0 ? out.map((piece, i) => (i === 0 ? piece : { speaker: piece.speaker, text: piece.text })) : [turn];
 }
 
 /**
@@ -534,8 +538,8 @@ function mergeShortAdjacent(turns: ScriptTurn[], maxChars: number): ScriptTurn[]
  */
 export function sanitizeTurns(turns: ScriptTurn[], maxChars = DEFAULT_SPLIT_MAX_CHARS, maxWords = MAX_TURN_WORDS): ScriptTurn[] {
   const cleaned = turns
-    .map((t) => ({ speaker: t.speaker, text: collapseWhitespace(stripMarkdown(stripDisallowedTags(t.text))) }))
-    .map((t) => ({ speaker: t.speaker, text: stripTagsOnShortTurn(t.text) }))
+    .map((t) => ({ ...t, text: collapseWhitespace(stripMarkdown(stripDisallowedTags(t.text))) }))
+    .map((t) => ({ ...t, text: stripTagsOnShortTurn(t.text) }))
     .filter((t) => t.text.length > 0);
   const split = cleaned.flatMap((t) => splitLongTurn(t, maxChars, maxWords));
   return mergeShortAdjacent(split, maxChars);
@@ -598,7 +602,7 @@ ${renderEpisodeBrief(req)}
 3. It is a CONVERSATION with real weight, not ping-pong. Whoever is explaining gets the floor for as long as the thought needs — a real walk-through, an example, a small story — and the other host listens, then reacts with weight, not a one-liner. Vary the rhythm as the brief asks: a long stretch, a quick exchange, a pause. Interjections exist but are rare and earned. Never alternate mechanically; never let both hosts speak in the same length all the time. The default mode of this show is KNOWLEDGE SHARING: one host knows and explains, the other asks the sharp questions the listener would ask (the number, the reason, the consequence), and both add to it. A host disagrees only when the brief says the material is genuinely contested — never to create friction, never an objection that is conceded one turn later. Sharing is not chatter: keep the density of facts, no small talk, no filler. No lists read aloud — turn any list into back-and-forth or a walked-through explanation.
 4. Written for the EAR in ${languageLabel}: numbers, prices, times, units, dates and abbreviations fully spelled out as spoken (German: "dreihundertdreißig Euro", "hundertfünf Stundenkilometer", "elfter September", "zwei Meter fünfzig"); no digits, no symbols, no URLs, no markdown, no emoji, no parentheses. Place names in their local form. Expand every acronym once.
 5. Numbers and names are written for the EAR, not for the page. One figure per sentence — a sentence carrying three numbers is unlistenable. Round, unless the precision IS the point: "gut dreitausend" beats "dreitausendzweiundvierzig", and "null Komma eins sieben" is only ever spoken when that digit is exactly what matters. Anchor every important figure to something the listener already knows ("das ist eine Tankfüllung", "so viel wie eine Monatsmiete"). A cluster of figures is never read out — the hosts walk through it, one figure at a time, with pauses ("…") and a real reaction in between. An unfamiliar proper name or term is introduced as WHAT IT IS before WHAT IT IS CALLED ("die Behörde, die die Maut eintreibt — die heißt …"), spoken slowly, and then gets one short handle the hosts reuse for the rest of the episode; the GLOSSARY gives you both. This covers EVERY proper name, place, person, company, project, tool and internal term or abbreviation — the notes were written for someone who already knows them, the listener has not just read them, so judge by what a stranger to the notes would know, not by what the SOURCE takes for granted. If neither SOURCE nor GLOSSARY says what a thing is, say only what the notes imply ("ein Werkzeug, das in deinen Notizen vorkommt") — never pretend to know more. Never use a name before it has been introduced that way, in one plain clause: what it is and why it matters here. Open questions stay open and are said to be open ("das wissen wir nicht").
-6. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. Inline tags ONLY from this list, written exactly with the angle brackets, in English even inside German text: ${PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, between two sentences — never as the first word of a short line, never two tags side by side, never translated, never invented. No square-bracket tags, no mood tags. Emphasis is a single word in CAPS, at most once a turn. Most turns carry NO tag.
+6. Expressiveness is deliberate, in three layers. (a) Punctuation first — dashes, short sentences, a question left hanging. (b) Inline tags ONLY from this list, written exactly with the angle brackets, in English even inside German text: ${PODCAST_TAGS.join(" ")}. Use them where a real person would: a few well-placed pauses (<short pause> before a number or a turn in the argument, <long pause> once for weight) and real reactions (<laugh> or <chuckle> only where something is actually funny, <sigh> where something is actually tiresome) — roughly one tag every four to eight turns, inside turns of twelve words or more, between two sentences. Never as the first word of a short line, never two tags side by side, never translated, never invented, never a tag where nothing happens. No square-bracket tags, no mood tags. Emphasis is a single word in CAPS, at most once a turn. (c) Per-turn delivery: every turn has a baseline delivery and carries NO "delivery" field. Set "delivery" ONLY on a turn where the moment changes — a host gets curious, amused, surprised, serious, has to think, speeds up, goes dry, reassures — to exactly one of: ${DELIVERY_KEYS.join(", ")}. Never the same delivery on three turns in a row, never on a line of fewer than eight words, never an invented key. Most turns have none.
 7. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
 8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
 }
@@ -663,7 +667,7 @@ ${devicesInstruction}${bridgeInstruction}
 ${wrapInstruction}
 
 Return STRICT JSON only, no markdown, no commentary:
-{"turns":[{"speaker":"A"|"B","text":"<what this host says>"}]}`;
+{"turns":[{"speaker":"A"|"B","text":"<what this host says>","delivery":"<optional: one of ${DELIVERY_KEYS.join(" | ")} — omit the field on a baseline turn>"}]}`;
 }
 
 /**
@@ -761,7 +765,7 @@ ${renderEpisodeBrief(req)}`,
   "conversation-coach": () =>
     `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; no ECHOED reactions (a turn that opens by repeating the last words of the previous turn instead of adding a question, a consequence or a number); a sharp question from the listening host every few turns while the other explains; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment. Also flag written-language constructs and AI-isms: essay sentences, hedges like "es ist erwähnenswert" or "worth stating plainly", tidy triads, over-explained emotion, a character explaining what they feel instead of just feeling it, filler, and repeated setups.`,
   "fact-editor": (req) =>
-    `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${LANGUAGE_LABEL[req.language]}, never digits or symbols; every sentence is speakable in one breath; inline tags are only from the allowed list (${PODCAST_TAGS.join(" ")}), angle brackets, never square brackets, and only where they earn their place — flag over-use; no markdown, no emoji, nothing that isn't spoken text.
+    `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${LANGUAGE_LABEL[req.language]}, never digits or symbols; every sentence is speakable in one breath; inline tags are only from the allowed list (${PODCAST_TAGS.join(" ")}), angle brackets, never square brackets, and judged by MISUSE, not presence: flag a tag in the wrong place (mid-clause, on a short line), a staged laugh where nothing is funny, a <sigh> or <laugh> repeated like a tic, two tags side by side, an invented or translated tag. A segment with several well-placed pauses and reactions is correct; a segment with none is flat — say so. Per-turn "delivery" values (${DELIVERY_KEYS.join(", ")}) must fit what the turn says and mark a real change of moment — flag one that contradicts the words, one used out of habit, or a missing one where a host clearly turns serious, amused or surprised;  no markdown, no emoji, nothing that isn't spoken text.
 Additionally, flag FIGURE CLUSTERS and UNINTRODUCED NAMES, which is where this show fails hardest for a listener: more than one figure in a single sentence; a precise figure the listener has nothing to compare it to (unrounded and unanchored); a run of figures read out instead of walked through one at a time with pauses and a reaction; and any proper name, place, person, company, project, tool, internal term or abbreviation used before a host said what it IS in plain words. Judge as a STRANGER to these notes would: the SOURCE assuming a reader knows "Cortex" or "engrams" does not mean the listener does. For each such name, give the segment/turn of its first mention and the one clause that should introduce it. The lint block (when present) lists mechanically detected candidates — confirm or dismiss them, and add the names it cannot see.`,
 };
 
@@ -783,7 +787,7 @@ Return STRICT JSON only, no markdown, no commentary:
 function renderDraftForReview(segments: ScriptSegment[], hosts: [PodcastHost, PodcastHost]): string {
   const nameFor = (speaker: "A" | "B"): string => hosts.find((h) => h.id === speaker)?.name ?? speaker;
   return segments
-    .flatMap((seg, i) => seg.turns.map((t, j) => `[seg ${i}][turn ${j}] ${nameFor(t.speaker)}: ${t.text}`))
+    .flatMap((seg, i) => seg.turns.map((t, j) => `[seg ${i}][turn ${j}]${t.delivery ? ` [delivery: ${t.delivery}]` : ""} ${nameFor(t.speaker)}: ${t.text}`))
     .join("\n");
 }
 
@@ -822,14 +826,14 @@ function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; s
   return `${baseSystemPrompt(req, showBible, voice)}
 
 You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. The segment's target is ${segment.targetWords} words; a revision never grows the segment, and if a note asks for a cut, the cut is the priority. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
-Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/pull), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
+Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/pull), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture. Keep each turn's inline tags and "delivery" exactly as they are unless a note is about them — a delivery marks a real change of moment, so it stays on the turn it belongs to.
 Segment goal: ${segment.goal}
 What pulls the listener through this segment: ${segment.tension}
 Key facts this segment MUST speak, verbatim where possible:
 ${segment.keyFacts.map((f) => `- ${f}`).join("\n")}
 
 Return the FULL revised segment as STRICT JSON only, no markdown, no commentary:
-{"turns":[{"speaker":"A"|"B","text":"<what this host says>"}]}`;
+{"turns":[{"speaker":"A"|"B","text":"<what this host says>","delivery":"<optional: one of ${DELIVERY_KEYS.join(" | ")} — omit the field on a baseline turn>"}]}`;
 }
 
 function buildRevisionUserContent(params: {
@@ -848,7 +852,7 @@ function buildRevisionUserContent(params: {
   const nextDraft = segments[index + 1];
 
   const renderTurns = (turns: ScriptTurn[]): string =>
-    turns.map((t, j) => `[turn ${j}] ${req.hosts.find((h) => h.id === t.speaker)?.name ?? t.speaker}: ${t.text}`).join("\n");
+    turns.map((t, j) => `[turn ${j}]${t.delivery ? ` [delivery: ${t.delivery}]` : ""} ${req.hosts.find((h) => h.id === t.speaker)?.name ?? t.speaker}: ${t.text}`).join("\n");
 
   const parts = [
     `SOURCE (verbatim; every fact must come from here):\n${req.source}`,
@@ -1397,8 +1401,8 @@ async function writeEpisodeMetadata(params: {
  */
 const LEAD_BALANCED_POINTS = 10;
 
-export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: PodcastScript; dossier: Dossier }): EpisodeProfile {
-  const { brief, script, dossier } = params;
+export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: PodcastScript; dossier: Dossier; hosts?: PodcastHost[] }): EpisodeProfile {
+  const { brief, script, dossier, hosts = [] } = params;
   const words = { A: 0, B: 0 };
   for (const segment of script.segments) {
     for (const turn of segment.turns) words[turn.speaker] += countWords(turn.text);
@@ -1418,6 +1422,7 @@ export function buildEpisodeProfile(params: { brief: EpisodeBrief; script: Podca
     segmentCount: script.segments.length,
     toolCalls: dossier.toolCalls.length,
     researchCalls: dossier.toolCalls.filter((c) => c.tool === "research").length,
+    expression: expressionSummary(lintSegments(script.segments, { hostNames: hosts.map((h) => h.name) })),
   };
 }
 

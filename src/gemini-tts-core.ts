@@ -126,6 +126,30 @@ export const SPEECH_TAGS = [
   "<short pause>", "<long pause>", "<laugh>", "<chuckle>", "<sigh>", "<exhales>", "<breath>", "<whispers>",
 ] as const;
 
+/**
+ * Per-turn delivery vocabulary for the podcast writers: the writer picks a KEY, the synth sends the
+ * English style string (`speechMetadata.style`, never spoken — modelpick `docs/gemini-tts.md` §Style
+ * control). Closed on purpose: reused exact strings keep the voice from drifting, and nothing the
+ * writer invents can reach the TTS request. No transcript words, no age/gender/accent in a string.
+ */
+export const DELIVERY_STYLES = {
+  curious: "curious, leaning in",
+  amused: "amused, a smile in the voice",
+  surprised: "surprised, a little incredulous",
+  serious: "serious, measured",
+  thoughtful: "thoughtful, a bit slower",
+  energetic: "energetic, a little faster",
+  dry: "dry, understated",
+  warm: "warm, reassuring",
+} as const satisfies Record<string, string>;
+
+export type DeliveryKey = keyof typeof DELIVERY_STYLES;
+export const DELIVERY_KEYS = Object.keys(DELIVERY_STYLES) as DeliveryKey[];
+export const isDeliveryKey = (value: string): value is DeliveryKey => Object.hasOwn(DELIVERY_STYLES, value);
+
+/** True when a turn's last sentence is a question (a trailing tag aside) — its answer belongs in the same synth request. */
+export const endsOnQuestion = (text: string): boolean => /\?["»“”')\]]*\s*$/.test(text.replace(/<[^<>\n]{1,24}>\s*$/, "").trim());
+
 /** The subset the briefing prep prompt offers the LLM. */
 export const BRIEFING_TAGS = ["<short pause>", "<long pause>", "<laugh>", "<sigh>"] as const;
 
