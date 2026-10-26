@@ -44,7 +44,7 @@ interface Candidate {
 }
 // Cheap first so the cap can only ever cut the expensive tail; the hybrid last (it reuses a finished draft). Opus agentic is ~$1.4 — the cap decides.
 const CANDIDATES: Candidate[] = [
-  { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.25 },
+  { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.3 },
   { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.15 },
   { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.3 },
   { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.35 },
@@ -232,6 +232,34 @@ async function runCandidate(cand: Candidate, hybrid?: { drafter: string; drafts:
   };
 }
 
+// Blind letters, assigned as a candidate finishes and kept — a rerun never re-letters.
+const lettersPath = "./data/wave3/letters.json";
+const letters: Record<string, string> = existsSync(lettersPath) ? await readJson(lettersPath) : {};
+async function letterFor(id: string): Promise<string> {
+  if (letters[id]) return letters[id]!;
+  const free = "ABCDEFGHIJ".split("").filter((l) => !Object.values(letters).includes(l));
+  letters[id] = free[Math.floor(Math.random() * free.length)]!;
+  await writeJson(lettersPath, letters);
+  return letters[id]!;
+}
+/** Voice a finished candidate right away, so the cap can never leave a written-but-unheard candidate behind. */
+async function synthRun(run: CandidateRun): Promise<void> {
+  if (SKIP_SYNTH || run.segments.length !== 2) return;
+  const letter = await letterFor(run.id);
+  for (const seg of run.segments) {
+    const out = `./data/wave3/audio/rematch__${letter}__${seg.key}.mp3`;
+    if (existsSync(out)) continue;
+    try {
+      ledger.guard(0.08);
+    } catch (err) {
+      console.warn(`synth ${run.id}/${seg.key}: SKIPPED — ${err instanceof Error ? err.message : String(err)}`);
+      continue;
+    }
+    await synthesizeSegment(req, seg.final, out);
+    console.log(`synthesized ${run.id} ${seg.key} -> ${out}`);
+  }
+}
+
 const runs: CandidateRun[] = [];
 const cachePath = (id: string): string => `./data/wave3/run-${id}.json`;
 for (const cand of CANDIDATES) {
@@ -252,6 +280,7 @@ for (const cand of CANDIDATES) {
     const run = await runCandidate(cand);
     await writeJson(cachePath(cand.id), run);
     runs.push(run);
+    await synthRun(run);
     console.log(`${cand.id}: ${run.segments.map((s) => `${s.key} ${s.finalWords}/${s.target}w`).join(", ")} writer $${run.cost.writerUsd.toFixed(3)} (proj $${run.projectedWriterUsdPerEpisode.toFixed(2)}/ep) shared $${run.cost.sharedUsd.toFixed(3)} failed ${run.calls.failed}`);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -274,6 +303,7 @@ if ((!ONLY || ONLY.includes(hybridId)) && !existsSync(cachePath(hybridId))) {
       const run = await runCandidate({ id: hybridId, model: "claude-opus-5-5", estimateUsd: 0.9 }, { drafter: best.id, drafts: best.segments.map((s) => s.draft), notes: best.notes, draftWallMs: best.wallMs.draft, reviewWallMs: best.wallMs.review, draftUsd: best.cost.draftUsd, agentRuns: best.agentRuns });
       await writeJson(cachePath(hybridId), run);
       runs.push(run);
+      await synthRun(run);
       console.log(`hybrid: ${run.segments.map((s) => `${s.key} ${s.finalWords}/${s.target}w`).join(", ")} writer ≤$${run.cost.writerUsd.toFixed(3)}`);
     } catch (err) {
       console.error(`hybrid: FAILED — ${err instanceof Error ? err.message.slice(0, 300) : String(err)}`);
@@ -285,33 +315,8 @@ if ((!ONLY || ONLY.includes(hybridId)) && !existsSync(cachePath(hybridId))) {
   runs.push(await readJson<CandidateRun>(cachePath(hybridId)));
 }
 
-// Blind letters — a fixed shuffle so a rerun keeps them.
-const lettersPath = "./data/wave3/letters.json";
 const finished = runs.filter((r) => r.segments.length === 2);
-let letters: Record<string, string> = existsSync(lettersPath) ? await readJson(lettersPath) : {};
-const missing = finished.filter((r) => !letters[r.id]);
-if (missing.length > 0) {
-  const pool = "ABCDEFGHIJ".split("").filter((l) => !Object.values(letters).includes(l)).toSorted(() => Math.random() - 0.5);
-  missing.forEach((r, i) => { letters[r.id] = pool[i]!; });
-  await writeJson(lettersPath, letters);
-}
-
-if (!SKIP_SYNTH) {
-  for (const run of finished) {
-    for (const seg of run.segments) {
-      const out = `./data/wave3/audio/rematch__${letters[run.id]}__${seg.key}.mp3`;
-      if (existsSync(out)) continue;
-      try {
-        ledger.guard(0.1);
-      } catch (err) {
-        console.warn(`synth ${run.id}/${seg.key}: SKIPPED — ${err instanceof Error ? err.message : String(err)}`);
-        continue;
-      }
-      await synthesizeSegment(req, seg.final, out);
-      console.log(`synthesized ${run.id} ${seg.key} -> ${out}`);
-    }
-  }
-}
+for (const run of finished) await synthRun(run);
 
 await writeJson("./data/wave3/summary.json", {
   episode: inputs.DEFAULT_EPISODE_ID,
