@@ -12,7 +12,7 @@ import { rawFetch } from "./gemini-tts";
 import { runToolLoop, type ToolDef, type ToolLoopFetch } from "./llm-tools";
 import { log } from "./log";
 import { repairGermanQuotes } from "./podcast-script";
-import type { Dossier, EpisodeHistory } from "./podcast-types";
+import type { Dossier, EpisodeHistory, ToolCallRecord } from "./podcast-types";
 
 export interface ResearchInput {
   source: string;
@@ -294,92 +294,156 @@ interface ResearchGatewayPollResponse {
   error?: string;
 }
 
+type ResearchDepth = "quick" | "standard";
+
+function researchHeaders(research: NonNullable<ResearchDeps["research"]>): Record<string, string> {
+  return { Authorization: `Bearer ${research.apiKey}`, "content-type": "application/json" };
+}
+
+type SubmitResult = { ok: true; jobId: string } | { ok: false; error: string };
+
+async function submitResearchJob(research: NonNullable<ResearchDeps["research"]>, query: string, depth: ResearchDepth, fetchImpl: ToolLoopFetch): Promise<SubmitResult> {
+  const submitRes = await fetchImpl(`${research.url}/research/`, {
+    method: "POST",
+    headers: researchHeaders(research),
+    body: JSON.stringify({ query, depth }),
+  });
+  if (submitRes.status === 429) return { ok: false, error: "research queue full, try later" };
+  if (submitRes.status < 200 || submitRes.status >= 300) {
+    return { ok: false, error: `error: research submit failed HTTP ${submitRes.status} ${submitRes.body.slice(0, 300)}` };
+  }
+  const { jobId } = JSON.parse(submitRes.body) as ResearchGatewaySubmitResponse;
+  return { ok: true, jobId };
+}
+
+type PollResult = { ok: true; answer: string; usdSpent: number } | { ok: false; error: string };
+
+/**
+ * Unbounded wait — research-gateway itself no longer time-caps a job, so a
+ * healthy deep job may legitimately run well past any number picked here. The
+ * gateway's own heartbeat reaping (job-store.ts) already turns a stalled/dead
+ * job into a terminal "error" status, so this loop only needs to keep polling
+ * until the job reaches a terminal state and log a heartbeat so a human tailing
+ * logs can see it's still alive.
+ */
+async function pollResearchJob(research: NonNullable<ResearchDeps["research"]>, jobId: string, fetchImpl: ToolLoopFetch, pollIntervalMs: number): Promise<PollResult> {
+  const headers = researchHeaders(research);
+  const startedAt = Date.now();
+  let lastLoggedAt = startedAt;
+  while (true) {
+    const pollRes = await fetchImpl(`${research.url}/research/${jobId}`, { method: "GET", headers });
+    if (pollRes.status < 200 || pollRes.status >= 300) {
+      return { ok: false, error: `error: research poll failed HTTP ${pollRes.status} ${pollRes.body.slice(0, 300)}` };
+    }
+    const parsed = JSON.parse(pollRes.body) as ResearchGatewayPollResponse;
+    if (parsed.status === "done") {
+      const report = (parsed.result?.report ?? "").slice(0, RESEARCH_REPORT_MAX_CHARS);
+      const sources = parsed.result?.sources ?? [];
+      const sourcesBlock = sources.length > 0 ? `\n\nSources:\n${sources.map((s) => `- ${s}`).join("\n")}` : "";
+      return { ok: true, answer: `${report}${sourcesBlock}`, usdSpent: parsed.result?.cost?.totalUsd ?? 0 };
+    }
+    if (parsed.status === "failed" || parsed.status === "error") {
+      return { ok: false, error: `error: research failed: ${parsed.error ?? "unknown error"}` };
+    }
+    const now = Date.now();
+    if (now - lastLoggedAt >= RESEARCH_POLL_LOG_INTERVAL_MS) {
+      log.info("podcast research: still waiting on research-gateway job", { jobId, status: parsed.status, waitedMs: now - startedAt });
+      lastLoggedAt = now;
+    }
+    await Bun.sleep(pollIntervalMs);
+  }
+}
+
 function researchTool(research: NonNullable<ResearchDeps["research"]>, spend: { usd: number }, fetchImpl: ToolLoopFetch, pollIntervalMs: number): ToolDef {
   let used = 0;
   /** An identical query returns what it returned the first time — no second run, no second charge. */
   const answered = new Map<string, string>();
   const normalize = (q: string): string => q.toLowerCase().replace(/\s+/g, " ").trim();
-  const headers = { Authorization: `Bearer ${research.apiKey}`, "content-type": "application/json" };
   return {
     name: "research",
     description:
-      "Web research through the research gateway — EXPECTED, not a last resort, for anything the listener needs that the SOURCE and the brain do not explain: the external third-party names, projects, tools, companies and standards the notes take for granted (batch them in ONE query asking for one plain sentence each: what it is and what it is for here), facts the episode hinges on, current numbers, and the claims the notes make about the outside world. Several runs per episode are normal; keep each query specific and distinct (an identical query is not run twice).",
+      "Web research through the research gateway — EXPECTED, not a last resort, for anything the listener needs that the SOURCE and the brain do not explain: the external third-party names, projects, tools, companies and standards the notes take for granted (batch them in ONE query asking for one plain sentence each: what it is and what it is for here), facts the episode hinges on, current numbers, and the claims the notes make about the outside world. Several runs per episode are normal; keep each query specific and distinct (an identical query is not run twice). Every run here is quick depth — a name or term needing one plain sentence; it is not yours to request more than that (see the system prompt).",
     parameters: {
       type: "object",
       properties: {
         query: { type: "string" },
-        depth: {
-          type: "string",
-          enum: ["quick", "standard"],
-          description: "Default quick — a name or term that only needs one plain sentence. Use standard only for a fact the episode's listener asks or through-line directly hinges on, where quick's answer would be too thin to stand behind on air.",
-        },
       },
       required: ["query"],
     },
     execute: async (rawArgs) => {
-      const args = rawArgs as { query: string; depth?: string };
-      if (args.depth !== undefined && args.depth !== "quick" && args.depth !== "standard") {
-        return `error: invalid depth "${args.depth}", expected "quick" or "standard"`;
-      }
-      // Routing, not a cap: the model's own `depth` choice is honored as requested,
-      // guided by the prompt's instruction to reach for `standard` only on a
-      // load-bearing fact. No code-side counter — see `research.maxCalls` below for
-      // the actual spend ceiling.
-      const depth = args.depth === "standard" ? "standard" : "quick";
-      const key = `${depth}\u0000${normalize(args.query)}`;
+      const args = rawArgs as { query: string };
+      // Quick only: the researcher's own judgement on what is "load-bearing enough
+      // for standard" is exactly the b78cb035/this-finding failure mode (a glossary
+      // one-liner requesting standard and running ~240s at full cost). Any `depth`
+      // the model passes here is ignored — standard depth exists only in
+      // `runLoadBearingResearch`, gated on facts the editorial pass names after
+      // seeing this stage's own (quick-only) dossier.
+      const depth: ResearchDepth = "quick";
+      const key = normalize(args.query);
       const earlier = answered.get(key);
       if (earlier !== undefined) return `(this exact query was already run — same result)\n${earlier}`;
       if (research.maxCalls !== undefined && research.maxCalls > 0 && used >= research.maxCalls) return `research budget exhausted (${research.maxCalls} calls)`;
 
-      const submitRes = await fetchImpl(`${research.url}/research/`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ query: args.query, depth }),
-      });
-      if (submitRes.status === 429) return "research queue full, try later";
-      if (submitRes.status < 200 || submitRes.status >= 300) {
-        return `error: research submit failed HTTP ${submitRes.status} ${submitRes.body.slice(0, 300)}`;
-      }
+      const submitted = await submitResearchJob(research, args.query, depth, fetchImpl);
+      if (!submitted.ok) return submitted.error;
       // Debited only once the gateway actually accepted the job — a 429, a
       // transport error, or any other non-2xx must not consume a slot.
       used++;
-      const { jobId } = JSON.parse(submitRes.body) as ResearchGatewaySubmitResponse;
 
-      // Unbounded wait — research-gateway itself no longer time-caps a job, so a
-      // healthy deep job may legitimately run well past any number picked here. The
-      // gateway's own heartbeat reaping (job-store.ts) already turns a stalled/dead
-      // job into a terminal "error" status, so this loop only needs to keep polling
-      // until the job reaches a terminal state and log a heartbeat so a human tailing
-      // logs can see it's still alive.
-      const startedAt = Date.now();
-      let lastLoggedAt = startedAt;
-      while (true) {
-        const pollRes = await fetchImpl(`${research.url}/research/${jobId}`, { method: "GET", headers });
-        if (pollRes.status < 200 || pollRes.status >= 300) {
-          return `error: research poll failed HTTP ${pollRes.status} ${pollRes.body.slice(0, 300)}`;
-        }
-        const parsed = JSON.parse(pollRes.body) as ResearchGatewayPollResponse;
-        if (parsed.status === "done") {
-          const report = (parsed.result?.report ?? "").slice(0, RESEARCH_REPORT_MAX_CHARS);
-          const sources = parsed.result?.sources ?? [];
-          const sourcesBlock = sources.length > 0 ? `\n\nSources:\n${sources.map((s) => `- ${s}`).join("\n")}` : "";
-          spend.usd += parsed.result?.cost?.totalUsd ?? 0;
-          const answer = `${report}${sourcesBlock}`;
-          answered.set(key, answer);
-          return answer;
-        }
-        if (parsed.status === "failed" || parsed.status === "error") {
-          return `error: research failed: ${parsed.error ?? "unknown error"}`;
-        }
-        const now = Date.now();
-        if (now - lastLoggedAt >= RESEARCH_POLL_LOG_INTERVAL_MS) {
-          log.info("podcast research: still waiting on research-gateway job", { jobId, status: parsed.status, waitedMs: now - startedAt });
-          lastLoggedAt = now;
-        }
-        await Bun.sleep(pollIntervalMs);
-      }
+      const polled = await pollResearchJob(research, submitted.jobId, fetchImpl, pollIntervalMs);
+      if (!polled.ok) return polled.error;
+      spend.usd += polled.usdSpent;
+      answered.set(key, polled.answer);
+      return polled.answer;
     },
   };
+}
+
+/** Editor-named facts the quick pass couldn't put on air; defense-in-depth cap on top of the prompt's own "0 to 3" instruction (podcast-editorial.ts) so a chatty editor can't reopen the spend this routing rule closes. */
+const MAX_LOAD_BEARING_FACTS = 3;
+
+export interface LoadBearingResearchResult {
+  additions: Dossier["additions"];
+  toolCalls: ToolCallRecord[];
+  usdSpent: number;
+}
+
+/**
+ * Standard-depth research for the handful of facts the editorial pass named
+ * as load-bearing (`EpisodeBrief.loadBearingFacts`) — the only place
+ * `standard` depth runs. Code decides the query (the fact itself), not the
+ * model, so there is no prompt to misread. Best-effort per fact: a submit or
+ * poll failure is logged and skipped, never thrown — same contract as the
+ * research stage itself (docs/podcast-editorial-room.md Decision 7).
+ */
+export async function runLoadBearingResearch(
+  facts: string[],
+  deps: { research?: ResearchDeps["research"]; fetchImpl?: ToolLoopFetch; pollIntervalMs?: number },
+): Promise<LoadBearingResearchResult> {
+  const research = deps.research;
+  if (!research || facts.length === 0) return { additions: [], toolCalls: [], usdSpent: 0 };
+  const fetchImpl = deps.fetchImpl ?? rawFetch;
+  const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+
+  const additions: Dossier["additions"] = [];
+  const toolCalls: ToolCallRecord[] = [];
+  let usdSpent = 0;
+  for (const fact of facts.slice(0, MAX_LOAD_BEARING_FACTS)) {
+    const startedAt = Date.now();
+    try {
+      const submitted = await submitResearchJob(research, fact, "standard", fetchImpl);
+      if (!submitted.ok) throw new Error(submitted.error);
+      const polled = await pollResearchJob(research, submitted.jobId, fetchImpl, pollIntervalMs);
+      if (!polled.ok) throw new Error(polled.error);
+      usdSpent += polled.usdSpent;
+      additions.push({ source: `research: ${fact}`, text: polled.answer });
+      toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: true, ms: Date.now() - startedAt });
+    } catch (err) {
+      log.warn("podcast load-bearing research failed, skipping this fact", { fact, error: err instanceof Error ? err.message : String(err) });
+      toolCalls.push({ tool: "research", args: { query: fact, depth: "standard" }, ok: false, ms: Date.now() - startedAt });
+    }
+  }
+  return { additions, toolCalls, usdSpent };
 }
 
 /** Exported for tests. */
@@ -467,7 +531,7 @@ function buildSystemPrompt(input: ResearchInput, deps: ResearchDeps): string {
 
   return `You are the researcher of "${input.series}", a two-host podcast in ${languageName} that turns the listener's own notes into an episode.
 
-The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). Web research is expected, not a last resort: follow with further, distinct runs for every fact the episode hinges on, every claim the notes make about the outside world that you cannot confirm from the brain, and every name the first run left unclear. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. There is no research budget to ration — quality first — but batch the names, never one call per name, never the same query twice. Depth defaults to quick; reach for standard only on the one fact the listener's asks or the episode's through-line most directly hinges on, where a quick answer would be too thin to put on air.
+The SOURCE is the listener's material and stays verbatim for the writers — your job is to make the writers' room UNDERSTAND it and to bring what they lack: context from the listener's brain (search it for the topic and adjacent notes, read what matters), what previous episodes already covered (so they don't repeat it), and the outside world. The listener's recurring failure is EXTERNAL NAMES nobody explains — third-party projects, tools, companies, standards and acronyms the notes take for granted (the notes' author knows them, a listener does not). So: first list every such name in the SOURCE that neither the SOURCE itself nor the brain notes you read explain, then look them up with ONE batched \`research\` query (all names in one question, asking for one plain sentence each: what it is and what it is for here). Web research is expected, not a last resort: follow with further, distinct runs for every fact the episode hinges on, every claim the notes make about the outside world that you cannot confirm from the brain, and every name the first run left unclear. Every proper name, place or term a listener would not know goes into the glossary with a plain-words handle — the glossary is built from what the brain and the research found, never from your guess; a name you could not resolve is glossed with only what the SOURCE implies. There is no research budget to ration — quality first — but batch the names, never one call per name, never the same query twice. Every \`research\` run here is quick depth — good for a name or term needing one plain sentence; that is a fixed property of this stage, not your call. If quick's answer leaves a fact genuinely too thin to put on air, do not re-run it deeper — list it in \`openQuestions\` instead, in enough concrete words that the editor can tell it is load-bearing; a deeper look happens later, if the editor decides it is.
 
 Finish with STRICT JSON and nothing else, matching exactly this shape:
 {"summary":"…","additions":[{"source":"brain: <path>"|"research: <query>"|"episode: <id>","text":"…"}],"glossary":[{"term":"…","plain":"…"}],"priorCoverage":[{"episodeId":"…","title":"…","covered":"…"}],"openQuestions":["…"]}${availability}`;
