@@ -273,7 +273,7 @@ describe("research tool", () => {
     expect(count()).toBe(4);
   });
 
-  test("standard depth is capped in code: the first request is honored, every further one is downgraded to quick regardless of what was asked", async () => {
+  test("standard depth is routing, not a cap: every request for it is honored", async () => {
     const submitted: string[] = [];
     const { fetchImpl } = scriptedFetch([
       rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "r1" } }),
@@ -288,7 +288,7 @@ describe("research tool", () => {
     await tool.execute({ query: "q1", depth: "standard" });
     await tool.execute({ query: "q2", depth: "standard" });
     const depths = submitted.filter((b) => b.includes('"query"')).map((b) => (JSON.parse(b) as { depth: string }).depth);
-    expect(depths).toEqual(["standard", "quick"]);
+    expect(depths).toEqual(["standard", "standard"]);
   });
 
   test("maxCalls 0 means unlimited, not exhausted", async () => {
