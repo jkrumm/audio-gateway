@@ -117,6 +117,7 @@ bun run podcast -- --path "Areas/Travel/Spain plan.md" --no-research --pin-minut
 bun run podcast -- status <id>
 bun run podcast -- list
 bun run podcast -- publish <id>
+bun run podcast -- abs-tidy [--apply]   # ABS hygiene, dry run by default
 ```
 `--path` (repeatable) reads a brain-relative note server-side instead of `--source`; `--no-research`
 skips the research stage; `--pin-minutes` stops the editor from deviating from `--minutes`;

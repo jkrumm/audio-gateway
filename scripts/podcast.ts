@@ -11,6 +11,7 @@
  *   bun run podcast -- status <id> [--base-url URL] [--json]
  *   bun run podcast -- list [--base-url URL] [--json]
  *   bun run podcast -- publish <id> [--base-url URL] [--json]
+ *   secrets-run run --env-file=.env.tpl --env-file=.env.mini.tpl --env-file=.env.mini.publish.tpl -- bun run podcast -- abs-tidy [--apply]
  */
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -20,6 +21,11 @@ const HELP = `Usage:
   bun run podcast -- status <id>
   bun run podcast -- list
   bun run podcast -- publish <id>
+  bun run podcast -- abs-tidy [--apply]
+
+abs-tidy talks to Audiobookshelf directly (needs ABS_URL/ABS_API_KEY in the env). Default is a dry run that lists
+finished / needs-finish / abandoned / never-played / superseded / test episodes. --apply marks listened-through episodes
+finished and hard-deletes superseded + test ones (file included).
 
 --path (repeatable) reads brain-relative note paths server-side; with --path,
 --source becomes optional. --no-research skips the research stage. --pin-minutes
@@ -390,6 +396,31 @@ async function runPublish(argv: string[]): Promise<void> {
   if (job.error) console.log(`error: ${job.error}`);
 }
 
+async function runAbsTidy(argv: string[]): Promise<void> {
+  const apply = argv.includes("--apply");
+  // Dynamic: the rest of this CLI stays a plain HTTP client; only abs-tidy needs the server's ABS client + config.
+  const tidy = await import("../src/abs-tidy");
+  const { absConfigured } = await import("../src/audiobookshelf");
+  if (!absConfigured()) throw new Error("ABS_URL/ABS_API_KEY unset — run under secrets-run with .env.mini.publish.tpl");
+  const { episodes, clients } = await tidy.loadTidyEpisodes();
+  const rows = tidy.classifyEpisodes(episodes, Date.now());
+  console.log(`${rows.length} episodes · clients seen in listening sessions: ${clients.join(", ") || "none"}\n`);
+  for (const r of rows) {
+    const flags = [r.verdict, r.supersededBy ? `superseded by "${r.supersededBy}"` : "", r.isTest ? "test (<5 min)" : ""].filter(Boolean).join(" · ");
+    console.log(`${r.episode.episodeId.slice(0, 8)}  ${formatMmSs(r.episode.durationSec)}  ${r.episode.title.slice(0, 60).padEnd(60)}  ${flags}`);
+  }
+  const toRemove = rows.filter((r) => r.supersededBy || r.isTest);
+  const toFinish = rows.filter((r) => r.verdict === "needs-finish" && !toRemove.includes(r));
+  console.log(`\nwould mark finished: ${toFinish.length} · would delete (hard): ${toRemove.length}`);
+  if (!apply) {
+    console.log("dry run — pass --apply to execute");
+    return;
+  }
+  for (const r of toFinish) await tidy.markFinished(r.episode);
+  for (const r of toRemove) await tidy.removeEpisode(r.episode);
+  console.log(`applied: ${toFinish.length} marked finished, ${toRemove.length} deleted`);
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -405,6 +436,7 @@ async function main(): Promise<void> {
   if (command === "status") return await runStatus(rest);
   if (command === "list") return await runList(rest);
   if (command === "publish") return await runPublish(rest);
+  if (command === "abs-tidy") return await runAbsTidy(rest);
 
   await runCreate(parseCreateArgs(argv));
 }

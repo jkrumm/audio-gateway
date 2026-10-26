@@ -54,7 +54,7 @@ interface AbsLibraryFolder {
   fullPath: string;
 }
 
-interface AbsLibrary {
+export interface AbsLibrary {
   id: string;
   name: string;
   mediaType: string;
@@ -85,7 +85,7 @@ interface AbsLibraryItemExpanded extends AbsLibraryItemMinified {
   };
 }
 
-async function absFetch(path: string, init: RequestInit = {}): Promise<{ status: number; body: string }> {
+export async function absFetch(path: string, init: RequestInit = {}): Promise<{ status: number; body: string }> {
   const res = await fetch(`${config.absUrl}${path}`, {
     ...init,
     headers: { Authorization: `Bearer ${config.absApiKey}`, ...(init.headers as Record<string, string> | undefined) },
@@ -98,13 +98,13 @@ async function absFetch(path: string, init: RequestInit = {}): Promise<{ status:
   return { status: res.status, body };
 }
 
-async function absJson<T>(path: string, init?: RequestInit): Promise<T> {
+export async function absJson<T>(path: string, init?: RequestInit): Promise<T> {
   const { body } = await absFetch(path, init);
   return JSON.parse(body) as T;
 }
 
 /** Resolve `config.absLibrary` (name or id) to a podcast-typed ABS library. */
-async function resolveLibrary(): Promise<AbsLibrary> {
+export async function resolveLibrary(): Promise<AbsLibrary> {
   const { libraries } = await absJson<{ libraries: AbsLibrary[] }>("/api/libraries");
   const target = config.absLibrary.trim().toLowerCase();
   const match = libraries.find(
