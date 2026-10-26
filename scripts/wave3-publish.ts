@@ -83,7 +83,10 @@ if (mode === "expression") {
   const letters = await readJson<Record<string, string>>("./data/wave3/letters.json");
   const summary = await readJson<{ runs: Array<{ id: string; letter?: string; hybridDrafter?: string; projectedWriterUsdPerEpisode: number; wallMs: { draft: number; review: number; revise: number }; segments: Array<{ key: string; words: number; target: number; lintFindings: number }> }> }>("./data/wave3/summary.json");
   const OUT_PRICE: Record<string, number> = { "claude-opus-5-5": 20, "claude-sonnet-5-5": 10, "claude-haiku-5-5": 0.5, "gpt-6.1-sol": 10, "gpt-6-luna": 0.5, "gemini-4-argon": 10, "gemini-3.8-flash": 3.75, hybrid: 20 };
+  // Owner 2026-10-26: Argon and Opus are too expensive per episode — measured, but not put to the ears.
+  const OUT_OF_THE_BLIND = new Set(["gemini-4-argon", "claude-opus-5-5", "hybrid"]);
   for (const run of summary.runs) {
+    if (OUT_OF_THE_BLIND.has(run.id)) continue;
     const letter = letters[run.id];
     if (!letter || run.segments.length !== 2) continue;
     const full = await readJson<{ segments: Array<{ key: string; final: { turns: Turn[] } }> }>(`./data/wave3/run-${run.id}.json`);

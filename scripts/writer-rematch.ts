@@ -42,14 +42,13 @@ interface Candidate {
   /** Rough IU spend for two segments incl. revision + tightening, before the first measurement. */
   estimateUsd: number;
 }
-// Cheap first so the cap can only ever cut the expensive tail; the hybrid last (it reuses a finished draft). Opus agentic is ~$1.4 — the cap decides.
+// Cheap first so the cap can only ever cut the expensive tail. Owner 2026-10-26: Opus agentic and the Opus-revision hybrid are out (too expensive per episode); Opus stays the production default and the single-shot reference.
 const CANDIDATES: Candidate[] = [
   { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.3 },
   { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.15 },
   { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.3 },
   { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.35 },
   { id: "gemini-3.8-flash", model: "gemini-3.8-flash", estimateUsd: 0.25 },
-  { id: "claude-opus-5-5", model: "claude-opus-5-5", estimateUsd: 1.4 },
   { id: "claude-sonnet-5-5", model: "claude-sonnet-5-5", estimateUsd: 0.7 },
 ];
 
@@ -292,7 +291,7 @@ for (const cand of CANDIDATES) {
 
 // The hybrid: the cheapest decent drafter, then Opus only for the revision + tightening.
 const hybridId = "hybrid";
-if ((!ONLY || ONLY.includes(hybridId)) && !existsSync(cachePath(hybridId))) {
+if (argv.includes("--hybrid") && (!ONLY || ONLY.includes(hybridId)) && !existsSync(cachePath(hybridId))) {
   const pool = runs.filter((r) => r.id !== "claude-opus-5-5" && r.segments.length === 2 && r.projectedWriterUsdPerEpisode < 0.5);
   const score = (r: CandidateRun): number => r.segments.reduce((n, s) => n + s.lintDraftFindings + 6 * Math.abs(s.draftWords / s.target - 1), 0);
   const best = pool.toSorted((a, b) => score(a) - score(b))[0];
