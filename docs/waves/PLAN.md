@@ -119,20 +119,20 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
 - Sample `Expressiveness` and `Podcast writer — rematch` questions are on `/tts`; the Opus baseline is missing from the latter.
 - The modelpick `writer-rematch` experiment, decision record and `docs/gemini-tts.md` are committed and pushed; modelpick deploy is the modelpick tab's.
 
-## Wave 4 — Finish the rematch, Sol on the loop, Audiobookshelf hygiene            <!-- status: active -->
+## Wave 4 — Finish the rematch, Sol on the loop, Audiobookshelf hygiene            <!-- status: done -->
 **Owner, 2026-10-26: no spend ceiling — quality over cost.** The harness keeps a runaway stop only (IU $15 for this wave,
 checked before every call); it is not a budget. A podcast job may be running — `make deploy` refuses then; wait, never kill.
-- [ ] **`/v1/responses` transport in `runToolLoop`** so `gpt-6.1-sol` (the cost leader) runs the agentic writer like
+- [x] **`/v1/responses` transport in `runToolLoop`** so `gpt-6.1-sol` (the cost leader) runs the agentic writer like
       everyone else (IU serves its function tools only there — Wave 3 finding). Research the current Responses API tool
       shape first; keep the chat-completions path unchanged; tests with recorded replies.
-- [ ] **Finish the rematch on the final design**: `claude-opus-5-5` agentic (the baseline — currently missing on `/tts`),
+- [x] **Finish the rematch on the final design**: `claude-opus-5-5` agentic (the baseline — currently missing on `/tts`),
       `claude-sonnet-5-5`, `gpt-6.1-sol` agentic, `gpt-6-luna`, `gemini-4-argon`, `gemini-3.8-flash`, and the hybrid (best
       cheap drafter + Opus revision). Same frozen inputs as Wave 3. Voice, add to the blind "Podcast writer — rematch"
       question, update the modelpick decision record with the full table and a ranked recommendation. Writer default
       stays `claude-opus-5-5` until the owner's ears decide.
-- [ ] **A/B fixture:** compare job `503c28f0` (v1, old pipeline) and the v2 job of the same topic (the orchestrator starts
+- [x] **A/B fixture:** compare job `503c28f0` (v1, old pipeline) and the v2 job of the same topic (the orchestrator starts
       it) on the Wave 3 lint metrics (meta-hedges, host balance, tags/delivery, humor) — a short table in the decision record.
-- [ ] **Audiobookshelf hygiene** (library "Podcasts", show "Brain Sonderausgabe", 13+ episodes; API via `ABS_URL` over
+- [x] **Audiobookshelf hygiene** (library "Podcasts", show "Brain Sonderausgabe", 13+ episodes; API via `ABS_URL` over
       https from `.env.mini.publish.tpl`). Finding: only 4 episodes are marked finished although the owner listened to
       many; superseded versions (e.g. "Factory v2" next to "Factory v2.2") and a 3-minute Gemini test episode are listed.
       (1) Find out from listening sessions (`/api/me/listening-sessions` or equivalent — research the ABS API) why progress
@@ -141,5 +141,11 @@ checked before every call); it is not a budget. A podcast job may be running —
       superseded/test ones — dry run by default; deletion only with explicit `--apply`. Do NOT apply it in this wave; the
       owner reviews the dry-run output first. (3) When a new episode supersedes an older one on the same topic, the
       publish step can mark the old one (metadata note or finished) — propose, implement only if small.
-- [ ] Gates, `/review`, commit per concern, push, deploy when no job runs. Report spend.
+- [x] Gates, `/review`, commit per concern, push, deploy when no job runs. Report spend.
 **Left behind:**
+- **Owner narrowed the rematch mid-wave:** `claude-opus-5-5` agentic, `gemini-4-argon` (measured, $1.23/ep, not in the blind question) and the Opus-revision hybrid are out as too expensive; the hybrid is behind `--hybrid` in `scripts/writer-rematch.ts` if wanted. Blind on `/tts`: Haiku B, Flash D, Sonnet E, Sol G, Luna J. Full table and ranking in modelpick `docs/decisions/podcast-writer.md`. Verdict is the owner's ears; the writer default stays `claude-opus-5-5`.
+- **IU spend Wave 4: about $3.5** (ledger $7.34 total less the $3.85 carried in); runaway stop $15 never near. The v2 episode job `b78cb035` cost $4.90 on top (Opus default writer).
+- **Flash** cannot hold the agentic loop inside IU's ~230 s non-streaming limit (single-shot fallback, 17 lint findings); **Luna** writes ~35% short and never sets a delivery — a length lever in the loop would be the follow-up if it wins the listen.
+- **A/B `503c28f0` v1 vs v2** is in the decision record (meta-hedges 3→0, notes-ignorance 5→0, host A share 74%→30%, deliveries 0→12). v2 is 37% shorter than v1 — ears decide whether that is the target or lost content.
+- **Audiobookshelf:** progress does not stick because `plappa` (iOS) re-opens a finished episode as a fresh session from 0 and its sync overwrites `isFinished` (Nordspanien, Kessel, Factory v2); 5 episodes have no session at all (never synced or never played). `podcast abs-tidy` (dry run; `--apply` marks listened-through finished and hard-deletes superseded + test) is **not applied** — the owner reviews the dry-run first. Open policy question from review: `--apply` deletes a superseded/test episode regardless of listening state. Superseded-marking at publish time: not implemented (abs-tidy covers it after the fact).
+- Follow-ups (review, not blocking): widen `ChatMessage` to a union so the responses transport needs no casts; integration tests for `markFinished` / `removeEpisode` URLs and `runAbsTidy --apply` before the first real apply.
