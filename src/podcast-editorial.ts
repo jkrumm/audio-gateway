@@ -185,7 +185,9 @@ function editorialSystemPrompt(input: EditorialInput): string {
 
 The material decides the show, not a formula. Look at the recent episodes in the table and vary on purpose: if the last ones were "A explains, B asks", flip it, or make it a genuine dialogue of equals; if they all opened on a number and a "wait —", start differently; if they all ran twenty minutes, let a small topic be short.
 
-Match the form to what is actually in front of you. A technical or procedural topic gets a straight, dense walkthrough — long turns, no forced jokes, humor only if it genuinely arises from the material. A decision gets two positions that really disagree. A plan gets the listener's questions, asked hard. A story gets told. Either host may lead. One host may carry most of the episode while the other barely speaks. Five minutes is a valid episode.
+Choose the episode's MODE first, from the material, and name it in the rationale: an EXPLAINER or walkthrough (one host knows and explains, the other asks the sharp questions the listener would ask, both add), a STORY (told, with a spine), a Q&A where the curious host drives and the other answers, an interview, or a DEBATE. The default is knowledge SHARING: the listener wants to learn what is in these notes quickly and well. A debate is right only when the material itself is genuinely contested — two defensible positions in the source, a decision whose answer is not settled. A decision that is already made is explained, not re-argued; an open question inside an otherwise settled document is raised as an open question, by whoever asks it best, not staged as two sides. If two or more of the recent episodes used a scripted disagreement or an opposing-host format (look at the format names), this one must not unless the source is truly contested — and say so in "avoid".
+
+Match the form to what is actually in front of you. A technical or procedural topic gets a straight, dense walkthrough — long turns, no forced jokes, humor only if it genuinely arises from the material, and the second host's job is the sharp question, not the objection. A plan gets the listener's questions, asked hard. A story gets told. Pace and density stay high in every mode: sharing is not chatter. Either host may lead. One host may carry most of the episode while the other barely speaks. Five minutes is a valid episode.
 
 Do not invent drama. Do not invent a hook. Do not schedule jokes. Do not reach for a device because podcasts usually have one — a running motif, a withheld reveal, a digression and a set of takeaways are tools, not furniture, and the last five episodes were ruined by having all of them whether the topic wanted them or not.
 
@@ -195,7 +197,7 @@ ${lengthRule}
 
 Decide, and return as JSON:
 - format: a free name for this episode's form, in ${languageLabel} ("Erklärstück", "Streitgespräch", "Kurzbriefing", "Interview", whatever fits). Not from a menu.
-- rationale: 2 to 5 sentences — why this form for this material, and what it deliberately does differently from the recent episodes.
+- rationale: 2 to 5 sentences — start with the MODE (explainer, story, Q&A, interview or debate) and why this material wants it, then what this episode deliberately does differently from the recent ones.
 - minutes: the target length.
 - segments: 1 to 9. Roughly four minutes each is a guide, not a rule — a tight briefing may be one segment.
 - roles: what ${hostA.name} (A) and ${hostB.name} (B) each ARE in this episode, given their personalities. Be concrete about who explains, who asks, who leads, and whether the split is even.
@@ -204,7 +206,7 @@ Decide, and return as JSON:
 - opening: how the episode starts. "Straight in with the topic, no cold open" is a perfectly good answer.
 - closing: how it ends. "Stop when the argument is finished" is a perfectly good answer.
 - rhythm: monologue share, pace, where the long explanations go and where quick exchanges belong.
-- devices: dramaturgy devices that genuinely fit THIS material — a motif, a withheld reveal, a planned digression, a live disagreement. An empty array is the normal answer; only list what earns its place.
+- devices: dramaturgy devices that genuinely fit THIS material — a motif, a withheld reveal, a planned digression. A live disagreement belongs here only if the source is genuinely contested; "two hosts, two sides" is not a device to reach for. An empty array is the normal answer; only list what earns its place.
 - avoid: concrete patterns from the recent episodes that this one must not repeat.
 - glossary_policy: how unfamiliar names and terms from the glossary get introduced in this episode.
 

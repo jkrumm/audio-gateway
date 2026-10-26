@@ -41,8 +41,13 @@ steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
   Wiederholung einer Zahl ist erlaubt, wenn sie wichtig ist.
 - Wer erklärt, bekommt die Zeit, die der Gedanke braucht. Ein echter
   Durchgang am Stück ist besser als drei Häppchen mit "Genau." dazwischen.
-- Der andere reagiert mit Substanz: eine Rückfrage, ein Einwand, eine eigene
-  Zusammenfassung, ein Beispiel. Nicht mit "Spannend." oder "Wow."
+- Der Normalfall ist Wissen teilen: Einer weiß und erklärt, der andere stellt
+  die scharfen Fragen des Hörers (die Zahl, der Grund, die Folge), beide ergänzen.
+  Widerspruch gibt es nur, wo das Material wirklich umstritten ist, und nie als
+  Einwand, der im nächsten Turn zurückgenommen wird.
+- Der andere reagiert mit Substanz: eine Rückfrage, eine Folge, eine Zahl, ein
+  Beispiel. Nicht mit "Spannend." oder "Wow." und nicht mit dem Echo der letzten
+  Worte.
 - Abschweifen ist erlaubt, wenn der Brief es vorsieht — dann mit einem
   sichtbaren Weg zurück ("aber zurück zur Maut").
 - Ortsnamen in der Landessprache, einmal langsam eingeführt, dann normal.
@@ -63,6 +68,9 @@ steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
 - Zahlen, Preise, Uhrzeiten, Daten, Einheiten ausgeschrieben, wie man sie
   sagt: "dreihundertdreißig Euro", "elfter September", "zwei Meter fünfzig",
   "hundertfünf Stundenkilometer". Nie Ziffern, nie Symbole.
+- Das gilt für jeden Eigennamen: Firma, Ort, Person, Projekt, Werkzeug, Kürzel.
+  Die Notizen setzen vieles als bekannt voraus, der Hörer hat sie nicht eben
+  gelesen: im Zweifel einführen, in einem Satzteil.
 - Ein unbekannter Name wird erst als das eingeführt, was er IST, dann als
   das, wie er HEISST — langsam. Danach bekommt er ein kurzes Kürzel, das beide
   Hosts weiterverwenden. Nie ein Name, bevor er eingeführt wurde.
@@ -84,3 +92,33 @@ steht hier nicht: die entscheidet der Redaktions-Brief, Folge für Folge.
 - Fakten, die nicht in den Notizen (oder den ADDITIONS) stehen.
 - Englische Audio-Tags als Wörter. Tags sind selten und stehen nur in
   längeren Sätzen; Betonung kommt aus Satzbau und Satzzeichen.
+
+## Vorher / Nachher
+
+Gesprochen wird so, nicht so. Aus echten Entwürfen.
+
+- Name einführen.
+  Vorher: "Cortex hat dazu im Engineering-Blog geschrieben."
+  Nachher: "Cortex ist die Firma hinter einer offenen Fabrik, in der Claude Code
+  die Arbeit macht. Die haben dazu einen Blog-Beitrag geschrieben."
+- Kürzel.
+  Vorher: "ADR einhundertneunzehn sagt: …"
+  Nachher: "Die halten Entscheidungen in kurzen Dokumenten fest, ADRs. Nummer
+  einhundertneunzehn sagt: …"
+- Echo statt Beitrag.
+  Vorher: A: "…ein Sweeper von gut zweitausend Zeilen." B: "Zweitausend Zeilen.
+  Und trotzdem ist DBOS noch drin."
+  Nachher: B: "Zweitausend Zeilen nur zum Aufräumen. Wer pflegt das, und warum
+  haben sie DBOS trotzdem behalten?"
+- Eine Reaktion mit Substanz.
+  Vorher: B: "Spannend."
+  Nachher: B: "Und was kostet dich das, wenn es schiefgeht?"
+- Gespielter Einwand.
+  Vorher: B: "Das sehe ich anders." A erklärt. B: "Stimmt, da hast du recht."
+  Nachher: B: "Woher weißt du, dass das kein einzelner Upgrade-Unfall war?"
+  A beantwortet es mit der Zahl aus den Notizen.
+- Vortrag teilen.
+  Vorher: ein Turn mit hundertdreißig Wörtern, dann zwölf Wörter Reaktion.
+  Nachher: A erklärt die erste Hälfte in sechzig Wörtern, B fragt "Und was hat
+  das ausgelöst?", A erklärt den Rest. Dieselben Fakten, halb so viele Sätze am
+  Stück.

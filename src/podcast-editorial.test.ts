@@ -258,6 +258,10 @@ describe("decideEpisodeBrief", () => {
     expect(systemPrompt).toContain("You do not write the episode");
     expect(systemPrompt).toContain("Do not invent drama");
     expect(systemPrompt).toContain("Five minutes is a valid episode.");
+    // The default is knowledge sharing; a debate needs a genuinely contested source and is varied against recent formats.
+    expect(systemPrompt).toContain("Choose the episode's MODE first");
+    expect(systemPrompt).toContain("The default is knowledge SHARING");
+    expect(systemPrompt).toContain("A live disagreement belongs here only if the source is genuinely contested");
     expect(systemPrompt).toContain("Hosts: A = Jonas, B = Lena");
     expect(systemPrompt).toContain("The requested 20 minutes are a hint");
     expect(systemPrompt).toContain("between 3 and 60 minutes");

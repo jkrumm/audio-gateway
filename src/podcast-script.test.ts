@@ -30,6 +30,8 @@ const {
   parseSegmentTurns,
   sanitizeTurns,
   writePodcastScript,
+  baseSystemPrompt,
+  segmentPrompt,
   buildEpisodeProfile,
   loadShowBible,
   loadVoiceGuide,
@@ -910,7 +912,47 @@ describe("writePodcastScript", () => {
     expect(dramaturgePrompt).toContain("Format: Kurzbriefing");
     expect(dramaturgePrompt).toContain("devices NOBODY asked for");
     expect(factEditorPrompt).toContain("FIGURE CLUSTERS and UNINTRODUCED NAMES");
-    expect(factEditorPrompt).toContain("before the hosts said what it IS in plain words");
+    expect(factEditorPrompt).toContain("before a host said what it IS in plain words");
+    expect(factEditorPrompt).toContain("Judge as a STRANGER to these notes would");
+    expect(dramaturgePrompt).toContain("MANUFACTURED ARGUMENT");
+  });
+
+  test("the deterministic lint reaches the reviewers, and its stock-phrase findings reach the writer as notes", async () => {
+    let reviewContent = "";
+    let revisionNotes = "";
+    setFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages: Array<{ content: string }> };
+      const systemPrompt = body.messages[0]?.content ?? "";
+      const userContent = body.messages[1]?.content ?? "";
+      if (systemPrompt.includes("You are writing the OUTLINE")) return outlineResponse();
+      if (systemPrompt.includes("You are a reviewer")) {
+        reviewContent = userContent;
+        return chatCompletion(JSON.stringify({ notes: [], verdict: "ok" }));
+      }
+      if (systemPrompt.includes("You are REVISING ONE SEGMENT")) {
+        revisionNotes += userContent;
+        return segmentResponse(0);
+      }
+      const match = /You are writing ONE SEGMENT \((\d) of (\d)\)/.exec(systemPrompt);
+      const index = Number(match?.[1] ?? 1) - 1;
+      if (index === 0) return chatCompletion(JSON.stringify({ turns: [{ speaker: "A", text: "Nicht zuletzt zählt der Preis." }, { speaker: "B", text: "Und wer zahlt ihn?" }] }));
+      return segmentResponse(index);
+    });
+
+    await writePodcastScript(BASE_REQUEST, { models: { ...MODELS, review: ["review-model-1"] }, concurrency: 3, review: true, metadata: false });
+
+    expect(reviewContent).toContain("DETERMINISTIC LINT");
+    expect(reviewContent).toContain("words/turn");
+    expect(revisionNotes).toContain("[lint]");
+    expect(revisionNotes).toContain("Nicht zuletzt");
+  });
+
+  test("the segment prompt leads with the base prompt the Claude branch caches", () => {
+    const outline = { title: "t", description: "", coverPrompt: "", genres: [], motif: "", throughLine: "", hook: "", reveals: [], digressions: [], segments: [{ title: "S1", goal: "g", keyFacts: ["f"], targetWords: 100, tension: "t" }] };
+    const base = baseSystemPrompt(BASE_REQUEST, "SHOW BIBLE", "VOICE");
+    const segment = segmentPrompt({ req: BASE_REQUEST, outline, segment: outline.segments[0]!, index: 0, total: 1, showBible: "SHOW BIBLE", voice: "VOICE" });
+    expect(segment.startsWith(base)).toBe(true);
+    expect(segment.length).toBeGreaterThan(base.length);
   });
 
   test("the numbers-and-names non-negotiable is in every writer prompt", async () => {
@@ -935,6 +977,10 @@ describe("writePodcastScript", () => {
       // Roles come from the brief, never from a hardcoded host description.
       expect(prompt).not.toContain("the curious co-host");
       expect(prompt).toContain("comes from the EPISODE BRIEF below");
+      // Names of every kind, judged as a stranger to the notes would; sharing is the default mode, density stays.
+      expect(prompt).toContain("EVERY proper name, place, person, company, project, tool");
+      expect(prompt).toContain("KNOWLEDGE SHARING");
+      expect(prompt).toContain("Sharing is not chatter");
     }
   });
 

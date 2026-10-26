@@ -3,6 +3,7 @@ import { SPEECH_TAGS, stripDisallowedTags, synthConcurrent, TAG_PATTERN } from "
 import { rawFetch } from "./gemini-tts";
 import { iuHeaders, iuUrl } from "./iu";
 import { log } from "./log";
+import { lintNotes, lintSegments, renderLintReport } from "./podcast-lint";
 import { resolveReasoningEffort } from "./model-resolution";
 import { type Span, withSpan } from "./otel";
 import type { Dossier, EpisodeBrief, EpisodeProfile } from "./podcast-types";
@@ -582,7 +583,7 @@ function renderEpisodeBrief(req: PodcastScriptRequest): string {
 }
 
 /** The shared, non-negotiable rules — identical for the outline and every segment call. */
-function baseSystemPrompt(req: PodcastScriptRequest, showBible: string, voice = ""): string {
+export function baseSystemPrompt(req: PodcastScriptRequest, showBible: string, voice = ""): string {
   const [hostA, hostB] = req.hosts;
   const languageLabel = LANGUAGE_LABEL[req.language];
   return `You are the head writer of "${req.series}", a two-host podcast that turns one person's research notes into an episode that sounds like a real, well-produced show — not a read-aloud summary.
@@ -594,9 +595,9 @@ Non-negotiables:
 2. The EPISODE BRIEF decides this episode's shape, roles, tone, humor and rhythm. Follow it exactly — the editor wrote it for THIS material after reading the recent episodes. There is no house formula: no obligatory cold open, no obligatory running joke, no obligatory disagreement per segment, no obligatory three takeaways. A dense, straight walkthrough with long turns is a perfectly good episode. Whatever the brief did not ask for, do not add.
 EPISODE BRIEF:
 ${renderEpisodeBrief(req)}
-3. It is a CONVERSATION with real weight, not ping-pong. Whoever is explaining gets the floor for as long as the thought needs — a real walk-through, an example, a small story — and the other host listens, then reacts with weight, not a one-liner. Vary the rhythm as the brief asks: a long stretch, a quick exchange, a pause. Interjections exist but are rare and earned. Never alternate mechanically; never let both hosts speak in the same length all the time. No lists read aloud — turn any list into back-and-forth or a walked-through explanation.
+3. It is a CONVERSATION with real weight, not ping-pong. Whoever is explaining gets the floor for as long as the thought needs — a real walk-through, an example, a small story — and the other host listens, then reacts with weight, not a one-liner. Vary the rhythm as the brief asks: a long stretch, a quick exchange, a pause. Interjections exist but are rare and earned. Never alternate mechanically; never let both hosts speak in the same length all the time. The default mode of this show is KNOWLEDGE SHARING: one host knows and explains, the other asks the sharp questions the listener would ask (the number, the reason, the consequence), and both add to it. A host disagrees only when the brief says the material is genuinely contested — never to create friction, never an objection that is conceded one turn later. Sharing is not chatter: keep the density of facts, no small talk, no filler. No lists read aloud — turn any list into back-and-forth or a walked-through explanation.
 4. Written for the EAR in ${languageLabel}: numbers, prices, times, units, dates and abbreviations fully spelled out as spoken (German: "dreihundertdreißig Euro", "hundertfünf Stundenkilometer", "elfter September", "zwei Meter fünfzig"); no digits, no symbols, no URLs, no markdown, no emoji, no parentheses. Place names in their local form. Expand every acronym once.
-5. Numbers and names are written for the EAR, not for the page. One figure per sentence — a sentence carrying three numbers is unlistenable. Round, unless the precision IS the point: "gut dreitausend" beats "dreitausendzweiundvierzig", and "null Komma eins sieben" is only ever spoken when that digit is exactly what matters. Anchor every important figure to something the listener already knows ("das ist eine Tankfüllung", "so viel wie eine Monatsmiete"). A cluster of figures is never read out — the hosts walk through it, one figure at a time, with pauses ("…") and a real reaction in between. An unfamiliar proper name or term is introduced as WHAT IT IS before WHAT IT IS CALLED ("die Behörde, die die Maut eintreibt — die heißt …"), spoken slowly, and then gets one short handle the hosts reuse for the rest of the episode; the GLOSSARY gives you both. Never use a name before it has been introduced that way. Open questions stay open and are said to be open ("das wissen wir nicht").
+5. Numbers and names are written for the EAR, not for the page. One figure per sentence — a sentence carrying three numbers is unlistenable. Round, unless the precision IS the point: "gut dreitausend" beats "dreitausendzweiundvierzig", and "null Komma eins sieben" is only ever spoken when that digit is exactly what matters. Anchor every important figure to something the listener already knows ("das ist eine Tankfüllung", "so viel wie eine Monatsmiete"). A cluster of figures is never read out — the hosts walk through it, one figure at a time, with pauses ("…") and a real reaction in between. An unfamiliar proper name or term is introduced as WHAT IT IS before WHAT IT IS CALLED ("die Behörde, die die Maut eintreibt — die heißt …"), spoken slowly, and then gets one short handle the hosts reuse for the rest of the episode; the GLOSSARY gives you both. This covers EVERY proper name, place, person, company, project, tool and internal term or abbreviation — the notes were written for someone who already knows them, the listener has not just read them, so judge by what a stranger to the notes would know, not by what the SOURCE takes for granted. If neither SOURCE nor GLOSSARY says what a thing is, say only what the notes imply ("ein Werkzeug, das in deinen Notizen vorkommt") — never pretend to know more. Never use a name before it has been introduced that way, in one plain clause: what it is and why it matters here. Open questions stay open and are said to be open ("das wissen wir nicht").
 6. Expressiveness comes from punctuation first — ellipses, dashes, short sentences, a question left hanging. Inline tags ONLY from this list, written exactly with the angle brackets, in English even inside German text: ${PODCAST_TAGS.join(" ")}. Very sparse: at most one tag every six turns, only inside turns of twelve words or more, between two sentences — never as the first word of a short line, never two tags side by side, never translated, never invented. No square-bracket tags, no mood tags. Emphasis is a single word in CAPS, at most once a turn. Most turns carry NO tag.
 7. The episode is for the listener described in the brief; when the notes are the listener's own plan, the hosts talk about it as THEIR listener's plan ("du fährst…", "dein Van…") and give advice, not a travelogue.
 8. Output STRICT JSON only, no commentary, no code fences.${voiceSection(voice)}${showBibleSection(showBible)}`;
@@ -615,13 +616,13 @@ You are writing the OUTLINE for this episode — break the story inside what the
 - through_line: the ONE question this episode is really answering, written as a single sentence for the writers' room, never as a line a host says out loud. Return "" when the material has no single question and the brief did not ask for one.
 - motif, hook, reveals and digressions are DRAMATURGY DEVICES. Fill each one ONLY when the brief's DEVICES list calls for it; otherwise return an empty string / an empty array. Do not invent a hook, a running joke, a withheld reveal or a digression because a podcast usually has one — an episode with none of them is a valid episode, and a forced device is the single most common failure of this show.
   - motif: one thing the hosts can return to, lightly, across the episode.
-  - hook: the opening beat itself — a concrete scene, a striking number, or a live disagreement. It must not summarize the episode or preview its conclusions.
+  - hook: the opening beat itself — a concrete scene, a striking number, or the open question itself. It must not summarize the episode or preview its conclusions.
   - reveals: things worth deliberately withholding — a number, a decision, a twist — each tied to the 0-based index of the segment where it should land. Segments before that index may gesture at it without giving it away.
   - digressions: planned side-trips (an anecdote, a concrete example, a "what if") — each tied to the 0-based index of the segment that should host it, plus a one-line return_hook: the line that pulls the conversation back to the main thread afterward.
 - Every key_facts entry must be a fact, number or rule taken verbatim (or near-verbatim) from the source — these are the load-bearing details each segment MUST speak aloud.
 
 Return STRICT JSON only, no markdown, no commentary:
-{"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"motif":"<motif, or \\"\\" when the brief did not ask for one>","through_line":"<the one question the episode answers, or \\"\\">","hook":"<the opening beat, or \\"\\" when the brief did not ask for one>","reveals":[{"text":"<what gets revealed>","segment":<0-based segment index>}],"digressions":[{"beat":"<the side-trip>","segment":<0-based segment index>,"return_hook":"<the line that returns to the thread>"}],"segments":[{"title":"<segment title>","goal":"<what this segment accomplishes>","key_facts":["<verbatim fact from the source>"],"target_words":<number>,"tension":"<the question or disagreement this segment turns on>"}]}`;
+{"title":"<episode title>","description":"<2-4 sentence show-notes description in ${languageLabel}>","cover_prompt":"<English image brief>","genres":["..."],"motif":"<motif, or \\"\\" when the brief did not ask for one>","through_line":"<the one question the episode answers, or \\"\\">","hook":"<the opening beat, or \\"\\" when the brief did not ask for one>","reveals":[{"text":"<what gets revealed>","segment":<0-based segment index>}],"digressions":[{"beat":"<the side-trip>","segment":<0-based segment index>,"return_hook":"<the line that returns to the thread>"}],"segments":[{"title":"<segment title>","goal":"<what this segment accomplishes>","key_facts":["<verbatim fact from the source>"],"target_words":<number>,"tension":"<what pulls the listener through this segment: the open question, the curiosity, or the reveal it is heading for — a conflict only if the material is genuinely contested>"}]}`;
 }
 
 export function segmentPrompt(params: {
@@ -652,7 +653,7 @@ export function segmentPrompt(params: {
 You are writing ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}".
 Write ONLY this segment: "${segment.title}". Target about ${segment.targetWords} words — a soft budget for the whole segment, not a per-turn quota.
 Segment goal: ${segment.goal}
-Central tension for this segment: ${segment.tension}
+What pulls the listener through this segment: ${segment.tension}
 Roles here — ${hostA.name} (A): ${brief.roles.A}; ${hostB.name} (B): ${brief.roles.B}. Tone: ${brief.tone}. Humor: ${HUMOR_INSTRUCTION[brief.humor]} Rhythm: ${brief.rhythm}${brief.glossaryPolicy.trim() ? `\nUnfamiliar names and terms: ${brief.glossaryPolicy}` : ""}
 Key facts this segment MUST speak, verbatim where possible:
 ${segment.keyFacts.map((f) => `- ${f}`).join("\n")}
@@ -737,7 +738,7 @@ export function buildSegmentUserContent(params: { req: PodcastScriptRequest; out
     ownDigressions.length > 0
       ? `DIGRESSION FOR THIS SEGMENT:\n${ownDigressions.map((d) => `- ${d.beat} — then return with: ${d.returnHook}`).join("\n")}`
       : undefined,
-    `THIS SEGMENT'S SPEC:\nTitle: ${segment.title}\nGoal: ${segment.goal}\nTension: ${segment.tension}\nTarget words: ${segment.targetWords}\nKey facts to speak:\n${segment.keyFacts
+    `THIS SEGMENT'S SPEC:\nTitle: ${segment.title}\nGoal: ${segment.goal}\nPull: ${segment.tension}\nTarget words: ${segment.targetWords}\nKey facts to speak:\n${segment.keyFacts
       .map((f) => `- ${f}`)
       .join("\n")}`,
   ].filter((p): p is string => Boolean(p));
@@ -753,15 +754,15 @@ type ReviewerRole = (typeof REVIEWER_ROLES)[number];
 
 const REVIEWER_INSTRUCTIONS: Record<ReviewerRole, (req: PodcastScriptRequest) => string> = {
   dramaturge: (req) =>
-    `You are the DRAMATURGE reviewing a finished two-host podcast draft AGAINST ITS EPISODE BRIEF — not against a fixed curve, and not against what podcasts usually do. This show has no house shape; the brief below is the only shape this episode owes anyone. Check: does the episode do what the brief decided (format, opening, closing, the roles each host was given); is the rhythm the one the brief asked for; does it avoid what the brief said to avoid; are the brief's devices — if it listed any — actually earning their place; and, just as important, has the draft added devices NOBODY asked for (an unearned cold open, a forced running joke, a bolted-on set of takeaways, a disagreement staged for its own sake) that should simply go. If the brief asked for reveals or digressions, check they land in the segment they were assigned to and that a digression returns to the point.
+    `You are the DRAMATURGE reviewing a finished two-host podcast draft AGAINST ITS EPISODE BRIEF — not against a fixed curve, and not against what podcasts usually do. This show has no house shape; the brief below is the only shape this episode owes anyone. Check: does the episode do what the brief decided (format, opening, closing, the roles each host was given); is the rhythm the one the brief asked for; does it avoid what the brief said to avoid; are the brief's devices — if it listed any — actually earning their place; and, just as important, has the draft added devices NOBODY asked for (an unearned cold open, a forced running joke, a bolted-on set of takeaways, a disagreement staged for its own sake) that should simply go. Check specifically for a MANUFACTURED ARGUMENT: an objection that is conceded one turn later, a host who takes a side only so the other has someone to answer, "ja, aber" hedges, positions that are not in the SOURCE. Unless the brief names a genuinely contested question, the episode should read as one host sharing what they know while the other asks sharp questions — flag every staged disagreement and say what the exchange should be instead (a question, a missing fact, a consequence). If the brief asked for reveals or digressions, check they land in the segment they were assigned to and that a digression returns to the point.
 
 THE BRIEF THIS EPISODE OWES:
 ${renderEpisodeBrief(req)}`,
   "conversation-coach": () =>
-    `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment. Also flag written-language constructs and AI-isms: essay sentences, hedges like "es ist erwähnenswert" or "worth stating plainly", tidy triads, over-explained emotion, a character explaining what they feel instead of just feeling it, filler, and repeated setups.`,
+    `You are the CONVERSATION COACH reviewing a finished two-host podcast draft for how it sounds, not what it says. Check: does this sound like two people actually talking — real floor time for whoever is explaining, reactions with substance rather than a one-word acknowledgement, natural interruptions, no mechanical strict alternation, no "wie gesagt" / "as we said" filler; no ECHOED reactions (a turn that opens by repeating the last words of the previous turn instead of adding a question, a consequence or a number); a sharp question from the listening host every few turns while the other explains; do the two hosts sound distinct from each other; do any moments of humour actually land and fit the moment. Also flag written-language constructs and AI-isms: essay sentences, hedges like "es ist erwähnenswert" or "worth stating plainly", tidy triads, over-explained emotion, a character explaining what they feel instead of just feeling it, filler, and repeated setups.`,
   "fact-editor": (req) =>
     `You are the FACT & SPEECH EDITOR reviewing a finished two-host podcast draft. Check: every fact, number, place, price or date is traceable to the SOURCE — flag anything invented or contradicted; nothing important from any segment's key_facts is missing from the draft; numbers, dates and units are spelled out as spoken ${LANGUAGE_LABEL[req.language]}, never digits or symbols; every sentence is speakable in one breath; inline tags are only from the allowed list (${PODCAST_TAGS.join(" ")}), angle brackets, never square brackets, and only where they earn their place — flag over-use; no markdown, no emoji, nothing that isn't spoken text.
-Additionally, flag FIGURE CLUSTERS and UNINTRODUCED NAMES, which is where this show fails hardest for a listener: more than one figure in a single sentence; a precise figure the listener has nothing to compare it to (unrounded and unanchored); a run of figures read out instead of walked through one at a time with pauses and a reaction; and any proper name, term or abbreviation used before the hosts said what it IS in plain words.`,
+Additionally, flag FIGURE CLUSTERS and UNINTRODUCED NAMES, which is where this show fails hardest for a listener: more than one figure in a single sentence; a precise figure the listener has nothing to compare it to (unrounded and unanchored); a run of figures read out instead of walked through one at a time with pauses and a reaction; and any proper name, place, person, company, project, tool, internal term or abbreviation used before a host said what it IS in plain words. Judge as a STRANGER to these notes would: the SOURCE assuming a reader knows "Cortex" or "engrams" does not mean the listener does. For each such name, give the segment/turn of its first mention and the one clause that should introduce it. The lint block (when present) lists mechanically detected candidates — confirm or dismiss them, and add the names it cannot see.`,
 };
 
 function reviewPrompt(params: { req: PodcastScriptRequest; outline: Outline; role: ReviewerRole; showBible: string }): string {
@@ -786,8 +787,8 @@ function renderDraftForReview(segments: ScriptSegment[], hosts: [PodcastHost, Po
     .join("\n");
 }
 
-function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Outline; segments: ScriptSegment[] }): string {
-  const { req, outline, segments } = params;
+function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Outline; segments: ScriptSegment[]; lintReport?: string }): string {
+  const { req, outline, segments, lintReport } = params;
   const dramaturgy = [
     outline.motif ? `Motif: ${outline.motif}` : undefined,
     outline.throughLine ? `Through-line: ${outline.throughLine}` : undefined,
@@ -804,10 +805,11 @@ function buildReviewUserContent(params: { req: PodcastScriptRequest; outline: Ou
     `SOURCE (verbatim; every fact must come from here):\n${req.source}`,
     ...dossierSections(req.dossier),
     `EPISODE OUTLINE:\nTitle: ${outline.title}\n${dramaturgy}${dramaturgy ? "\n" : ""}Segments:\n${outline.segments
-      .map((s, i) => `${i + 1}. ${s.title} — ${s.goal} (tension: ${s.tension})`)
+      .map((s, i) => `${i + 1}. ${s.title} — ${s.goal} (pull: ${s.tension})`)
       .join("\n")}`,
     `FULL DRAFT SCRIPT:\n${renderDraftForReview(segments, req.hosts)}`,
-  ];
+    lintReport ? `DETERMINISTIC LINT (measured by code, per segment index; advisory facts, not verdicts):\n${lintReport}` : undefined,
+  ].filter((p): p is string => Boolean(p));
   return parts.join("\n\n");
 }
 
@@ -820,9 +822,9 @@ function revisionPrompt(params: { req: PodcastScriptRequest; outline: Outline; s
   return `${baseSystemPrompt(req, showBible, voice)}
 
 You are REVISING ONE SEGMENT (${index + 1} of ${total}) of the episode "${outline.title}" — "${segment.title}" — based on editorial notes from a review pass. The segment's target is ${segment.targetWords} words; a revision never grows the segment, and if a note asks for a cut, the cut is the priority. You get the segment's CURRENT turns, the notes that apply to it, and a few turns from the neighbouring segments for the seams.
-Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/tension), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
+Apply every note that is valid. Where a note is wrong (it contradicts the source, or the segment's own goal/pull), use your judgement and keep what already works — you are not obligated to change something just because a note mentions it. Do not shorten the segment just to hit a word target; keep its texture.
 Segment goal: ${segment.goal}
-Central tension for this segment: ${segment.tension}
+What pulls the listener through this segment: ${segment.tension}
 Key facts this segment MUST speak, verbatim where possible:
 ${segment.keyFacts.map((f) => `- ${f}`).join("\n")}
 
@@ -966,6 +968,7 @@ async function callClaudeStage(params: LlmParams, span: Span): Promise<string> {
     system: params.systemPrompt,
     user: params.userContent,
     maxTokens: params.maxCompletionTokens,
+    cacheablePrefix: params.cacheableSystemPrefix,
   });
   const latencyMs = Date.now() - start;
   span.setAttributes({ "http.status_code": result.status });
@@ -1035,6 +1038,8 @@ export async function callPodcastLlm(params: {
    * larger `writerBudget` instead of accepting partial JSON/text.
    */
   retryOnTruncation?: boolean;
+  /** Leading part of `systemPrompt` that is identical across an episode's calls; the Claude branch caches it (see `callAnthropicMessages`). Ignored by chat-completions models, which cache automatically or not at all. */
+  cacheableSystemPrefix?: string;
 }): Promise<string> {
   return withSpan(
     "audio.podcast.llm",
@@ -1169,9 +1174,11 @@ export async function reviewEpisode(params: {
   reviewModels: string[];
   reviewEffort?: string;
   showBible: string;
+  /** The deterministic lint over these segments, rendered for the reviewers (see podcast-lint.ts). */
+  lintReport?: string;
   onProgress?: ScriptWriterOptions["onProgress"];
 }): Promise<ReviewNote[]> {
-  const { req, outline, segments, reviewModels, reviewEffort, showBible, onProgress } = params;
+  const { req, outline, segments, reviewModels, reviewEffort, showBible, lintReport, onProgress } = params;
   const combos = REVIEWER_ROLES.flatMap((role) => reviewModels.map((model) => ({ role, model })));
   let done = 0;
   const perCombo = await synthConcurrent(combos.length, combos, async ({ role, model }) => {
@@ -1184,7 +1191,7 @@ export async function reviewEpisode(params: {
           callPodcastLlm({
             model,
             systemPrompt: reviewPrompt({ req, outline, role, showBible }),
-            userContent: buildReviewUserContent({ req, outline, segments }),
+            userContent: buildReviewUserContent({ req, outline, segments, lintReport }),
             // Reviewers read source + outline + the whole draft and the writer
             // model reasons before it answers; at 6000 all three came back with
             // EMPTY content (2026-09-02) — the budget was spent on reasoning.
@@ -1251,6 +1258,7 @@ export async function reviseSegments(params: {
             maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
             stage: "revise",
             usageEndpoint: "podcast-segment",
+            cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
           }),
         (raw) => sanitizeTurns(parseSegmentTurns(raw)),
       );
@@ -1462,6 +1470,7 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
           maxCompletionTokens: writerBudget(segmentSpec.targetWords * 6, attempt),
           stage: "segment",
           usageEndpoint: "podcast-segment",
+          cacheableSystemPrefix: baseSystemPrompt(req, showBible, voice),
         }),
       (raw) => sanitizeTurns(parseSegmentTurns(raw)),
     );
@@ -1471,10 +1480,12 @@ export async function writePodcastScript(req: PodcastScriptRequest, opts: Script
   });
 
   let finalSegments = segments;
+  const lint = lintSegments(segments, { glossaryTerms: req.dossier.glossary.map((g) => g.term), hostNames: req.hosts.map((h) => h.name), source: req.source });
+  log.info("podcast lint", { findings: lint.findings.length, rules: [...new Set(lint.findings.map((f) => f.rule))] });
   const reviewNotes = review
-    ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, reviewEffort: opts.efforts?.review, showBible, onProgress: opts.onProgress })
+    ? await reviewEpisode({ req, outline, segments, reviewModels: opts.models.review, reviewEffort: opts.efforts?.review, showBible, lintReport: renderLintReport(lint), onProgress: opts.onProgress })
     : [];
-  const notes = [...reviewNotes, ...lengthNotes(segments, outline)];
+  const notes = [...reviewNotes, ...lengthNotes(segments, outline), ...lintNotes(lint)];
   if (notes.length > 0) {
     finalSegments = await reviseSegments({ req, outline, segments, notes, model: opts.models.write, concurrency: opts.concurrency, showBible, voice, onProgress: opts.onProgress });
   }

@@ -56,7 +56,7 @@ export interface EpisodeBrief {
   closing: string;
   /** Monologue share, pace, where long explanations go, where quick exchanges belong. */
   rhythm: string;
-  /** Dramaturgy devices worth using here (motif, reveals, digressions, a live disagreement). May be empty. */
+  /** Dramaturgy devices worth using here (motif, reveals, digressions; a live disagreement only for a genuinely contested source). May be empty. */
   devices: string[];
   /** Patterns from recent episodes NOT to repeat. */
   avoid: string[];
