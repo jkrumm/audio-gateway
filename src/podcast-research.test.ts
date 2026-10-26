@@ -273,6 +273,24 @@ describe("research tool", () => {
     expect(count()).toBe(4);
   });
 
+  test("standard depth is capped in code: the first request is honored, every further one is downgraded to quick regardless of what was asked", async () => {
+    const submitted: string[] = [];
+    const { fetchImpl } = scriptedFetch([
+      rawRes(200, { jobId: "a" }), rawRes(200, { status: "done", result: { report: "r1" } }),
+      rawRes(200, { jobId: "b" }), rawRes(200, { status: "done", result: { report: "r2" } }),
+    ]);
+    const trackingFetch: ToolLoopFetch = async (url, init) => {
+      if (typeof init?.body === "string") submitted.push(init.body);
+      return fetchImpl(url, init);
+    };
+    const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key" }, fetchImpl: trackingFetch, pollIntervalMs: 0 });
+    const tool = findTool(tools, "research");
+    await tool.execute({ query: "q1", depth: "standard" });
+    await tool.execute({ query: "q2", depth: "standard" });
+    const depths = submitted.filter((b) => b.includes('"query"')).map((b) => (JSON.parse(b) as { depth: string }).depth);
+    expect(depths).toEqual(["standard", "quick"]);
+  });
+
   test("maxCalls 0 means unlimited, not exhausted", async () => {
     const { fetchImpl } = scriptedFetch([rawRes(200, { jobId: "j" }), rawRes(200, { status: "done", result: { report: "ok" } })]);
     const tools = buildResearchTools({ history: noHistory, model: "m", research: { url: "https://research.example.com", apiKey: "key", maxCalls: 0 }, fetchImpl, pollIntervalMs: 0 });

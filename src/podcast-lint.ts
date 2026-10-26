@@ -320,8 +320,9 @@ export function lintSegmentation(params: {
 const NOTES_IGNORANCE = /\b(steht|stand|stehen|ist|sind|findet sich|fehlt)\s+(\w+\s+){0,3}(nicht|nirgends|kein\w*)\s+(\w+\s+){0,3}in\s+(deinen|den|diesen|euren|unseren)\s+(notizen|unterlagen)\b|\bin\s+(deinen|den|diesen)\s+(notizen|unterlagen)\s+(steht|stand|findet sich|fehlt|gibt es)\s+(\w+\s+){0,3}(nicht|nichts|nirgends|kein\w*)|\bnicht\s+in\s+(deinen|den|diesen)\s+(notizen|unterlagen)\b/i;
 /** The "we don't know" tic. */
 const KNOWLEDGE_HEDGE = /\b(das|dies|es)\s+wissen\s+wir\s+(noch\s+|schlicht\s+|einfach\s+)?(nicht|nicht genau)\b|\bwissen\s+wir\s+(noch\s+)?nicht\b|\bdas\s+weiß\s+(man|ich|keiner|niemand)\s+(noch\s+)?nicht\b/i;
-/** Research named as having come up empty — a different tell than the notes-ignorance or knowledge-hedge phrasing. */
-const RESEARCH_GAP = /\b(dazu|hierzu|darüber)?\s*(haben wir|konnten wir)\s+(\w+\s+){0,3}(nichts|nicht)\s+(\w+\s+){0,3}(gefunden|herausfinden|finden können)\b|\bkeine\s+(informationen|infos|angaben|quellen|ergebnisse)\s+(dazu\s+)?gefunden\b/i;
+/** Research named as having come up empty — a different tell than the notes-ignorance or knowledge-hedge phrasing. Both word orders ("haben wir" and "wir haben"); token class is Unicode-aware so an umlaut word in the gap doesn't break the match. */
+const RESEARCH_GAP =
+  /\b(?:(?:dazu|hierzu|darüber)\s+)?(?:haben wir|konnten wir|wir haben|wir konnten)\s+([\p{L}\d_]+\s+){0,3}(nichts|nicht)\s+([\p{L}\d_]+\s+){0,3}(gefunden|herausfinden|finden können|finden)\b|\bkeine\s+(informationen|infos|angaben|quellen|ergebnisse)\s+(dazu\s+)?gefunden\b/iu;
 /** More hedges than this per episode is a tic, not an honesty. */
 const MAX_HEDGES_PER_EPISODE = 2;
 /** The quieter host owns less than this share of a segment's words, with turns this short on average, only prompts. */
@@ -336,13 +337,13 @@ function conversationFindings(segments: ScriptSegment[], metrics: SegmentMetrics
     segment.turns.forEach((turn, turnIndex) => {
       const text = stripTags(turn.text);
       if (NOTES_IGNORANCE.test(text)) {
-        findings.push({ segmentIndex, turnIndex, rule: "notes-ignorance", message: 'The notes are named as the place something is missing ("steht nicht in deinen Notizen"). Never on air: say what is unknown about the listener as conditional advice ("Falls bei dir …"), or state a genuine evidence gap once, in natural words.' });
+        findings.push({ segmentIndex, turnIndex, rule: "notes-ignorance", message: 'The notes are named as the place something is missing ("steht nicht in deinen Notizen"). Never on air: say what is unknown about the listener as conditional advice ("Falls bei dir …") — a genuine evidence gap belongs in the close as the one open question, never admitted mid-episode.' });
       }
       if (KNOWLEDGE_HEDGE.test(text) && ++hedges > MAX_HEDGES_PER_EPISODE) {
-        findings.push({ segmentIndex, turnIndex, rule: "meta-hedge", message: `"Das wissen wir nicht" for the ${hedges}th time in this episode — a tic. Say a real evidence gap once where it matters; elsewhere give conditional advice or cut the hedge.` });
+        findings.push({ segmentIndex, turnIndex, rule: "meta-hedge", message: `"Das wissen wir nicht" for the ${hedges}th time in this episode — a tic. Give conditional advice or cut the hedge; a genuine evidence gap belongs in the close as the one open question, not as a mid-episode admission.` });
       }
       if (RESEARCH_GAP.test(text)) {
-        findings.push({ segmentIndex, turnIndex, rule: "research-gap", message: 'Research is named as having come up empty ("dazu haben wir nichts gefunden"). Never on air: fold a genuine gap into natural words once, or — if it is the episode\'s own open question near the close — turn it outward into the question the listener is left with.' });
+        findings.push({ segmentIndex, turnIndex, rule: "research-gap", message: 'Research is named as having come up empty ("dazu haben wir nichts gefunden"). Never on air: a genuine gap belongs in the close as the one open question the listener is left with — never admitted mid-episode, never as a flat statement.' });
       }
     });
     const m = metrics[segmentIndex];
