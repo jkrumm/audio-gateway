@@ -277,10 +277,10 @@ async function runAgent(opts: SegmentAgentOptions, params: { mode: "draft" | "re
 }
 
 /** Claude takes `reasoning_effort` on IU's OpenAI route (probed 2026-10-26) though the single-shot native route used adaptive thinking; other families per `resolveReasoningEffort`. */
-/** gpt-6.x rejects `reasoning_effort` together with tools (503, live-probed 2026-09-23/26), so a tool loop sends none for it. */
+/** gpt-6.x on chat/completions rejects function tools combined with any reasoning effort but "none" (503 "set reasoning_effort to 'none'", probed 2026-10-26 — omitting the field falls into the same default), so a tool loop sends "none". */
 export const agentReasoningEffort = (model: string): string | undefined => {
   if (model.startsWith("claude-")) return "high";
-  if (model.startsWith("gpt-6")) return undefined;
+  if (model.startsWith("gpt-6")) return "none";
   return resolveReasoningEffort(model, "high");
 };
 
