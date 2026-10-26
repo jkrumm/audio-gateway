@@ -28,7 +28,7 @@ type Outline = import("../src/podcast-script").Outline;
 type ReviewNote = import("../src/podcast-script").ReviewNote;
 type PodcastScriptRequest = import("../src/podcast-script").PodcastScriptRequest;
 
-const ledger = new SpendLedger("./data/wave3/usage.db", Number(process.env["WAVE3_CAP_USD"] ?? 4), 0.5, Number(process.env["WAVE3_PRIOR_USD"] ?? 0.12));
+const ledger = new SpendLedger("./data/wave3/usage.db", Number(process.env["WAVE3_CAP_USD"] ?? 4), 0.25, Number(process.env["WAVE3_PRIOR_USD"] ?? 0.12));
 ledger.installFetchGuard([new URL(config.iuBaseUrl).host, new URL(config.iuGeminiBaseUrl).host]);
 
 const argv = process.argv.slice(2);
@@ -45,10 +45,10 @@ interface Candidate {
 // Cheap first so the cap can only ever cut the expensive tail; the hybrid last (it reuses a finished draft). Opus agentic is ~$1.4 — the cap decides.
 const CANDIDATES: Candidate[] = [
   { id: "claude-haiku-5-5", model: "claude-haiku-5-5", estimateUsd: 0.25 },
-  { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.2 },
-  { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.4 },
+  { id: "gpt-6-luna", model: "gpt-6-luna", estimateUsd: 0.15 },
+  { id: "gpt-6.1-sol", model: "gpt-6.1-sol", estimateUsd: 0.3 },
+  { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.35 },
   { id: "gemini-3.8-flash", model: "gemini-3.8-flash", estimateUsd: 0.25 },
-  { id: "gemini-4-argon", model: "gemini-4-argon", estimateUsd: 0.45 },
   { id: "claude-opus-5-5", model: "claude-opus-5-5", estimateUsd: 1.4 },
   { id: "claude-sonnet-5-5", model: "claude-sonnet-5-5", estimateUsd: 0.7 },
 ];
