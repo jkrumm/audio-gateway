@@ -86,6 +86,12 @@ runs. **Writer default stays `claude-opus-5-5`** until the owner's blind verdict
       cleaner. Reviewer panel stays after the loop. Measure one segment vs single-shot (lint, words/target, cost, wall);
       then the rematch runs with this writer for every candidate. Single-shot rematch partials (Opus, Haiku, Luna) kept
       in `data/wave3/singleshot/` as the "before" ($2.1 of the $4 cap spent there).
+- [ ] **(12) Learnings from job 503c28f0 ("Mit Schale, mit Erde", regression fixture `src/__fixtures__/episode-503c28f0.*`).**
+      (a) meta-hedging: "steht nicht in deinen Notizen"/"das wissen wir nicht" ~9x — prompt rule 6b + lint
+      `notes-ignorance` (blocking in the agent) and `meta-hedge` (>2 per episode); (b) the listener brief binds the editor's
+      humor (`playfulAsk` raises "sparse" to "natural" + editor prompt); (c) turn ownership — prompt rule 6c, editor roles
+      and lint `host-imbalance`. v2 regeneration of the same topic is the owner's, after deploy (source/brief stay in
+      the job request and `/tmp/produce/source.md`).
 - [ ] **(8) Expression in every lane.** Delivery vocabulary + tag allowlist as one shared module in `gemini-tts-core`
       (podcast, briefing, chat use the same words). Briefing prep: per-chunk style from the vocabulary (stable baseline,
       deviations where the content turns) and a tag band instead of "sparse" (`PREP_STYLE` / `BRIEFING_TAGS` in

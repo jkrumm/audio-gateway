@@ -24,7 +24,7 @@ export type ExpressionRule =
 export interface LintFinding {
   segmentIndex: number;
   turnIndex: number | null;
-  rule: ExpressionRule | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term";
+  rule: ExpressionRule | "meta-hedge" | "notes-ignorance" | "host-imbalance" | "stock-phrase" | "monologue" | "echo-reaction" | "no-questions" | "uniform-turns" | "unintroduced-term";
   message: string;
 }
 
@@ -311,6 +311,47 @@ export function lintSegmentation(params: {
 }
 
 
+/** The notes named as the place something is missing — never on air (job 503c28f0 said it nine times). */
+const NOTES_IGNORANCE = /\b(steht|stand|stehen|ist|sind|findet sich|fehlt)\s+(\w+\s+){0,3}(nicht|nirgends|kein\w*)\s+(\w+\s+){0,3}in\s+(deinen|den|diesen|euren|unseren)\s+(notizen|unterlagen)\b|\bin\s+(deinen|den|diesen)\s+(notizen|unterlagen)\s+(steht|stand|findet sich|fehlt|gibt es)\s+(\w+\s+){0,3}(nicht|nichts|nirgends|kein\w*)|\bnicht\s+in\s+(deinen|den|diesen)\s+(notizen|unterlagen)\b/i;
+/** The "we don't know" tic. */
+const KNOWLEDGE_HEDGE = /\b(das|dies|es)\s+wissen\s+wir\s+(noch\s+|schlicht\s+|einfach\s+)?(nicht|nicht genau)\b|\bwissen\s+wir\s+(noch\s+)?nicht\b|\bdas\s+weiß\s+(man|ich|keiner|niemand)\s+(noch\s+)?nicht\b/i;
+/** More hedges than this per episode is a tic, not an honesty. */
+const MAX_HEDGES_PER_EPISODE = 2;
+/** The quieter host owns less than this share of a segment's words, with turns this short on average, only prompts. */
+const MIN_HOST_SHARE = 0.25;
+const PROMPT_ONLY_MEAN_WORDS = 15;
+
+/** Hedge/meta-notes phrases per episode, and a host that only prompts. */
+function conversationFindings(segments: ScriptSegment[], metrics: SegmentMetrics[]): LintFinding[] {
+  const findings: LintFinding[] = [];
+  let hedges = 0;
+  segments.forEach((segment, segmentIndex) => {
+    segment.turns.forEach((turn, turnIndex) => {
+      const text = stripTags(turn.text);
+      if (NOTES_IGNORANCE.test(text)) {
+        findings.push({ segmentIndex, turnIndex, rule: "notes-ignorance", message: 'The notes are named as the place something is missing ("steht nicht in deinen Notizen"). Never on air: say what is unknown about the listener as conditional advice ("Falls bei dir …"), or state a genuine evidence gap once, in natural words.' });
+      }
+      if (KNOWLEDGE_HEDGE.test(text) && ++hedges > MAX_HEDGES_PER_EPISODE) {
+        findings.push({ segmentIndex, turnIndex, rule: "meta-hedge", message: `"Das wissen wir nicht" for the ${hedges}th time in this episode — a tic. Say a real evidence gap once where it matters; elsewhere give conditional advice or cut the hedge.` });
+      }
+    });
+    const m = metrics[segmentIndex];
+    if (!m || m.turns < 8) return;
+    const words = { A: 0, B: 0 };
+    const turns = { A: 0, B: 0 };
+    for (const turn of segment.turns) {
+      words[turn.speaker] += countWords(stripTags(turn.text));
+      turns[turn.speaker]++;
+    }
+    const total = words.A + words.B;
+    const quiet: "A" | "B" = words.A <= words.B ? "A" : "B";
+    if (total > 0 && words[quiet] / total < MIN_HOST_SHARE && turns[quiet] > 0 && words[quiet] / turns[quiet] < PROMPT_ONLY_MEAN_WORDS) {
+      findings.push({ segmentIndex, turnIndex: null, rule: "host-imbalance", message: `Host ${quiet} has ${Math.round((words[quiet] / total) * 100)}% of the words in ${Math.round(words[quiet] / turns[quiet])}-word turns — only prompts. Give them something to own: a related fact from the material, their own reaction as a listener, the everyday example, the punchline.` });
+    }
+  });
+  return findings;
+}
+
 export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}): LintReport {
   const metrics = segments.map(metricsFor);
   const findings: LintFinding[] = [];
@@ -344,6 +385,7 @@ export function lintSegments(segments: ScriptSegment[], opts: LintOptions = {}):
 
   findings.push(...unintroducedTerms(segments, opts));
   findings.push(...expressionFindings(segments, opts, metrics));
+  findings.push(...conversationFindings(segments, metrics));
   return { metrics, findings };
 }
 
@@ -360,6 +402,6 @@ export function renderLintReport(report: LintReport): string {
 /** The findings unambiguous enough to send to the writer without a reviewer's judgement. */
 export function lintNotes(report: LintReport): ReviewNote[] {
   return report.findings
-    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term")
+    .filter((f) => f.rule === "stock-phrase" || f.rule === "unintroduced-term" || f.rule === "notes-ignorance" || f.rule === "meta-hedge")
     .map((f) => ({ segmentIndex: f.segmentIndex, turnIndex: f.turnIndex, reviewer: "lint", note: f.message }));
 }

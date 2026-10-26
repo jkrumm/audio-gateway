@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import { expressionSummary, lintNotes, lintSegmentation, lintSegments, renderLintReport } from "./podcast-lint";
 import type { ScriptSegment } from "./podcast-script";
@@ -175,5 +177,28 @@ describe("lintSegmentation", () => {
 
   test("a single over-long turn is not a finding", () => {
     expect(lintSegmentation({ texts: ["x".repeat(500)], segmentLengths: [1], units: [{ turnIndexes: [0] }], maxChars: 100 }).findings).toEqual([]);
+  });
+});
+
+describe("regression: episode 503c28f0 (the real 'Mit Schale, mit Erde' script)", () => {
+  const script = JSON.parse(readFileSync(join(import.meta.dir, "__fixtures__", "episode-503c28f0.script.json"), "utf8")) as { segments: ScriptSegment[] };
+
+  test("the meta-hedging tic and the notes-as-ignorance phrasing are flagged", () => {
+    const findings = lintSegments(script.segments).findings;
+    expect(findings.filter((f) => f.rule === "meta-hedge").length).toBeGreaterThan(0);
+    expect(findings.filter((f) => f.rule === "notes-ignorance").length).toBeGreaterThan(0);
+    expect(lintNotes(lintSegments(script.segments)).some((n) => n.note.includes("Notizen"))).toBe(true);
+  });
+
+  test("a host that only prompts is flagged in at least one segment", () => {
+    expect(lintSegments(script.segments).findings.some((f) => f.rule === "host-imbalance")).toBe(true);
+  });
+
+  test("two hedges are fine, the third is a tic; 'in deinen Notizen' as a source of knowledge is not ignorance", () => {
+    const hedge = (): ["A" | "B", string] => ["A", "Das wissen wir nicht."];
+    expect(rules([seg([hedge(), hedge()])])).not.toContain("meta-hedge");
+    expect(rules([seg([hedge(), hedge(), hedge()])])).toContain("meta-hedge");
+    expect(rules([seg([["A", "In deinen Notizen steht, dass der Dienst auf dem Mini läuft."]])])).not.toContain("notes-ignorance");
+    expect(rules([seg([["A", "Ob bei dir jemand schwanger ist, steht nicht in deinen Notizen."]])])).toContain("notes-ignorance");
   });
 });

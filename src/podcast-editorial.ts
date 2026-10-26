@@ -123,6 +123,18 @@ const strList = (value: unknown): string[] =>
 
 const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
+/** Words in the LISTENER BRIEF that ask for a playful, funny episode. Matched case-insensitively. */
+const PLAYFUL_ASK = /\b(verspielt\w*|witzig\w*|lustig\w*|humorvoll\w*|spielerisch\w*|augenzwinkernd\w*|unterhaltsam\w*|playful|funny|witty|humou?rous|lighthearted|amusing)\b/gi;
+
+/**
+ * The listener's brief binds the editor: when it asks for a playful/funny tone, humor may be sharpened but never
+ * downgraded below "natural" (job 503c28f0 asked "verspielt, witzig, neugierig" and got "sparse" — a dry script).
+ * Exported for tests; returns the matched words, or [] when the brief names no such tone.
+ */
+export function playfulAsk(listenerBrief: string | undefined): string[] {
+  return [...new Set((listenerBrief ?? "").match(PLAYFUL_ASK)?.map((w) => w.toLowerCase()) ?? [])];
+}
+
 /**
  * Parse the editor's reply into an {@link EpisodeBrief}. Tolerant by design:
  * every field falls back to the neutral default, `minutes` is clamped to the
@@ -132,7 +144,7 @@ const clamp = (value: number, min: number, max: number): number => Math.min(max,
  */
 export function parseEpisodeBrief(
   raw: string,
-  input: Pick<EditorialInput, "minutes" | "pinMinutes" | "bounds" | "language" | "hosts">,
+  input: Pick<EditorialInput, "minutes" | "pinMinutes" | "bounds" | "language" | "hosts"> & { brief?: string },
 ): EpisodeBrief {
   const parsed = JSON.parse(extractJsonObject(raw)) as Record<string, unknown>;
   const fallback = defaultEpisodeBrief(input);
@@ -149,7 +161,10 @@ export function parseEpisodeBrief(
     typeof parsed["segments"] === "number" && Number.isFinite(parsed["segments"]) ? Math.round(parsed["segments"]) : planSegmentCount(minutes);
 
   const humorRaw = typeof parsed["humor"] === "string" ? parsed["humor"].trim().toLowerCase() : "";
-  const humor = HUMOR_LEVELS.find((h) => h === humorRaw) ?? "sparse";
+  const editorHumor = HUMOR_LEVELS.find((h) => h === humorRaw) ?? "sparse";
+  const asked = playfulAsk(input.brief);
+  const humor: HumorLevel = asked.length > 0 && editorHumor !== "natural" ? "natural" : editorHumor;
+  if (humor !== editorHumor) log.warn("podcast editorial humor raised to the level the listener brief asked for", { asked, editor: editorHumor, humor });
 
   const roles = (parsed["roles"] ?? {}) as Record<string, unknown>;
 
@@ -159,7 +174,7 @@ export function parseEpisodeBrief(
     minutes,
     segments: clamp(segmentsRaw, MIN_BRIEF_SEGMENTS, MAX_BRIEF_SEGMENTS),
     roles: { A: str(roles["A"], fallback.roles.A), B: str(roles["B"], fallback.roles.B) },
-    tone: str(parsed["tone"], fallback.tone),
+    tone: asked.length > 0 && humor !== editorHumor ? `${str(parsed["tone"], fallback.tone)} The listener asked for it to be ${asked.join(", ")} — keep it that way; the jokes come from the material and from how the hosts treat each other.` : str(parsed["tone"], fallback.tone),
     humor,
     opening: str(parsed["opening"], fallback.opening),
     closing: str(parsed["closing"], fallback.closing),
@@ -188,6 +203,8 @@ The material decides the show, not a formula. Look at the recent episodes in the
 Choose the episode's MODE first, from the material, and name it in the rationale: an EXPLAINER or walkthrough (one host knows and explains, the other asks the sharp questions the listener would ask, both add), a STORY (told, with a spine), a Q&A where the curious host drives and the other answers, an interview, or a DEBATE. The default is knowledge SHARING: the listener wants to learn what is in these notes quickly and well. A debate is right only when the material itself is genuinely contested — two defensible positions in the source, a decision whose answer is not settled. A decision that is already made is explained, not re-argued; an open question inside an otherwise settled document is raised as an open question, by whoever asks it best, not staged as two sides. If two or more of the recent episodes used a scripted disagreement or an opposing-host format (look at the format names), this one must not unless the source is truly contested — and say so in "avoid".
 
 Match the form to what is actually in front of you. A technical or procedural topic gets a straight, dense walkthrough — long turns, no forced jokes, humor only if it genuinely arises from the material, and the second host's job is the sharp question, not the objection. A plan gets the listener's questions, asked hard. A story gets told. Pace and density stay high in every mode: sharing is not chatter. Either host may lead. One host may carry most of the episode while the other barely speaks. Five minutes is a valid episode.
+
+The LISTENER BRIEF binds you on tone: when it names a tone or a humor level ("verspielt", "witzig", "neugierig", "ernst", "trocken"), that is what the listener asked for — you may sharpen it, you may not downgrade it. "Playful" or "funny" means humor "natural" and a tone line that says so; do not read a lighthearted everyday topic as a dense technical one just because it has numbers in it. And whoever leads, the other host BRINGS things too — a related fact from the material, their own reaction as a listener, the everyday example, the punchline — not only one-line prompts; give the second host something to own in "roles" unless the format is a true interview.
 
 Do not invent drama. Do not invent a hook. Do not schedule jokes. Do not reach for a device because podcasts usually have one — a running motif, a withheld reveal, a digression and a set of takeaways are tools, not furniture, and the last five episodes were ruined by having all of them whether the topic wanted them or not.
 

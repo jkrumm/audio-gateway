@@ -3,6 +3,8 @@
  * no creds. See replicate-tts.test.ts for the shared env baseline.
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 // See audio.test.ts — config.ts is a process-wide singleton across bun test's
 // shared module registry; every config-touching file sets this SAME baseline.
@@ -16,7 +18,7 @@ process.env["AUDIO_CALLER_TOKENS"] ??= "hermes=hermes-secret-token,macwhisper=ma
 process.env["TTS_PREP"] ??= "off";
 process.env["TTS_CONCURRENCY"] ??= "4";
 
-const { decideEpisodeBrief, defaultEpisodeBrief, parseEpisodeBrief, renderHistoryTable } = await import("./podcast-editorial");
+const { decideEpisodeBrief, defaultEpisodeBrief, parseEpisodeBrief, playfulAsk, renderHistoryTable } = await import("./podcast-editorial");
 const { EMPTY_DOSSIER } = await import("./podcast-types");
 type EditorialInput = import("./podcast-editorial").EditorialInput;
 type EpisodeSummary = import("./podcast-types").EpisodeSummary;
@@ -363,5 +365,24 @@ describe("decideEpisodeBrief", () => {
     setFetch(async () => chatCompletion("upstream exploded", 500));
     const brief = await decideEpisodeBrief(INPUT, { model: "editor-model" });
     expect(brief).toEqual(defaultEpisodeBrief(INPUT));
+  });
+});
+
+describe("the listener brief binds the editor's humor (job 503c28f0)", () => {
+  const fixture = JSON.parse(readFileSync(join(import.meta.dir, "__fixtures__", "episode-503c28f0.brief.json"), "utf8")) as { listenerBrief: string; editorBrief: { humor: string } };
+  const input = { minutes: 15, pinMinutes: false, bounds: { minMinutes: 5, maxMinutes: 30 }, language: "de" as const, hosts: [{ id: "A" as const, name: "Jonas", voice: "Charon" }, { id: "B" as const, name: "Lena", voice: "Erinome" }] as [import("./podcast-script").PodcastHost, import("./podcast-script").PodcastHost], brief: fixture.listenerBrief };
+
+  test("the real brief asks for playful/funny, and the editor's 'sparse' is raised to 'natural'", () => {
+    expect(playfulAsk(fixture.listenerBrief)).toEqual(expect.arrayContaining(["verspielter", "witzig"]));
+    expect(fixture.editorBrief.humor).toBe("sparse");
+    const brief = parseEpisodeBrief(JSON.stringify({ format: "Erklärstück", tone: "Calm and concrete.", humor: "sparse" }), input);
+    expect(brief.humor).toBe("natural");
+    expect(brief.tone).toContain("verspielter");
+  });
+
+  test("a brief with no tone ask leaves the editor's humor alone; an editor already at 'natural' is untouched", () => {
+    expect(playfulAsk("Ein technisches Briefing über Datenbanken.")).toEqual([]);
+    expect(parseEpisodeBrief(JSON.stringify({ format: "x", humor: "none" }), { ...input, brief: "Ein technisches Briefing." }).humor).toBe("none");
+    expect(parseEpisodeBrief(JSON.stringify({ format: "x", tone: "Warm.", humor: "natural" }), input).tone).toBe("Warm.");
   });
 });

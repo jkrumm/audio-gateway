@@ -38,6 +38,7 @@ const BLOCKING_RULES = new Set<LintFinding["rule"]>([
   "delivery-streak",
   "delivery-short-turn",
   "caps-emphasis",
+  "notes-ignorance",
 ]);
 /** A segment more than this over its target is blocking (the length governor's tolerance); under is advisory. */
 const OVER_LENGTH = 0.2;
