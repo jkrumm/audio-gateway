@@ -150,21 +150,27 @@ checked before every call); it is not a budget. A podcast job may be running —
 - **Audiobookshelf:** progress does not stick because `plappa` (iOS) re-opens a finished episode as a fresh session from 0 and its sync overwrites `isFinished` (Nordspanien, Kessel, Factory v2); 5 episodes have no session at all (never synced or never played). `podcast abs-tidy` (dry run; `--apply` marks listened-through finished and hard-deletes superseded + test) is **not applied** — the owner reviews the dry-run first. Open policy question from review: `--apply` deletes a superseded/test episode regardless of listening state. Superseded-marking at publish time: not implemented (abs-tidy covers it after the fact).
 - Follow-ups (review, not blocking): widen `ChatMessage` to a union so the responses transport needs no casts; integration tests for `markFinished` / `removeEpisode` URLs and `runAbsTidy --apply` before the first real apply.
 
-## Wave 5 — Episode structure: coverage, opening, length            <!-- status: active -->
+## Wave 5 — Episode structure: coverage, opening, length            <!-- status: done -->
 Evidence: v1 `503c28f0` vs v2 `b78cb035` (same source `/tmp/produce/source.md` + brief; also copied to
 `data/podcasts/503c28f0-0174-4cd4-87e9-b1b0601a8450/source-input.md`). v2 won on voice (0 meta-hedges, 10 tags, 12 deliveries,
 humor) and lost on structure:
-- [ ] **Coverage:** the listener asked about eating RAW carrots unwashed from the bag; v2 turned the carrot segment into carrot
+- [x] **Coverage:** the listener asked about eating RAW carrots unwashed from the bag; v2 turned the carrot segment into carrot
       GREENS/pesto (from a brain shopping list) and dropped the soil/germs/BfR wash-and-peel verdict — the most actionable answer.
       Extract the concrete listener questions/habits from the brief once (editor stage, stored in the brief), make the outline
       map each to a segment, and check at the end (dramaturge + a deterministic check that each question id has a verdict turn).
       Brain context may enrich an answer, never replace the asked question.
-- [ ] **Opening:** v2 starts cold on "Das Grün." The first one or two turns say what the episode answers (playful is fine, no
+- [x] **Opening:** v2 starts cold on "Das Grün." The first one or two turns say what the episode answers (playful is fine, no
       number pile). Check it in the dramaturge review and the lint (first segment, first turns reference the brief question).
-- [ ] **Length:** 636 s / 1,517 words for a 15-minute ask (v1 2,368 words). Find where it was cut (editor minutes, outline
+- [x] **Length:** 636 s / 1,517 words for a 15-minute ask (v1 2,368 words). Find where it was cut (editor minutes, outline
       targets, agent submit, tightening) and fix the cause; flag >20% under target in the lint and job profile. Luna's ~35%
       short (Wave 4) is the same lever.
-- [ ] Tests (use both jobs as fixtures), `/review`, gates, push, deploy when no job runs. Then regenerate the topic as **v3** on
+- [x] Tests (use both jobs as fixtures), `/review`, gates, push, deploy when no job runs. Then regenerate the topic as **v3** on
       the mini with the same source + brief (`--publish`), check coverage/opening/length/voice against v1 and v2 with
       `ab-fixture`, and record the table in the decision record.
-**Left behind:**
+**Left behind:** (v3 `a5ee46ff`, Sol, $2.35, 1102 s: 7 asks extracted and assigned, raw-carrot verdict explicit, opening frames the
+question, ~18 min for a 15-min ask, 0 hedges; table in modelpick `docs/decisions/podcast-writer.md`.) Default writer switched to
+`gpt-6.1-sol` (owner decision, deployed at `3693aef`; rollback `PODCAST_WRITE_MODEL=claude-opus-5-5`). Not done: unify the
+length-share constants; one lint-options builder (duplicated in the agent); the ask-coverage tripwire is a 5-letter-prefix keyword
+match (weak, the dramaturge is the real judge); `ab-fixture` takes two ids (v1/v2/v3 needed two runs); v3 now overshoots length
+(~122%) and host A leads again (61%, 2/8 questions); `abs-tidy --apply` left to the owner. The log did not show a `gpt-6.1-sol`
+line, the deployed config has no override.
